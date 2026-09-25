@@ -25,10 +25,12 @@ from axiom.core.logging import get_logger, setup_logging
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.ollama import ChatStreamParser, OllamaClient
 from axiom.core.permissions import PermissionManager, PermissionMode
+from axiom.core.planner import Planner, PlanStep, TaskPlan
 from axiom.core.profiles import ProfileManager
 from axiom.core.retry import RetryResult, retry_async
 from axiom.core.state import GenerationState
 from axiom.core.state_machine import GenerationStateMachine
+from axiom.core.tasks import Task, TaskError, TaskEvent, TaskState, TaskStore
 from axiom.core.tools import ToolRegistry
 from axiom.core.workspace import WorkspaceManager
 
@@ -54,10 +56,18 @@ __all__ = [
     "OllamaClient",
     "PermissionManager",
     "PermissionMode",
+    "PlanStep",
+    "Planner",
     "ProfileManager",
     "ReasoningChunk",
     "RetryResult",
     "SearchUnavailableError",
+    "Task",
+    "TaskError",
+    "TaskEvent",
+    "TaskPlan",
+    "TaskState",
+    "TaskStore",
     "ToolCallEvent",
     "ToolRegistry",
     "ToolResultEvent",

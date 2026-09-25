@@ -7,6 +7,8 @@ current state plus metrics reported by Ollama.
 
 from __future__ import annotations
 
+import time
+
 from textual.containers import Horizontal
 from textual.widgets import Static
 
@@ -53,6 +55,7 @@ class StatusBar(Static):
         self._version: str | None = None
         self._web_active = False
         self._thinking: str | None = None
+        self._started: float | None = None
         self._timer = None
 
     def on_mount(self) -> None:
@@ -67,9 +70,13 @@ class StatusBar(Static):
     # ------------------------------------------------------------------ setters
 
     def set_state(self, state: GenerationState, detail: str | None = None) -> None:
+        was_busy = self._state.is_busy
         self._state = state
         self._detail = detail
-        if not state.is_busy:
+        if state.is_busy and not was_busy:
+            self._started = time.perf_counter()
+        elif not state.is_busy:
+            self._started = None
             self._tick = 0
         self.refresh_status()
 
@@ -120,7 +127,8 @@ class StatusBar(Static):
             if rate:
                 parts.append(rate)
             state_label = fmt.status_label(self._state.value)
-            parts.append(f"{state_label} {fmt.spinner_frame(self._tick)}")
+            elapsed = fmt.elapsed_since(self._started) if self._started is not None else 0.0
+            parts.append(f"{state_label} {fmt.spinner_frame(self._tick)}  {elapsed:.1f}s")
         elif self._state is not GenerationState.IDLE:
             parts.append(fmt.status_label(self._state.value))
         parts.append("/help")

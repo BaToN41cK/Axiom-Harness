@@ -1,0 +1,10 @@
+{
+  "name": "datetime",
+  "version": "1.0.0",
+  "description": "Текущее время и дата (в том числе в конкретных часовых поясах), день недели, разница между датами и unix-время.",
+  "author": "AXIOM Team",
+  "api_version": 1,
+  "capabilities": ["tools"],
+  "tools": ["current_time", "date_diff"],
+  "skills": []
+}

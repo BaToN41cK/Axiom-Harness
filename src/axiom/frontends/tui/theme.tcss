@@ -5,9 +5,30 @@
 
 /* --------------------------------------------------------------- base */
 
+/* Accent variables are supplied by the selected Textual Theme. */
 Screen {
     background: #000000;
     color: #FFFFFF;
+}
+
+.no-panel-hover .action:hover {
+    border: round #3A3A3A;
+    color: #B9B9B9;
+}
+.no-panel-hover .reasoning-panel CollapsibleTitle:hover { color: #B9B9B9; }
+.no-panel-hover #search-sources > ListItem:hover { background: transparent; }
+.no-panel-hover #stop-button:hover { background: $secondary; }
+.no-panel-hover .code-action:hover { color: #777777; background: #0A0A0A; }
+.no-panel-hover #perm-approve:hover { background: $secondary; }
+.no-panel-hover #perm-deny:hover { border: round #3A3A3A; }
+.no-panel-hover .profile-row:hover { background: transparent; }
+
+/* The class is kept explicit so the configured behavior is easy to audit. */
+.panel-hover #stop-button:hover,
+.panel-hover .code-action:hover,
+.panel-hover #perm-approve:hover,
+.panel-hover .profile-row:hover {
+    background: $secondary;
 }
 
 /* -------------------------------------------------------------- splash */
@@ -29,7 +50,7 @@ Screen {
 }
 
 #splash-rule {
-    color: #6B141C;
+    color: $accent;
 }
 
 #splash-subtitle {
@@ -74,14 +95,14 @@ Screen {
 }
 
 .action:hover {
-    border: round #6B141C;
+    border: round $accent;
     color: #FFFFFF;
 }
 
 .action.selected {
-    border: tall #6B141C;
+    border: tall $accent;
     color: #FFFFFF;
-    background: #3B0A10;
+    background: $secondary;
 }
 
 /* -------------------------------------------------------------- header */
@@ -320,15 +341,15 @@ InputBar {
 #stop-button {
     width: auto;
     color: #FFFFFF;
-    background: #3B0A10;
-    border: round #6B141C;
+    background: $secondary;
+    border: round $accent;
     padding: 0 2;
     margin: 0 1;
     text-align: center;
 }
 
 #stop-button:hover {
-    background: #4A0E14;
+    background: $secondary;
 }
 
 #input-hint {
@@ -343,12 +364,12 @@ InputBar {
     height: auto;
     max-height: 12;
     margin: 0 1;
-    border: round #3B0A10;
+    border: round $secondary;
     background: #080808;
 }
 
 #command-menu-title {
-    color: #6B141C;
+    color: $accent;
     text-style: bold;
     padding: 0 1;
 }
@@ -380,7 +401,7 @@ PanelScreen {
     max-width: 92%;
     height: auto;
     max-height: 84%;
-    border: round #3B0A10;
+    border: round $secondary;
     background: #080808;
     padding: 1 2;
 }
@@ -432,8 +453,8 @@ PanelScreen {
 #save-settings {
     width: auto;
     margin-top: 1;
-    background: #3B0A10;
-    border: round #6B141C;
+    background: $secondary;
+    border: round $accent;
     color: #FFFFFF;
 }
 
@@ -502,7 +523,7 @@ PanelScreen {
 
 .code-action:hover {
     color: #FFFFFF;
-    background: #3B0A10;
+    background: $secondary;
 }
 
 /* -------------------------------------------------------- permission dialog */
@@ -516,7 +537,7 @@ PanelScreen {
 #perm-dialog {
     width: 52;
     height: auto;
-    border: round #6B141C;
+    border: round $accent;
     background: #080808;
     padding: 1 2;
     align: center middle;
@@ -524,7 +545,7 @@ PanelScreen {
 }
 
 #perm-title {
-    color: #6B141C;
+    color: $accent;
     text-style: bold;
     margin-bottom: 1;
 }
@@ -552,13 +573,13 @@ PanelScreen {
 #perm-approve {
     width: 12;
     margin-right: 2;
-    background: #3B0A10;
-    border: round #6B141C;
+    background: $secondary;
+    border: round $accent;
     color: #FFFFFF;
 }
 
 #perm-approve:hover {
-    background: #4A0E14;
+    background: $secondary;
 }
 
 #perm-deny {
@@ -591,11 +612,11 @@ PanelScreen {
 }
 
 .profile-row:hover {
-    background: #161616;
+    background: $secondary;
 }
 
 .profile-row.selected {
-    background: #3B0A10;
+    background: $secondary;
     color: #FFFFFF;
 }
 
@@ -607,11 +628,26 @@ PanelScreen {
 
 .profile-glyph {
     width: auto;
-    color: #6B141C;
+    color: $accent;
     margin-right: 1;
 }
 
 .profile-prompt-preview {
     color: #777777;
     margin: 0 0 0 4;
+}
+
+/* --------------------------------------------------------- plugin info panel */
+
+.plugin-info-summary {
+    color: #B9B9B9;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+.plugin-info-readme {
+    color: #777777;
+    padding: 1;
+    border: round #3A3A3A;
+    background: #050505;
 }

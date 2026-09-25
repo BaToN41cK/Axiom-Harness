@@ -11,6 +11,7 @@ import inspect
 from axiom.core.chat import ChatSession, StartupReport
 from axiom.core.config import Config
 from axiom.core.history import HistoryStore
+from axiom.shared import theme
 
 # ---------------------------------------------------------------- ChatSession
 
@@ -52,12 +53,23 @@ def test_config_load_and_save_round_trip(tmp_path) -> None:
     config.system_prompt = "be terse"
     config.search_timeout = 42.0
     config.history_limit = 7
+    config.accent = "teal"
+    config.panel_hover = False
     config.save()
     reloaded = Config.load()
     assert reloaded.temperature == 0.5
     assert reloaded.system_prompt == "be terse"
     assert reloaded.search_timeout == 42.0
     assert reloaded.history_limit == 7
+    assert reloaded.accent == "teal"
+    assert reloaded.panel_hover is False
+
+
+def test_accent_theme_payloads_cover_every_configured_preset() -> None:
+    for name, colors in theme.ACCENT_PRESETS.items():
+        payload = theme.theme_colors(name)
+        assert payload["accent"] == colors["accent"]
+        assert payload["variables"]["accent-deep"] == colors["fill"]
 
 
 def test_config_script_entry_points_exist() -> None:

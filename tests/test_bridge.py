@@ -106,21 +106,49 @@ def test_get_config_round_trip(bridge: BridgeProcess) -> None:
 
 
 def test_set_config_round_trip(bridge: BridgeProcess) -> None:
-    reply = bridge.request(2, "set_config", {"patch": {"temperature": 0.4, "theme": "light"}})
+    reply = bridge.request(
+        2,
+        "set_config",
+        {"patch": {"temperature": 0.4, "theme": "light", "accent": "teal", "panel_hover": False}},
+    )
     assert reply["ok"] is True
     assert reply["data"]["temperature"] == 0.4
     assert reply["data"]["theme"] == "light"
+    assert reply["data"]["accent"] == "teal"
+    assert reply["data"]["panel_hover"] is False
 
 
 def test_set_config_persists(tmp_path: Path) -> None:
     proc = BridgeProcess(tmp_path / "axiom-home")
     try:
-        reply = proc.request(2, "set_config", {"patch": {"temperature": 0.4}})
+        reply = proc.request(
+            2,
+            "set_config",
+            {"patch": {"temperature": 0.4, "accent": "violet", "panel_hover": False}},
+        )
         assert reply["ok"] is True
         saved = json.loads((tmp_path / "axiom-home" / "config.json").read_text(encoding="utf-8"))
         assert saved["temperature"] == 0.4
+        assert saved["accent"] == "violet"
+        assert saved["panel_hover"] is False
     finally:
         proc.close()
+
+
+def test_search_providers_lists_choices(bridge: BridgeProcess) -> None:
+    reply = bridge.request(20, "search_providers")
+    assert reply["ok"] is True
+    ids = [row["id"] for row in reply["data"]]
+    assert ids[0] == "auto"
+    assert "brave" in ids and "wikipedia" in ids
+    assert all(row["name"] for row in reply["data"])
+
+
+def test_search_test_empty_query_is_offline(bridge: BridgeProcess) -> None:
+    reply = bridge.request(21, "search_test", {"query": ""})
+    assert reply["ok"] is True
+    assert reply["data"]["ok"] is False
+    assert reply["data"]["error"] == "Empty query"
 
 
 def test_list_chats_empty(bridge: BridgeProcess) -> None:
@@ -221,6 +249,164 @@ def test_project_search_returns_clickable_file_hits(tmp_path: Path) -> None:
 
 
 
+# ------------------------------------------------------------- plugin manager
+
+
+def _write_plugin_folder(root: Path, name: str = "demo") -> Path:
+    """Create a minimal, valid plugin folder (manifest + a real tool)."""
+    folder = root / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "manifest.json").write_text(
+        json.dumps({
+            "name": name,
+            "version": "1.0.0",
+            "description": "Demo plugin",
+            "tools": ["hello"],
+        }),
+        encoding="utf-8",
+    )
+    (folder / "plugin.py").write_text(
+        "from axiom.core.tools.base import ToolDefinition, ToolPermission, ToolResult\n"
+        "TOOLS = [ToolDefinition(name='hello', description='Say hello',\n"
+        "                        permission=ToolPermission.ALWAYS)]\n"
+        "async def hello(name: str = 'world'):\n"
+        "    return ToolResult(name='hello', ok=True, content=f'Hello {name}')\n"
+        "HANDLERS = {'hello': hello}\n",
+        encoding="utf-8",
+    )
+    return folder
+
+
+def test_plugin_install_toggle_remove_round_trip(tmp_path: Path) -> None:
+    """The full install → list → toggle → remove flow works over the bridge."""
+    home = tmp_path / "axiom-home"
+    home.mkdir(parents=True)
+    source = _write_plugin_folder(tmp_path / "src")
+    proc = BridgeProcess(home)
+    try:
+        installed = proc.request(1, "install_plugin", {"path": str(source)})
+        assert installed["ok"] is True
+        assert installed["data"]["name"] == "demo"
+        assert installed["data"]["status"] == "installed"
+
+        listed = proc.request(2, "list_plugins")
+        assert listed["ok"] is True
+        assert [row["name"] for row in listed["data"]] == ["demo"]
+        assert listed["data"][0]["enabled"] is True
+
+        # Reinstall is idempotent: it updates in place, never duplicates.
+        again = proc.request(3, "install_plugin", {"path": str(source)})
+        assert again["data"]["status"] == "updated"
+        relisted = proc.request(4, "list_plugins")
+        assert [row["name"] for row in relisted["data"]] == ["demo"]
+
+        off = proc.request(5, "toggle_plugin", {"name": "demo", "enabled": False})
+        assert off["ok"] is True
+        assert off["data"] == {"name": "demo", "enabled": False, "ok": True}
+
+        on = proc.request(6, "toggle_plugin", {"name": "demo", "enabled": True})
+        assert on["data"]["enabled"] is True
+
+        removed = proc.request(7, "remove_plugin", {"name": "demo"})
+        assert removed["ok"] is True
+        assert removed["data"] == {"name": "demo", "removed": True}
+
+        empty = proc.request(8, "list_plugins")
+        assert empty["data"] == []
+    finally:
+        proc.close()
+
+
+def test_install_plugin_requires_path(bridge: BridgeProcess) -> None:
+    reply = bridge.request(1, "install_plugin", {})
+    assert reply["ok"] is False
+    assert "path is required" in reply["error"]
+
+
+def test_toggle_plugin_unknown_name_reports_not_found(bridge: BridgeProcess) -> None:
+    reply = bridge.request(1, "toggle_plugin", {"name": "missing", "enabled": True})
+    assert reply["ok"] is True
+    assert reply["data"] == {"name": "missing", "enabled": False, "ok": False}
+
+
+def test_discover_plugins_picks_up_manually_dropped_folder(tmp_path: Path) -> None:
+    """A folder copied into ~/.axiom/plugins is seen by discover without restart."""
+    home = tmp_path / "axiom-home"
+    home.mkdir(parents=True)
+    proc = BridgeProcess(home)
+    try:
+        assert proc.request(1, "list_plugins")["data"] == []
+        # Simulate the user manually dropping a plugin folder while running.
+        _write_plugin_folder(home / "plugins", name="manual")
+        discovered = proc.request(2, "discover_plugins")
+        assert discovered["ok"] is True
+        assert "manual" in discovered["data"]["discovered"]
+        assert [row["name"] for row in discovered["data"]["plugins"]] == ["manual"]
+        # A second discover finds nothing new (idempotent).
+        again = proc.request(3, "discover_plugins")
+        assert again["data"]["discovered"] == []
+        assert [row["name"] for row in again["data"]["plugins"]] == ["manual"]
+    finally:
+        proc.close()
+
+
+def test_bundled_plugins_lists_real_builtins(bridge: BridgeProcess) -> None:
+    """The bundled catalogue exposes the plugins shipped with AXIOM."""
+    reply = bridge.request(1, "bundled_plugins")
+    assert reply["ok"] is True
+    names = {row["name"] for row in reply["data"]}
+    assert {"calculator", "datetime", "notes", "texttools", "security"} <= names
+    assert all(row["bundled"] is True for row in reply["data"])
+
+
+def test_install_bundled_plugin_round_trip(tmp_path: Path) -> None:
+    """Install → list → tools live → remove → back in the catalogue."""
+    home = tmp_path / "axiom-home"
+    home.mkdir(parents=True)
+    proc = BridgeProcess(home)
+    try:
+        installed = proc.request(1, "install_bundled_plugin", {"name": "calculator"})
+        assert installed["ok"] is True
+        assert installed["data"]["status"] == "installed"
+        assert installed["data"]["manifest"]["bundled"] is True
+
+        listed = proc.request(2, "list_plugins")
+        rows = {row["name"]: row for row in listed["data"]}
+        assert "calculator" in rows
+        assert rows["calculator"]["enabled"] is True
+        assert "calculate" in rows["calculator"]["tools"]
+
+        # The real tool of the bundled plugin is registered and callable.
+        tools = proc.request(3, "tools")
+        tool_names = [item["name"] for item in tools["data"]]
+        assert "calculate" in tool_names
+
+        # While installed, the catalogue no longer offers it.
+        bundled = proc.request(4, "bundled_plugins")
+        assert "calculator" not in {row["name"] for row in bundled["data"]}
+
+        # Toggle off, then on again.
+        off = proc.request(5, "toggle_plugin", {"name": "calculator", "enabled": False})
+        assert off["data"]["enabled"] is False
+        on = proc.request(6, "toggle_plugin", {"name": "calculator", "enabled": True})
+        assert on["data"]["enabled"] is True
+
+        # Removal puts it back into the available catalogue.
+        removed = proc.request(7, "remove_plugin", {"name": "calculator"})
+        assert removed["data"]["removed"] is True
+        bundled_again = proc.request(8, "bundled_plugins")
+        assert "calculator" in {row["name"] for row in bundled_again["data"]}
+    finally:
+        proc.close()
+
+
+def test_install_bundled_plugin_requires_name(bridge: BridgeProcess) -> None:
+    reply = bridge.request(1, "install_bundled_plugin", {})
+    assert reply["ok"] is False
+    assert "name is required" in reply["error"]
+
+
+
 def test_send_without_ollama_reports_error_event(bridge: BridgeProcess) -> None:
     reply = bridge.request(7, "send", {"text": "hi"})
     # The reply itself is ok (events were streamed); without a live Ollama the
@@ -240,6 +426,78 @@ def _bridge_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+async def test_set_model_ollama_resets_stale_external_router(tmp_path: Path, monkeypatch) -> None:
+    """Picking an Ollama model must clear a previously selected external route.
+
+    Regression: a leftover ``router_primary`` (e.g. openai_compatible) kept the
+    live ModelRouter pointed at the external provider, so every message hit that
+    provider (HTTP 402) even though the user had switched back to a local model.
+    """
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path / "home"))
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+    from axiom.core.history import HistoryStore
+    from axiom.core.models import ModelInfo
+
+    cfg = Config(model="gemma4:e4b")
+    cfg.save_history = False
+    cfg.router_primary = {"provider_id": "openai_compatible", "model": "deepseek/deepseek-v4-flash"}
+    session = ChatSession(config=cfg, history_store=HistoryStore(directory=tmp_path / "h"))
+
+    # The live router really carries the external primary at this point.
+    assert session.router.config.primary is not None
+    assert session.router.config.primary.provider_id == "openai_compatible"
+
+    # ``switch_model`` normally needs a live Ollama registry; stub it so the test
+    # stays offline and focuses on the router reset behaviour.
+    async def _fake_switch(name: str) -> ModelInfo:
+        model = ModelInfo(name=name)
+        session.active_model = model
+        session.conversation.model = name
+        return model
+
+    session.switch_model = _fake_switch  # type: ignore[assignment]
+
+    mod = _bridge_module()
+    result = await mod._handle(session, "set_model", {"name": "gemma4:e4b", "providerId": "ollama"})
+
+    assert result["providerId"] == "ollama"
+    assert result["source"] == "ollama"
+    # Config value cleared AND the live router no longer targets the external provider.
+    assert session.config.router_primary is None
+    assert session.router.config.primary is None
+
+
+async def test_set_model_ollama_routes_locally_after_external_pick(tmp_path: Path, monkeypatch) -> None:
+    """After resetting, the ProviderChatClient must resolve to the Ollama path."""
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path / "home"))
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+    from axiom.core.history import HistoryStore
+    from axiom.core.models import ModelInfo
+
+    cfg = Config(model="gemma4:e4b")
+    cfg.save_history = False
+    cfg.router_primary = {"provider_id": "openai_compatible", "model": "deepseek/deepseek-v4-flash"}
+    session = ChatSession(config=cfg, history_store=HistoryStore(directory=tmp_path / "h"))
+
+    async def _fake_switch(name: str) -> ModelInfo:
+        model = ModelInfo(name=name)
+        session.active_model = model
+        return model
+
+    session.switch_model = _fake_switch  # type: ignore[assignment]
+
+    mod = _bridge_module()
+    await mod._handle(session, "set_model", {"name": "gemma4:e4b", "providerId": "ollama"})
+
+    # The routing decision the chat client would make for a real message now
+    # points at Ollama, not the external provider that raised 402.
+    target = session.provider_client._target("привет", "gemma4:e4b")
+    assert target.provider_id == "ollama"
+    assert target.model == "gemma4:e4b"
 
 
 def test_progress_events_forward_only_new_orchestration_steps() -> None:

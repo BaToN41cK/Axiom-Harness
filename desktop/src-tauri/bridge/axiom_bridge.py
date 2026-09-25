@@ -19,6 +19,7 @@ from axiom.core.chat import ChatSession
 from axiom.core.config import Config
 from axiom.core.events import ChatEvent
 from axiom.core.models import ModelInfo
+from axiom.core.search.multi import search_provider_choices
 
 OUT_LOCK = threading.Lock()
 
@@ -274,6 +275,31 @@ async def _watch_orchestration(session: ChatSession, baseline: int,
 
 
 async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
+    if cmd in {"task_start", "task_resume"}:
+        # Push directly from the core bus; no polling, model calls or state
+        # transitions in the frontend. The subscription is request-scoped.
+        def forward(payload: dict) -> None:
+            _write_line(json.dumps({"type": "event", "event": payload}, ensure_ascii=False))
+
+        if session.busy:
+            raise ValueError("A generation is already running")
+        off = session.bus.subscribe("task.event", forward)
+        try:
+            if cmd == "task_start":
+                task = await session.task_start(str(args.get("goal") or ""), planning=args.get("planning"))
+            else:
+                task = await session.task_resume(str(args.get("id") or ""),
+                                                 acknowledge=args.get("acknowledge") is True)
+            return task.model_dump(mode="json")
+        finally:
+            off()
+    if cmd == "task_cancel":
+        return {"cancelled": session.task_cancel(str(args.get("id") or ""))}
+    if cmd == "task_state":
+        task = session.task_state(str(args.get("id") or ""))
+        return task.model_dump(mode="json") if task is not None else None
+    if cmd == "tasks":
+        return [task.model_dump(mode="json") for task in session.task_store.list()]
     if cmd == "health":
         available = await session.client.is_available()
         version = None
@@ -304,6 +330,39 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         }
     if cmd == "tools":
         return session.tools_info()
+    if cmd == "list_plugins":
+        return [m.row() for m in session.plugins.list()]
+    if cmd == "bundled_plugins":
+        return [m.row() for m in session.plugin_manager.bundled_manifests()]
+    if cmd == "install_bundled_plugin":
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        return session.install_bundled_plugin(name)
+    if cmd == "discover_plugins":
+        # Live reload: pick up folders the user copied into ~/.axiom/plugins
+        # while the app was running, register enabled plugins' real tools/skills,
+        # and report which names are new so the UI can announce them.
+        before = {m.name for m in session.plugins.list()}
+        session.load_plugins()
+        rows = [m.row() for m in session.plugins.list()]
+        discovered = [row["name"] for row in rows if row["name"] not in before]
+        return {"discovered": discovered, "plugins": rows}
+    if cmd == "install_plugin":
+        path = str(args.get("path") or "").strip()
+        if not path:
+            raise ValueError("path is required")
+        return session.install_plugin_from_folder(path)
+    if cmd == "toggle_plugin":
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        return session.toggle_plugin(name, bool(args.get("enabled", True)))
+    if cmd == "remove_plugin":
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        return {"name": name, "removed": session.remove_plugin(name)}
     if cmd == "model_info":
         provider_id = str(args.get("provider_id") or args.get("providerId") or "ollama")
         target = str(args.get("name") or "")
@@ -371,6 +430,13 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         session.config.save()
         session._configure_router_from_config()
         return {"provider_id": provider_id, "model": model}
+    if cmd == "search_providers":
+        return search_provider_choices()
+    if cmd == "search_test":
+        return await session.search_test(
+            str(args.get("query") or ""),
+            limit=int(args["limit"]) if args.get("limit") else None,
+        )
     if cmd == "permissions":
         mode = str(args.get("mode") or "ask")
         if mode not in {"ask", "auto_approve_safe", "auto_approve_all"}:
@@ -519,7 +585,7 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
                 if entry.is_dir() and depth > 1:
                     node["children"] = _tree(entry, depth - 1)
                 out.append(node)
-                if len(out) >= 300:
+                if len(out) >= 800:
                     break
             return out
 
@@ -711,16 +777,9 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             ws_tools.access_mode = new_cfg.access_mode
             if new_cfg.workspace_root:
                 ws_tools.set_root(Path(new_cfg.workspace_root).expanduser())
-        web_tool = getattr(session, "web_tool", None)
-        if web_tool is not None:
-            web_tool.max_sources = new_cfg.search_max_sources
-        provider = getattr(session, "provider", None)
-        if provider is not None and provider.__class__.__name__ == "MultiSearchProvider":
-            from axiom.core.search.multi import MultiSearchProvider
-
-            session.provider = MultiSearchProvider(provider.providers, timeout=new_cfg.search_timeout)
-            if agent is not None and getattr(agent, "_web_tool", None) is not None:
-                agent._web_tool._provider = session.provider
+        # Rebuild the search backend in place: the provider selection and
+        # timeout changed, so the live WebSearchTool + agent must follow.
+        session._rebuild_search_provider()
         history_store = getattr(session, "history_store", None)
         if history_store is not None:
             history_store.set_limit(new_cfg.history_limit if new_cfg.save_history else None)
@@ -758,7 +817,14 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         provider_id = str(args.get("provider_id") or args.get("providerId") or "ollama")
         name = str(args["name"])
         if provider_id == "ollama":
+            # Clearing the config value is not enough: the live ModelRouter keeps
+            # its own primary RouteTarget. Without re-configuring it, a previously
+            # selected external route (e.g. openai_compatible) stays active and
+            # every message keeps hitting that provider even though Ollama is now
+            # the chosen model. Reset both the persisted config and the router.
             session.config.router_primary = None
+            session.config.save()
+            session._configure_router_from_config()
             model = await session.switch_model(name)
             if session.config.warmup_model:
                 session.core_warmup_task = asyncio.create_task(session.warmup_model(model.name))

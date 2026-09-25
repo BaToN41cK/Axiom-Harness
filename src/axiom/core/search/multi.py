@@ -38,6 +38,47 @@ def default_chain() -> list[SearchProvider]:
     return [BraveProvider(), DuckDuckGoProvider(), SearXNGProvider(), WikipediaProvider()]
 
 
+#: Valid ``Config.search_provider`` values, in display order.
+SEARCH_PROVIDER_IDS = ("auto", "brave", "duckduckgo", "searxng", "wikipedia")
+
+_SEARCH_PROVIDER_NAMES = {
+    "auto": "Auto (Brave → DuckDuckGo → SearXNG → Wikipedia)",
+    "brave": "Brave",
+    "duckduckgo": "DuckDuckGo",
+    "searxng": "SearXNG",
+    "wikipedia": "Wikipedia",
+}
+
+
+def search_provider_choices() -> list[dict]:
+    """Provider list for a settings dropdown / TUI option list."""
+    return [{"id": pid, "name": _SEARCH_PROVIDER_NAMES[pid]} for pid in SEARCH_PROVIDER_IDS]
+
+
+def _single_provider(provider_id: str, timeout: float | None = None) -> SearchProvider:
+    if provider_id == "brave":
+        return BraveProvider(timeout=timeout) if timeout else BraveProvider()
+    if provider_id == "duckduckgo":
+        return DuckDuckGoProvider(timeout=timeout) if timeout else DuckDuckGoProvider()
+    if provider_id == "searxng":
+        return SearXNGProvider(timeout=timeout) if timeout else SearXNGProvider()
+    if provider_id == "wikipedia":
+        return WikipediaProvider(timeout=timeout) if timeout else WikipediaProvider()
+    raise ValueError(f"Unknown search provider: {provider_id}")
+
+
+def build_search_provider(selection: str | None, timeout: float | None = None) -> SearchProvider:
+    """Build the search backend for ``Config.search_provider``.
+
+    ``auto`` (or an unknown/empty value) keeps the resilient multi-engine chain;
+    any other id pins a single engine so users can dodge a blocked provider.
+    """
+    selection = (selection or "auto").strip().lower()
+    if selection == "auto":
+        return MultiSearchProvider(timeout=timeout)
+    return _single_provider(selection, timeout=timeout)
+
+
 class MultiSearchProvider(SearchProvider):
     """Runs a chain of real providers and reports which one answered."""
 

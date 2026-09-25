@@ -6,7 +6,54 @@ same identity, and the TUI adapts these values into a Textual theme.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+AccentPreset = Literal["garnet", "blue", "teal", "violet"]
+
+#: Shared accent values used by Desktop and the TUI.
+ACCENT_PRESETS: dict[AccentPreset, dict[str, str]] = {
+    "garnet": {"accent": "#D27882", "light": "#9F3542", "fill": "#702630", "deep": "#4D1820", "dim": "#381118"},
+    "blue": {"accent": "#6B9BFF", "light": "#1F58DB", "fill": "#1642A8", "deep": "#12327D", "dim": "#0C2154"},
+    "teal": {"accent": "#56B8AE", "light": "#0D6D66", "fill": "#0A514C", "deep": "#073B38", "dim": "#052A29"},
+    "violet": {"accent": "#B18CFF", "light": "#7434DF", "fill": "#5B26B5", "deep": "#401A80", "dim": "#2A1155"},
+}
+
+
+def accent_preset(name: str) -> dict[str, str]:
+    """Return a copy of a configured accent, falling back to garnet."""
+    return dict(ACCENT_PRESETS.get(name, ACCENT_PRESETS["garnet"]))
+
+
+def theme_colors(accent: str = "garnet") -> dict[str, Any]:
+    """Build the Textual theme payload for an accent preset."""
+    colors = accent_preset(accent)
+    return {
+        "name": THEME_NAME,
+        "primary": colors["accent"],
+        "secondary": colors["fill"],
+        "accent": colors["accent"],
+        "foreground": WHITE,
+        "background": BLACK,
+        "surface": OBSIDIAN,
+        "panel": ASH_DEEP,
+        "boost": ASH,
+        "warning": WARNING,
+        "error": ERROR,
+        "success": SUCCESS,
+        "dark": THEME_DARK,
+        "luminosity_spread": THEME_LUMINOSITY_SPREAD,
+        "variables": {
+            "accent": colors["accent"],
+            "accent-hover": colors["accent"],
+            "accent-deep": colors["fill"],
+            "accent-dim": colors["deep"],
+        },
+    }
+
+
+# Compatibility alias for callers that use the default palette directly.
+THEME_COLORS: dict[str, Any]
+THEME_NAME = "obsidian"
 
 # --------------------------------------------------------------------- palette
 # Absolute black, deep obsidian burgundy accents, ash greys. Garnet is used
@@ -111,26 +158,5 @@ PHASE_TOOL = "TOOL"
 PHASE_ANSWER = "ANSWER"
 PHASE_SOURCES = "SOURCES"
 
-#: The theme registered with Textual (keys match textual.theme.Theme fields).
-#: Values are typed as ``Any`` because Textual expects a mix of ``str``,
-#: ``bool`` and ``float``; the TUI is the only place that adapts these
-#: values into a ``textual.theme.Theme``.
-THEME_COLORS: dict[str, Any] = {
-    "name": "obsidian",
-    "primary": GARNET_GLOW,
-    "secondary": GARNET,
-    "accent": GARNET_GLOW,
-    "foreground": WHITE,
-    "background": BLACK,
-    "surface": OBSIDIAN,
-    "panel": ASH_DEEP,
-    "boost": ASH,
-    "warning": WARNING,
-    "error": ERROR,
-    "success": SUCCESS,
-    "dark": THEME_DARK,
-    "luminosity_spread": THEME_LUMINOSITY_SPREAD,
-}
-
-#: Name of the theme as it is registered with the TUI framework.
-THEME_NAME = "obsidian"
+#: The theme registered with Textual using the default garnet accent.
+THEME_COLORS = theme_colors()

@@ -30,6 +30,7 @@ from axiom.core.agent import Agent
 from axiom.core.config import Config
 from axiom.core.errors import (
     AxiomError,
+    SearchUnavailableError,
 )
 from axiom.core.events import (
     ChatEvent,
@@ -47,10 +48,11 @@ from axiom.core.mentions import expand_mentions, mentioned_files
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.ollama import OllamaClient
 from axiom.core.profiles import ProfileManager
-from axiom.core.search.multi import MultiSearchProvider
+from axiom.core.search.multi import build_search_provider
 from axiom.core.search.provider import SearchProvider
 from axiom.core.state import GenerationState
 from axiom.core.state_machine import GenerationStateMachine
+from axiom.core.tasks import Task, TaskRunner, TaskState, TaskStore
 from axiom.core.tools.base import ToolPermission
 from axiom.core.tools.filesystem import WORKSPACE_TOOLS, WorkspaceTools
 from axiom.core.tools.git_tools import (
@@ -122,7 +124,9 @@ class ChatSession:
         self.history_store = history_store if history_store is not None else HistoryStore(
             limit=self.config.history_limit if self.config.save_history else None
         )
-        self.provider = provider or MultiSearchProvider(timeout=self.config.search_timeout)
+        self.provider = provider or build_search_provider(
+            self.config.search_provider, timeout=self.config.search_timeout
+        )
         self.web_tool = WebSearchTool(self.provider, max_sources=self.config.search_max_sources)
         self.tools = ToolRegistry()
         self.web_tool.register(self.tools)
@@ -186,6 +190,7 @@ class ChatSession:
         self.active_model: ModelInfo | None = None
         self.last_metrics: dict = {}
         self._task: asyncio.Task | None = None
+        self.active_task: Task | None = None
         #: Fire-and-forget background model warm-up task. Created by the
         #: desktop bridge (``startup`` / ``set_model`` / ``warmup``); the
         #: session only keeps a reference so it can be awaited/cancelled.
@@ -209,7 +214,7 @@ class ChatSession:
         from axiom.core.mcp import MCPManager
         from axiom.core.orchestrator import Orchestrator
         from axiom.core.parallel import run_parallel as _parallel_runner
-        from axiom.core.plugins import PluginRegistry
+        from axiom.core.plugins import PluginManager, PluginRegistry
         from axiom.core.presets import PresetStore, detect_mode
         from axiom.core.project_index import ProjectMemory
         from axiom.core.router import ModelRouter, RouterConfig
@@ -237,6 +242,7 @@ class ChatSession:
         self._configure_router_from_config()
         self.mcp = MCPManager()
         self.plugins = PluginRegistry()
+        self.plugin_manager = PluginManager(registry=self.plugins)
         self.presets = PresetStore()
         self._parallel_runner = _parallel_runner
         self._detect_mode = detect_mode
@@ -315,10 +321,11 @@ class ChatSession:
     # ------------------------------------------------------ harness (п.20-22)
 
     def load_plugins(self) -> list[str]:
-        """Подхватить установленные плагины (п.20) и применить их вклады.
+        """Загрузить установленные плагины (п.20) и применить их вклады.
 
-        Manifest описывает tools/providers/skills; ядро применяет только то,
-        что реально существует, — неизвестные имена молча игнорируются.
+        Сначала читается персистентный реестр, затем подхватываются папки,
+        которые пользователь положил в ``~/.axiom/plugins/`` вручную, после
+        чего у включённых плагинов регистрируются их реальные инструменты.
         """
         from axiom.core.config import axiom_home
 
@@ -326,28 +333,41 @@ class ChatSession:
             self.plugins.load(axiom_home() / "plugins.json")
         except Exception:
             return []
+        try:
+            self.plugin_manager.discover()
+        except Exception:
+            pass
         names: list[str] = []
-        manifests = self.plugins.list()
         for plugin_name, skill_ids in self._loaded_plugin_skills.items():
             for skill_id in skill_ids:
                 self.skills.unpin(skill_id, source=f"plugin:{plugin_name}")
         self._loaded_plugin_skills.clear()
-        for manifest in manifests:
+        for manifest in self.plugins.list(enabled_only=True):
             names.append(manifest.name)
             skill_ids = {str(skill_id) for skill_id in manifest.skills}
             self._loaded_plugin_skills[manifest.name] = skill_ids
             for skill_id in skill_ids:
                 self.skills.pin(skill_id, source=f"plugin:{manifest.name}")
+        # Реальный код плагинов: их инструменты становятся доступны модели.
+        try:
+            self.plugin_manager.load_enabled(self)
+        except Exception:
+            pass
         if names:
             self.trajectory.append("plugin.load", ", ".join(names), actor="system",
                                    data={"plugins": names})
         return names
 
-    def install_plugin(self, manifest) -> None:
-        """Установить плагин и сохранить реестр (п.20)."""
+    def install_plugin(self, manifest) -> dict:
+        """Установить плагин (идемпотентно) и сохранить реестр (п.20).
+
+        Возвращает ``{"name": ..., "status": "installed"|"updated"}`` — повторная
+        установка того же плагина не плодит дубликаты, а обновляет его.
+        """
         from axiom.core.config import axiom_home
 
         previous = self.plugins.get(manifest.name)
+        status = "installed" if previous is None else "updated"
         self.plugins.install(manifest)
         try:
             self.plugins.save(axiom_home() / "plugins.json")
@@ -361,10 +381,31 @@ class ChatSession:
         self._loaded_plugin_skills[manifest.name] = skill_ids
         for skill_id in skill_ids:
             self.skills.pin(skill_id, source=source)
+        return {"name": manifest.name, "status": status}
+
+    def install_plugin_from_folder(self, path: str) -> dict:
+        """Установить плагин из папки на диске (копирует её в ``~/.axiom/plugins``)."""
+        manifest, status = self.plugin_manager.install_from_folder(path, session=self)
+        return {"name": manifest.name, "status": status, "manifest": manifest.row()}
+
+    def install_bundled_plugin(self, name: str) -> dict:
+        """Установить встроенный плагин AXIOM из каталога bundled (п.20)."""
+        manifest, status = self.plugin_manager.install_bundled(name, session=self)
+        return {"name": manifest.name, "status": status, "manifest": manifest.row()}
+
+    def toggle_plugin(self, name: str, enabled: bool) -> dict:
+        """Включить/выключить плагин; изменение сохраняется и применяется сразу."""
+        ok = self.plugin_manager.toggle(name, enabled, session=self)
+        manifest = self.plugins.get(name)
+        return {
+            "name": name,
+            "enabled": manifest.enabled if manifest else False,
+            "ok": ok,
+        }
 
     def remove_plugin(self, name: str) -> bool:
         """Remove an installed plugin and only the pins owned by that plugin."""
-        removed = self.plugins.remove(name)
+        removed = self.plugin_manager.remove(name, session=self)
         if not removed:
             return False
         for skill_id in self._loaded_plugin_skills.pop(name, set()):
@@ -624,6 +665,8 @@ class ChatSession:
 
         try:
             async for event in request_agent.run([{"role": "user", "content": task}], worker_model):
+                if kwargs.get("on_event") is not None:
+                    kwargs["on_event"](event)
                 if isinstance(event, ReasoningChunk):
                     pass_thinking.append(event.text)
                 elif isinstance(event, ContentChunk):
@@ -674,6 +717,162 @@ class ChatSession:
         if not result["content"]:
             result["error"] = "empty model response"
         return result
+
+    @property
+    def task_store(self) -> TaskStore:
+        root = self.workspace_root
+        return TaskStore(root / ".axiom" / "tasks" if root is not None else None)
+
+    async def _plan_task(self, prompt: str) -> str:
+        """Use the configured provider, with no executable tools or chat mutations."""
+        if self.active_model is None:
+            raise ValueError("No model is available")
+        parts: list[str] = []
+        size = 0
+        async for chunk in self.provider_client.chat(
+            self.active_model.name, [{"role": "user", "content": prompt}], tools=None,
+        ):
+            if chunk.content:
+                size += len(chunk.content)
+                if size > 32000:
+                    raise ValueError("Planner response exceeds 32000 characters")
+                parts.append(chunk.content)
+        return "".join(parts)
+
+    async def _execute_task_step(self, *, step, prompt: str, on_event) -> dict:
+        return await self._subagent_runner(
+            agent="coder", task=prompt, tools=step.tools, trajectory=self.trajectory, on_event=on_event,
+        )
+
+    async def _verify_task(self, task: Task) -> dict:
+        name = "verify_changes"
+        if not self.sandbox.allows(name):
+            return {"ok": False, "executed": False, "error": "Verification blocked by sandbox"}
+        permission = self.tools.permission_for(name, {})
+        if not await self.permissions.decide(name, {}, permission):
+            return {"ok": False, "executed": False, "error": "Verification permission denied"}
+        result = await self.tools.execute(name, {}, approved=True)
+        data = dict(result.data or {})
+        executed = bool(data.get("steps"))
+        report = {"ok": False, "executed": executed, "summary": result.content,
+                  "error": result.error, "checks": data}
+        if not result.ok or not executed:
+            return report
+        # Passing tests alone do not prove the requested change was implemented.
+        review = await self._subagent_runner(
+            agent="reviewer", tools=[], trajectory=self.trajectory,
+            task=("Review task acceptance. Return ONLY JSON {\"approved\": true/false, \"reason\": \"...\"}. "
+                  "Approve only when the step evidence AND checks meet every definition_of_done criterion.\n"
+                  + task.model_dump_json() + "\nVerification:\n" + result.content),
+        )
+        decision = self._first_json_object(str(review.get("content") or ""))
+        if decision is None or review.get("error"):
+            report["error"] = "Reviewer did not return a valid acceptance verdict"
+            return report
+        report["review"] = decision
+        report["ok"] = decision.get("approved") is True
+        if not report["ok"]:
+            report["error"] = str(decision.get("reason") or "Acceptance criteria were not approved")
+        return report
+
+    @staticmethod
+    def _first_json_object(text: str) -> dict | None:
+        """Parse the first balanced JSON object; ignore any trailing content.
+
+        The agent's forced-edit heuristic can repeat a pass, so a worker reply
+        may carry the verdict twice ("{...}{...}"). Only the first object is
+        authoritative — a doubled reply must not be read as an approval failure.
+        """
+        import json as _json
+
+        start = text.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        parsed = _json.loads(text[start:index + 1])
+                    except ValueError:
+                        return None
+                    return parsed if isinstance(parsed, dict) else None
+        return None
+
+    async def task_start(self, goal: str, *, planning: bool | None = None) -> Task:
+        if self.busy:
+            raise ValueError("A generation is already running")
+        task = Task(goal=goal.strip(), scope=str(self.workspace_root) if self.workspace_root else None,
+                    planning=planning)
+        self.task_store.save(task)
+        return await self._run_task(task)
+
+    async def task_resume(self, task_id: str, *, acknowledge: bool = False) -> Task:
+        if self.busy:
+            raise ValueError("A generation is already running")
+        task = self.task_store.load(task_id)
+        if task is None:
+            raise ValueError("Task not found")
+        scope = str(self.workspace_root) if self.workspace_root else None
+        if task.scope != scope:
+            raise ValueError("Open the task's original workspace before resuming")
+        if task.state == TaskState.COMPLETED:
+            return task
+        return await self._run_task(task, resume=True, acknowledge=acknowledge)
+
+    def task_state(self, task_id: str) -> Task | None:
+        return self.task_store.load(task_id)
+
+    def task_cancel(self, task_id: str) -> bool:
+        if self.active_task is None or self.active_task.id != task_id:
+            return False
+        return self.cancel()
+
+    async def _run_task(self, task: Task, *, resume: bool = False, acknowledge: bool = False) -> Task:
+        from axiom.core.planner import Planner
+
+        runner = TaskRunner(
+            store=self.task_store, planner=Planner(self._plan_task), execute=self._execute_task_step,
+            verify=lambda: self._verify_task(task), tools=[d.name for d in self.tools.definitions()],
+            bus=self.bus, trajectory=self.trajectory,
+        )
+        self.active_task = task
+        caller = asyncio.current_task()
+        worker = asyncio.create_task(runner.run(task, resume=resume, acknowledge=acknowledge))
+        self._task = worker
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+            if task.state != TaskState.CANCELLED:
+                runner.transition(task, TaskState.CANCELLED, "Stopped before execution")
+            if caller is not None and caller.cancelling():
+                raise
+            return task
+        finally:
+            if self._task is worker:
+                self._task = None
+            self.active_task = None
 
     async def run_orchestrated(self, text: str, *, limit: int = 4,
                                max_iterations: int = 3) -> dict:
@@ -993,6 +1192,81 @@ class ChatSession:
     def search_projects(self, query: str) -> list[ProjectInfo]:
         return self.workspaces.search_projects(query)
 
+    def _rebuild_search_provider(self) -> None:
+        """Rebuild the live search backend from ``Config.search_provider``.
+
+        Called after ``set_config`` changes the selection or timeout so both the
+        agent tool and the search test use the new backend immediately.
+        """
+        self.provider = build_search_provider(
+            self.config.search_provider, timeout=self.config.search_timeout
+        )
+        self.web_tool = WebSearchTool(
+            self.provider, max_sources=self.config.search_max_sources
+        )
+        agent = getattr(self, "agent", None)
+        if agent is not None:
+            agent._web_tool = self.web_tool
+
+    async def search_test(self, query: str, limit: int | None = None) -> dict:
+        """Run a real search through the configured backend and report its health.
+
+        W1.2: an honest connectivity probe. It never claims "Online" without a
+        real result set; a failure returns the engine name, the measured latency
+        and the real error instead of a fabricated state.
+        """
+        query = (query or "").strip()
+        if not query:
+            return {
+                "ok": False,
+                "provider": "",
+                "latency_ms": 0,
+                "result_count": 0,
+                "results": [],
+                "error": "Empty query",
+                "hint": None,
+            }
+        started = time.perf_counter()
+        count = limit if isinstance(limit, int) and limit > 0 else self.config.search_max_sources
+        try:
+            results = await self.provider.search(query, limit=count)
+        except SearchUnavailableError as exc:
+            return {
+                "ok": False,
+                "provider": getattr(self.provider, "name", "Web"),
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "result_count": 0,
+                "results": [],
+                "error": str(exc),
+                "hint": exc.hint,
+            }
+        except Exception as exc:  # defensive: the test button must not crash
+            return {
+                "ok": False,
+                "provider": getattr(self.provider, "name", "Web"),
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "result_count": 0,
+                "results": [],
+                "error": str(exc),
+                "hint": None,
+            }
+        provider_name = (
+            getattr(self.provider, "last_provider", "")
+            or getattr(self.provider, "name", "Web")
+        )
+        return {
+            "ok": True,
+            "provider": provider_name,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "result_count": len(results),
+            "results": [
+                {"title": r.title, "url": r.url, "snippet": r.snippet}
+                for r in results
+            ],
+            "error": None,
+            "hint": None,
+        }
+
     def create_project(self, path: str) -> ProjectInfo:
         """Create a new project directory and remember it."""
         return self.workspaces.create_project(Path(path).expanduser().resolve())
@@ -1002,6 +1276,8 @@ class ChatSession:
 
     def set_workspace(self, path: str) -> ProjectInfo:
         """Switch the whole session to a real directory (AI + terminal + explorer)."""
+        if self.active_task is not None:
+            raise ValueError("Stop the active task before switching workspace")
         target = Path(path).expanduser().resolve()
         if not target.is_dir():
             from axiom.core.errors import AxiomError
@@ -1073,6 +1349,8 @@ class ChatSession:
         back at the global history dir, and every workspace tool is removed
         from the registry so the model chats over Ollama only.
         """
+        if self.active_task is not None:
+            raise ValueError("Stop the active task before leaving workspace")
         self._save_conversation()
         self.history_store.use_workspace(None)
         self.conversation = Conversation(model=self.active_model.name if self.active_model else None)
@@ -1124,6 +1402,8 @@ class ChatSession:
     def cancel(self) -> bool:
         """Cancel the in-flight generation. Returns True if something was stopped."""
         if self.busy and self._task is not None:
+            if self._task.cancelling():
+                return True  # do not interrupt subprocess cleanup with a second cancel
             self._task.cancel()
             return True
         return False

@@ -1,0 +1,10 @@
+{
+  "name": "texttools",
+  "version": "1.0.0",
+  "description": "Текстовые утилиты: статистика текста, преобразование регистра/слаг/переворот, кодирование base64/hex/url/html.",
+  "author": "AXIOM Team",
+  "api_version": 1,
+  "capabilities": ["tools"],
+  "tools": ["text_stats", "text_transform", "encode_text"],
+  "skills": []
+}

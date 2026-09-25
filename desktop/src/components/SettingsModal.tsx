@@ -12,7 +12,15 @@ import {
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { AxiomConfig, ProviderModelRow, ProviderRow } from "../types";
+import type {
+  AxiomConfig,
+  ProviderModelRow,
+  ProviderRow,
+  PluginRow,
+  PluginInstallResult,
+  SearchProviderChoice,
+  SearchTestResult,
+} from "../types";
 import type { SettingsSection } from "../hooks/useAxiom";
 
 interface Props {
@@ -27,7 +35,20 @@ interface Props {
   providerLoading: boolean;
   onProviderSaveSettings: (id: string, key: string, baseUrl: string) => Promise<void>;
   onProviderPickModel: (providerId: string, model: string) => Promise<void>;
+  pluginRows: PluginRow[];
+  pluginLoading: boolean;
+  onLoadPlugins: () => Promise<void>;
+  onInstallPlugin: () => Promise<PluginInstallResult | null>;
+  onTogglePlugin: (name: string, enabled: boolean) => Promise<PluginRow | null>;
+  onRemovePlugin: (name: string) => Promise<boolean>;
+  bundledPlugins: PluginRow[];
+  onInstallBundledPlugin: (name: string) => Promise<PluginInstallResult | null>;
   onLoadProviders: () => Promise<void>;
+  searchProviders: SearchProviderChoice[];
+  onLoadSearchProviders: () => Promise<void>;
+  onRunSearchTest: (query: string) => Promise<SearchTestResult | null>;
+  searchTestResult: SearchTestResult | null;
+  searchTesting: boolean;
 }
 
 const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
@@ -35,6 +56,7 @@ const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
   { key: "appearance", label: "Вид", icon: <Sparkles size={14} strokeWidth={1.8} /> },
   { key: "models", label: "Модели", icon: <SlidersHorizontal size={14} strokeWidth={1.8} /> },
   { key: "providers", label: "Провайдеры", icon: <Globe size={14} strokeWidth={1.8} /> },
+  { key: "plugins", label: "Плагины", icon: <Wrench size={14} strokeWidth={1.8} /> },
   { key: "chat", label: "Чат", icon: <MessageSquare size={14} strokeWidth={1.8} /> },
   { key: "tools", label: "Инструменты", icon: <Wrench size={14} strokeWidth={1.8} /> },
   { key: "shortcuts", label: "Горячие клавиши", icon: <Keyboard size={14} strokeWidth={1.8} /> },
@@ -67,6 +89,19 @@ export default function SettingsModal({
   onProviderSaveSettings,
   onProviderPickModel,
   onLoadProviders,
+  pluginRows,
+  pluginLoading,
+  onLoadPlugins,
+  onInstallPlugin,
+  onTogglePlugin,
+  onRemovePlugin,
+  bundledPlugins,
+  onInstallBundledPlugin,
+  searchProviders,
+  onLoadSearchProviders,
+  onRunSearchTest,
+  searchTestResult,
+  searchTesting,
 }: Props) {
   const [draft, setDraft] = useState<AxiomConfig>(config);
 
@@ -76,6 +111,8 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (section === "providers") void onLoadProviders();
+    if (section === "plugins") void onLoadPlugins();
+    if (section === "tools") void onLoadSearchProviders();
   }, [section]);
 
   useEffect(() => {
@@ -98,6 +135,7 @@ export default function SettingsModal({
       workspace_root: draft.workspace_root,
       access_mode: draft.access_mode,
       terminal_enabled: draft.terminal_enabled,
+      search_provider: draft.search_provider,
       search_max_sources: Number(draft.search_max_sources),
       search_read_sources: Number(draft.search_read_sources),
       search_timeout: Number(draft.search_timeout),
@@ -105,6 +143,8 @@ export default function SettingsModal({
       show_reasoning: draft.show_reasoning,
       reasoning_expanded: draft.reasoning_expanded,
       theme: draft.theme,
+      accent: draft.accent,
+      panel_hover: draft.panel_hover,
       animations: draft.animations,
       save_history: draft.save_history,
       temperature: draft.temperature === null ? null : Number(draft.temperature),
@@ -159,8 +199,9 @@ export default function SettingsModal({
             {section === "general" && <GeneralSection draft={draft} set={set} />}
             {section === "models" && <ModelsSection draft={draft} set={set} config={config} onRestartCore={onRestartCore} />}
             {section === "providers" && <ProvidersSection rows={providerRows} models={providerModels} loading={providerLoading} onSave={onProviderSaveSettings} onPickModel={onProviderPickModel} />}
+            {section === "plugins" && <PluginsSection rows={pluginRows} bundled={bundledPlugins} loading={pluginLoading} onInstall={onInstallPlugin} onInstallBundled={onInstallBundledPlugin} onToggle={onTogglePlugin} onRemove={onRemovePlugin} />}
             {section === "chat" && <ChatSection draft={draft} set={set} />}
-            {section === "tools" && <ToolsSection draft={draft} set={set} />}
+            {section === "tools" && <ToolsSection draft={draft} set={set} searchProviders={searchProviders} onRunSearchTest={onRunSearchTest} searchTestResult={searchTestResult} searchTesting={searchTesting} />}
             {section === "appearance" && <AppearanceSection draft={draft} set={set} />}
             {section === "shortcuts" && <ShortcutsSection />}
             {section === "about" && <AboutSection />}
@@ -231,6 +272,158 @@ function ProvidersSection({ rows, models, loading, onSave, onPickModel }: {
   </div>;
 }
 
+
+
+function PluginsSection({
+  rows,
+  bundled,
+  loading,
+  onInstall,
+  onInstallBundled,
+  onToggle,
+  onRemove,
+}: {
+  rows: PluginRow[];
+  bundled: PluginRow[];
+  loading: boolean;
+  onInstall: () => Promise<PluginInstallResult | null>;
+  onInstallBundled: (name: string) => Promise<PluginInstallResult | null>;
+  onToggle: (name: string, enabled: boolean) => Promise<PluginRow | null>;
+  onRemove: (name: string) => Promise<boolean>;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const toggleExpand = (name: string) => {
+    setExpanded((prev) => (prev === name ? null : name));
+  };
+
+  return (
+    <div className="plugin-settings">
+      <div className="settings-section-head">
+        <div>
+          <h3>Плагины</h3>
+          <p>Плагин — это папка с manifest.json и plugin.py. Код запускается в процессе AXIOM.</p>
+        </div>
+        <button className="btn primary" disabled={loading} onClick={() => void onInstall()}>
+          {loading ? "Загрузка…" : "Установить из папки"}
+        </button>
+      </div>
+      <div className="plugin-path-hint">
+        Каталог установленных плагинов: <code>~/.axiom/plugins/</code>
+      </div>
+      {rows.length === 0 ? (
+        <div className="settings-empty">Плагинов пока нет. Выберите папку своего плагина или установите встроенный ниже.</div>
+      ) : (
+        <div className="plugin-list">
+          {rows.map((plugin) => (
+            <div className="plugin-card" key={plugin.name}>
+              <div className="plugin-card-main">
+                <div className="plugin-card-title">
+                  <span className={"plugin-status-dot" + (plugin.enabled ? " enabled" : "")} />
+                  <strong>{plugin.name}</strong>
+                  <span className="plugin-version">v{plugin.version}</span>
+                  {plugin.bundled && <span className="plugin-version">встроенный</span>}
+                  {plugin.readme && (
+                    <button
+                      className="btn ghost small"
+                      onClick={() => toggleExpand(plugin.name)}
+                      style={{ marginLeft: "auto" }}
+                    >
+                      {expanded === plugin.name ? "Скрыть документацию" : "Показать документацию"}
+                    </button>
+                  )}
+                </div>
+                <div className="plugin-card-description">
+                  {plugin.description || "Пользовательский плагин AXIOM"}
+                </div>
+                <div className="plugin-card-meta">
+                  {plugin.author && <span>Автор: {plugin.author}</span>}
+                  {plugin.tools.length > 0 && <span>Инструменты: {plugin.tools.join(", ")}</span>}
+                  {plugin.skills.length > 0 && <span>Skills: {plugin.skills.join(", ")}</span>}
+                </div>
+                {expanded === plugin.name && plugin.readme && (
+                  <div className="plugin-card-readme">
+                    <pre>{plugin.readme}</pre>
+                  </div>
+                )}
+              </div>
+              <div className="plugin-card-actions">
+                <button
+                  className={"switch" + (plugin.enabled ? " on" : "")}
+                  role="switch"
+                  aria-label={`${plugin.enabled ? "Выключить" : "Включить"} ${plugin.name}`}
+                  aria-checked={plugin.enabled}
+                  disabled={loading}
+                  onClick={() => void onToggle(plugin.name, !plugin.enabled)}
+                >
+                  <span className="switch-knob" />
+                </button>
+                <button className="btn danger ghost" disabled={loading} onClick={() => void onRemove(plugin.name)}>
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {bundled.length > 0 && (
+        <>
+          <div className="settings-section-head">
+            <div>
+              <h3>Встроенные плагины AXIOM</h3>
+              <p>Поставляются вместе с AXIOM и отключены по умолчанию — установите те, что нужны, и включайте/выключайте их одним переключателем.</p>
+            </div>
+          </div>
+          <div className="plugin-list">
+            {bundled.map((plugin) => (
+              <div className="plugin-card" key={plugin.name}>
+                <div className="plugin-card-main">
+                  <div className="plugin-card-title">
+                    <span className="plugin-status-dot" />
+                    <strong>{plugin.name}</strong>
+                    <span className="plugin-version">v{plugin.version}</span>
+                    <span className="plugin-version">каталог</span>
+                    {plugin.readme && (
+                      <button
+                        className="btn ghost small"
+                        onClick={() => toggleExpand(plugin.name)}
+                        style={{ marginLeft: "auto" }}
+                      >
+                        {expanded === plugin.name ? "Скрыть документацию" : "Показать документацию"}
+                      </button>
+                    )}
+                  </div>
+                  <div className="plugin-card-description">
+                    {plugin.description || "Встроенный плагин AXIOM"}
+                  </div>
+                  <div className="plugin-card-meta">
+                    {plugin.author && <span>Автор: {plugin.author}</span>}
+                    {plugin.tools.length > 0 && <span>Инструменты: {plugin.tools.join(", ")}</span>}
+                  </div>
+                  {expanded === plugin.name && plugin.readme && (
+                    <div className="plugin-card-readme">
+                      <pre>{plugin.readme}</pre>
+                    </div>
+                  )}
+                </div>
+                <div className="plugin-card-actions">
+                  <button className="btn primary" disabled={loading} onClick={() => void onInstallBundled(plugin.name)}>
+                    Установить
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="plugin-security-note">
+        Внимание: плагины получают те же права, что и AXIOM. Устанавливайте только код, которому доверяете.
+      </div>
+    </div>
+  );
+}
 
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -420,12 +613,81 @@ function ChatSection({ draft, set }: SectionProps) {
   );
 }
 
-function ToolsSection({ draft, set }: SectionProps) {
+function ToolsSection({
+  draft,
+  set,
+  searchProviders,
+  onRunSearchTest,
+  searchTestResult,
+  searchTesting,
+}: SectionProps & {
+  searchProviders: SearchProviderChoice[];
+  onRunSearchTest: (query: string) => Promise<SearchTestResult | null>;
+  searchTestResult: SearchTestResult | null;
+  searchTesting: boolean;
+}) {
+  const [testQuery, setTestQuery] = useState("AXIOM local AI");
   return (
     <>
       <Row label="Веб-поиск" hint="Инструмент поиска в интернете (требует сеть, остальное — локально)">
         <Toggle value={draft.web_search_enabled} onChange={(v) => set("web_search_enabled", v)} />
       </Row>
+      <Row label="Движок поиска" hint="Auto — устойчивая цепочка; можно закрепить один движок">
+        <select
+          value={draft.search_provider}
+          onChange={(e) => set("search_provider", e.target.value as AxiomConfig["search_provider"])}
+        >
+          {(searchProviders.length
+            ? searchProviders
+            : [{ id: "auto", name: "Auto" }]
+          ).map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Проверка поиска" hint="Реальный запрос: движок, задержка и результаты или ошибка">
+        <div className="search-test-control">
+          <input
+            value={testQuery}
+            spellCheck={false}
+            placeholder="запрос"
+            onChange={(e) => setTestQuery(e.target.value)}
+          />
+          <button
+            className="btn ghost"
+            disabled={searchTesting}
+            onClick={() => void onRunSearchTest(testQuery)}
+          >
+            {searchTesting ? "Проверка…" : "Проверить"}
+          </button>
+        </div>
+      </Row>
+      {searchTestResult && (
+        <div className={"search-test-result" + (searchTestResult.ok ? " ok" : " err")}>
+          <div className="search-test-line">
+            <span className="search-test-status">
+              {searchTestResult.ok ? "● Online" : "○ Offline"}
+            </span>
+            {searchTestResult.provider && <span>{searchTestResult.provider}</span>}
+            <span>{searchTestResult.latency_ms} ms</span>
+            <span>{searchTestResult.result_count} результатов</span>
+          </div>
+          {searchTestResult.error && (
+            <div className="search-test-error">{searchTestResult.error}</div>
+          )}
+          {searchTestResult.hint && (
+            <div className="search-test-hint">{searchTestResult.hint}</div>
+          )}
+          {searchTestResult.results.slice(0, 3).map((item, index) => (
+            <div className="search-test-hit" key={index}>
+              <div className="search-test-hit-title">{item.title || "(без названия)"}</div>
+              <div className="search-test-hit-url">{item.url}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <Row
         label="Файлы проекта"
         hint="Разрешить модели читать и редактировать файлы этой папки: list_files, read_file, write_file, edit_file"
@@ -489,14 +751,37 @@ const DENSITY_LABELS: Record<AxiomConfig["density"], string> = {
   spacious: "Просторно",
 };
 
+const ACCENT_LABELS: Record<AxiomConfig["accent"], string> = {
+  garnet: "Гранатовый",
+  blue: "Синий",
+  teal: "Бирюзовый",
+  violet: "Фиолетовый",
+};
+
 function AppearanceSection({ draft, set }: SectionProps) {
   return (
     <>
       <Row label="Тема">
-        <select value={draft.theme} onChange={(e) => set("theme", e.target.value)}>
+        <select
+          value={draft.theme}
+          onChange={(e) => set("theme", e.target.value as AxiomConfig["theme"])}
+        >
           <option value="obsidian">Obsidian (тёмная)</option>
           <option value="light">Светлая</option>
         </select>
+      </Row>
+      <Row label="Акцент" hint="Общий проверенный цвет для Desktop и TUI">
+        <select
+          value={draft.accent}
+          onChange={(e) => set("accent", e.target.value as AxiomConfig["accent"])}
+        >
+          {(Object.keys(ACCENT_LABELS) as AxiomConfig["accent"][]).map((accent) => (
+            <option key={accent} value={accent}>{ACCENT_LABELS[accent]}</option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Подсветка панелей" hint="Выделять строки и кнопки панели при наведении">
+        <Toggle value={draft.panel_hover} onChange={(v) => set("panel_hover", v)} />
       </Row>
       <Row label="Анимации" hint="Плавные переходы интерфейса">
         <Toggle value={draft.animations} onChange={(v) => set("animations", v)} />

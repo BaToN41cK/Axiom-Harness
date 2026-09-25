@@ -131,6 +131,7 @@ def status_line(
     duration_ms: int | None = None,
     detail: str | None = None,
     active: bool = False,
+    elapsed: float | None = None,
 ) -> str:
     """Compose ``◌ Thinking`` / ``◉ Searching web`` / ``✓ Completed · 4.8s`` text.
 
@@ -149,6 +150,8 @@ def status_line(
     duration = format_duration_ms(duration_ms)
     if duration:
         parts.append(duration)
+    if elapsed is not None and active:
+        parts.append(f"{elapsed:.1f}s")
     if detail:
         parts.append(f"· {detail}")
     return "  ".join(parts)

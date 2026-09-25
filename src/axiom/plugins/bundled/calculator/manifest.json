@@ -1,0 +1,10 @@
+{
+  "name": "calculator",
+  "version": "1.0.0",
+  "description": "Безопасный калькулятор выражений: арифметика, скобки, sqrt/sin/cos/log, константы pi и e. Никакого eval — выражения разбираются по AST.",
+  "author": "AXIOM Team",
+  "api_version": 1,
+  "capabilities": ["tools"],
+  "tools": ["calculate"],
+  "skills": []
+}

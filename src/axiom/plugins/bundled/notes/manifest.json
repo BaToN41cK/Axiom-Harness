@@ -1,0 +1,10 @@
+{
+  "name": "notes",
+  "version": "1.0.0",
+  "description": "Персональные заметки с сохранением на диск: добавление с тегами и поиск по содержимому. Хранятся в ~/.axiom/notes/notes.md.",
+  "author": "AXIOM Team",
+  "api_version": 1,
+  "capabilities": ["tools"],
+  "tools": ["note_add", "note_list"],
+  "skills": []
+}

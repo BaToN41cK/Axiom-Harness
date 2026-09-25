@@ -116,6 +116,7 @@ export interface StoredMessage {
 }
 
 export type Density = "compact" | "comfortable" | "spacious";
+export type AccentPreset = "garnet" | "blue" | "teal" | "violet";
 
 export interface AxiomConfig {
   ollama_url: string;
@@ -132,13 +133,16 @@ export interface AxiomConfig {
   workspace_root: string | null;
   access_mode: "read_only" | "workspace" | "full";
   terminal_enabled: boolean;
+  search_provider: "auto" | "brave" | "duckduckgo" | "searxng" | "wikipedia";
   search_max_sources: number;
   search_read_sources: number;
   search_timeout: number;
   history_limit: number;
   show_reasoning: boolean;
   reasoning_expanded: boolean;
-  theme: string;
+  theme: "obsidian" | "light";
+  accent: AccentPreset;
+  panel_hover: boolean;
   animations: boolean;
   save_history: boolean;
   temperature: number | null;
@@ -186,8 +190,55 @@ export type CoreEvent =
   | { type: "search_result"; query: string; sources: SourceItem[] }
   | { type: "status"; state: string; detail: string | null }
   | { type: "orchestration"; kind: string; actor: string; summary: string; seq: number }
+  | { type: "task"; kind: string; task_id: string; timestamp: number; task: Task }
   | { type: "error"; message: string; kind: string; hint: string | null }
   | ({ type: "done" } & DoneMetrics);
+
+export type TaskState =
+  | "pending" | "analyzing" | "planning" | "executing" | "verifying"
+  | "waiting_for_user" | "completed" | "failed" | "cancelled";
+
+export interface TaskPlanStep {
+  id: string;
+  goal: string;
+  tools: string[];
+  done_when: string;
+  state: "pending" | "running" | "completed" | "failed";
+  result: string;
+}
+
+export interface TaskPlan {
+  steps: TaskPlanStep[];
+  definition_of_done: string[];
+}
+
+export interface Task {
+  id: string;
+  goal: string;
+  state: TaskState;
+  scope: string | null;
+  plan: TaskPlan | null;
+  plan_history: TaskPlan[];
+  changed_files: string[];
+  errors: {
+    type: string;
+    message: string;
+    tool: string | null;
+    command: string | null;
+    exit_code: number | null;
+    stdout: string;
+    stderr: string;
+    step_id: string | null;
+  }[];
+  tests: Record<string, unknown>[];
+  pending_tool: Record<string, unknown> | null;
+  detail: string;
+  created_at: number;
+  updated_at: number;
+  revision: number;
+  replans: number;
+  planning: boolean | null;
+}
 
 export type ToolState = "running" | "ok" | "failed" | "cancelled";
 
@@ -202,6 +253,125 @@ export interface ToolActivity {
   sources?: SourceItem[];
 }
 
+/** Category of an orchestration step — drives the icon and the row colour. */
+export type OrchestrationStepKind =
+  | "read"
+  | "write"
+  | "search"
+  | "web"
+  | "fetch"
+  | "terminal"
+  | "git"
+  | "folder"
+  | "verification"
+  | "other";
+
+export type OrchestrationPhase =
+  | "planning"
+  | "working"
+  | "review"
+  | "verification"
+  | "done"
+  | "failed"
+  | "cancelled";
+
+export type OrchestrationAgentStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+
+/** One real tool action of a worker (`subagent.tool.call` + `.result` paired). */
+export interface OrchestrationStep {
+  id: string;
+  actor: string;
+  tool: string;
+  kind: OrchestrationStepKind;
+  /** What the tool worked on (path, query, URL, command). */
+  target: string;
+  state: ToolState;
+  durationMs?: number | null;
+  /** Failure text or the tool outcome, when it carried one. */
+  detail?: string | null;
+}
+
+/** One worker as it appears on the board while (and after) the run. */
+export interface OrchestrationAgent {
+  id: string;
+  label: string;
+  provider: string | null;
+  model: string | null;
+  status: OrchestrationAgentStatus;
+  task: string | null;
+  /** Last streamed reasoning of this worker — replaces the previous one. */
+  thought: string | null;
+  /** Last streamed answer fragment of this worker. */
+  answer: string | null;
+  /** Last tool this worker really called (raw tool name + its target). */
+  lastTool: string | null;
+  lastTarget: string | null;
+  toolsOk: number;
+  toolsFailed: number;
+  error: string | null;
+}
+
+export interface OrchestrationReview {
+  verdict: "approved" | "rework" | null;
+  text: string;
+  issues: string[];
+  requiredChanges: string[];
+}
+
+export interface OrchestrationVerification {
+  ok: boolean | null;
+  summary: string | null;
+  error: string | null;
+}
+
+/** Final per-worker report — the real `orchestrate` reply item, keys included. */
+export interface OrchestrationReport {
+  agent?: string;
+  content?: string;
+  error?: string;
+  status?: string;
+  provider_id?: string;
+  model?: string;
+  tools_used?: number;
+  tools_ok?: number;
+  tools_failed?: number;
+}
+
+/** Reply of the `orchestrate` command (only the fields the UI renders). */
+export interface OrchestrationResult {
+  ok?: boolean;
+  error?: string;
+  cancelled?: boolean;
+  results?: OrchestrationReport[];
+  review?: string;
+  approved?: boolean;
+  completed?: boolean;
+  verification?: { ok?: boolean; summary?: string; error?: string };
+  definition_of_done?: string[];
+  review_details?: { issues?: string[]; required_changes?: string[] };
+  duration_ms?: number;
+}
+
+/** Everything `/orchestrate` really did — built from live trajectory events. */
+export interface OrchestrationState {
+  task: string;
+  mode: string | null;
+  phase: OrchestrationPhase;
+  plannedAgents: string[];
+  agents: OrchestrationAgent[];
+  steps: OrchestrationStep[];
+  review: OrchestrationReview | null;
+  verification: OrchestrationVerification | null;
+  definitionOfDone: string[];
+  reports: OrchestrationReport[];
+  completed: boolean | null;
+  /** Real failure text of a crashed run. */
+  error: string | null;
+  durationMs: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
 export interface LiveMessage {
   id: string;
   role: Role;
@@ -213,6 +383,8 @@ export interface LiveMessage {
   sources: SourceItem[];
   metrics?: DoneMetrics | null;
   createdAt: number;
+  /** Set only for `/orchestrate` runs: the structured board of the run. */
+  orchestration?: OrchestrationState;
   /** Base64 images attached by the user (vision models). */
   images?: string[];
   /** Regenerated alternates of this answer (branch history, newest last). */
@@ -257,6 +429,28 @@ export interface ProviderRow {
   status: string;
 }
 
+export interface PluginRow {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  api_version: number;
+  enabled: boolean;
+  capabilities: string[];
+  tools: string[];
+  providers: string[];
+  skills: string[];
+  source_dir: string | null;
+  bundled: boolean;
+  readme: string;
+}
+
+export interface PluginInstallResult {
+  name: string;
+  status: "installed" | "updated";
+  manifest: PluginRow;
+}
+
 export interface ProviderModelRow {
   id: string;
   model: string;
@@ -292,6 +486,21 @@ export interface ToolInfo {
   name: string;
   description: string;
   permission: string;
+}
+
+export interface SearchProviderChoice {
+  id: string;
+  name: string;
+}
+
+export interface SearchTestResult {
+  ok: boolean;
+  provider: string;
+  latency_ms: number;
+  result_count: number;
+  results: { title: string; url: string; snippet: string }[];
+  error: string | null;
+  hint: string | null;
 }
 
 export interface SendResult {

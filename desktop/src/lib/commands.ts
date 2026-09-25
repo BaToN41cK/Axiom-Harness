@@ -26,6 +26,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/trajectory", description: "Timeline запуска, tools, tokens и timing", group: "harness" },
   { name: "/providers", description: "Провайдеры, API-ключ, Test и выбор модели", group: "harness" },
   { name: "/agents", description: "Агенты, оркестратор и назначенные модели", group: "harness" },
+  { name: "/plugins", description: "Установка и управление пользовательскими плагинами", group: "harness" },
   { name: "/orchestrate", description: "Запустить задачу через ANALYST, CODER, DEBUGGER, TESTER и REVIEWER", argumentHint: "задача", group: "harness" },
   { name: "/context", description: "Контекст: токены, сообщения, файлы", group: "chat" },
   { name: "/search", description: "Веб-поиск и ответ по источникам", argumentHint: "query", group: "workspace" },

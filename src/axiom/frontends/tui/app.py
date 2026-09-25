@@ -43,8 +43,10 @@ from axiom.frontends.tui.widgets.panels import (
     HistoryPanel,
     ModelPanel,
     PermissionsPanel,
+    PluginsPanel,
     ProfilePanel,
     ProvidersPanel,
+    SearchTestPanel,
     SettingsPanel,
     StatusPanel,
     TrajectoryDetailPanel,
@@ -369,6 +371,12 @@ class WorkspaceScreen(Screen):
                 self.notify("Usage: /search <query>", severity="warning", timeout=4)
                 return
             self._start_generation(argument, force_search=True, search_query=argument)
+        elif name == "/searchtest":
+            self.run_worker(
+                self._run_search_test(argument),
+                exclusive=True,
+                group="search-test",
+            )
         elif name == "/status":
             self.app.push_screen(
                 StatusPanel(
@@ -376,6 +384,7 @@ class WorkspaceScreen(Screen):
                     version=self._version,
                     model=self.session.active_model,
                     metrics=self.session.last_metrics,
+                    search_provider=getattr(self.session.provider, "name", "Web"),
                 )
             )
         elif name == "/permissions":
@@ -416,6 +425,19 @@ class WorkspaceScreen(Screen):
                 self.notify("Agent registry unavailable.", severity="warning", timeout=4)
                 return
             self.app.push_screen(AgentsPanel(agent_rows(registry.all())))
+        elif name == "/plugins":
+            # Live reload: discover folders dropped into ~/.axiom/plugins since boot.
+            self.session.load_plugins()
+            self.app.push_screen(
+                PluginsPanel(
+                    [m.row() for m in self.session.plugins.list()],
+                    bundled=[m.row() for m in self.session.plugin_manager.bundled_manifests()],
+                    on_toggle=self._plugin_toggle,
+                    on_remove=self._plugin_remove,
+                    on_install=self._plugin_install,
+                    on_install_bundled=self._plugin_install_bundled,
+                )
+            )
         elif name == "/orchestrate":
             if not argument:
                 self.notify("Usage: /orchestrate <task>", severity="warning", timeout=4)
@@ -423,6 +445,18 @@ class WorkspaceScreen(Screen):
             self.run_worker(self._run_orchestrated(argument), exclusive=True, group="generation")
 
     # ------------------------------------------------------------------ panels
+
+    async def _run_search_test(self, query: str) -> None:
+        """Run a real search probe and show the honest result (W1.2)."""
+        query = (query or "").strip()
+        self.status_bar.set_web(True)
+        try:
+            report = await self.session.search_test(query)
+            self.app.push_screen(SearchTestPanel(report, query=query))
+        except Exception as exc:  # defensive: the worker must not crash the app
+            self.notify(f"Search test failed: {exc}", severity="error", timeout=6)
+        finally:
+            self.status_bar.set_web(False)
 
     async def _run_orchestrated(self, task: str) -> None:
         self._generating = True
@@ -521,6 +555,22 @@ class WorkspaceScreen(Screen):
             return
         self.notify(f"Permission mode: {mode}", title="Permissions", timeout=4)
 
+    async def _plugin_toggle(self, name: str, enabled: bool) -> dict:
+        """Toggle a plugin's enable state (``/plugins``)."""
+        return self.session.toggle_plugin(name, enabled)
+
+    async def _plugin_remove(self, name: str) -> dict:
+        """Remove an installed plugin (``/plugins``)."""
+        return {"name": name, "removed": self.session.remove_plugin(name)}
+
+    async def _plugin_install(self, path: str) -> dict:
+        """Install a plugin from a folder on disk (``/plugins``)."""
+        return self.session.install_plugin_from_folder(path)
+
+    async def _plugin_install_bundled(self, name: str) -> dict:
+        """Install a built-in AXIOM plugin from the bundled catalogue (``/plugins``)."""
+        return self.session.install_bundled_plugin(name)
+
     async def _provider_set_key(self, provider_id: str, api_key: str) -> str:
         """Store a provider API key locally, then verify it (secret never logged)."""
         manager = getattr(self.session, "provider_manager", None)
@@ -599,8 +649,9 @@ class AxiomApp(App):
         self._version: str | None = None
 
     def on_mount(self) -> None:
-        self.register_theme(TextualTheme(**palette.THEME_COLORS))
+        self.register_theme(TextualTheme(**palette.theme_colors(self.session.config.accent)))
         self.theme = palette.THEME_NAME
+        self.add_class("panel-hover" if self.session.config.panel_hover else "no-panel-hover")
         self.push_screen(
             SplashScreen(self._startup_steps(), animations=self.session.config.animations)
         )

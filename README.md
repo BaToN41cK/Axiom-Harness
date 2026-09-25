@@ -92,7 +92,9 @@ AXIOM
 - Git: status, diff, log, branches и безопасные checkpoints;
 - project: обнаружение структуры и build/test metadata;
 - web: поиск без обязательного API key и чтение URL;
-- MCP stdio client и plugin registry — extension contracts, не имитация функций.
+- MCP stdio client и plugin registry — extension contracts, не имитация функций;
+- пользовательские плагины: папка с `manifest.json` + `plugin.py` добавляет свои
+  инструменты — как создать свой, см. [docs/plugins.md](docs/plugins.md).
 
 ### Наблюдаемость и производительность
 
@@ -232,6 +234,7 @@ Desktop bridge использует тот же Python core, поэтому за
 | `/trajectory` | timeline запуска, tools, tokens и timing |
 | `/providers` | provider manager: статусы, ввод API-ключа (скрытый), Test, discovery и выбор модели |
 | `/agents` | агенты и назначенные модели |
+| `/plugins` | плагины: установка, включение/выключение, удаление, документация |
 | `/exit` | выход |
 
 ## Данные и приватность
@@ -335,6 +338,7 @@ Live Ollama tests находятся отдельно и зависят от у�
 - [Configuration](docs/configuration.md)
 - [TUI Guide](docs/tui.md)
 - [Development](docs/development.md)
+- [Roadmap](docs/roadmap.md)
 - [Changelog](CHANGELOG.md)
 
 ## Contributing

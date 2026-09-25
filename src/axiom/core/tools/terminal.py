@@ -19,6 +19,7 @@ from axiom.core.tools.base import (
     ToolResult,
 )
 from axiom.core.tools.filesystem import default_workspace_root
+from axiom.core.tools.processes import process_group_options, terminate_process_tree
 
 RUN_COMMAND_TOOL = "run_command"
 
@@ -116,16 +117,20 @@ class TerminalTool:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                **process_group_options(),
             )
             try:
                 out, err = await asyncio.wait_for(proc.communicate(), timeout=limit)
             except TimeoutError:
-                proc.kill()
+                await terminate_process_tree(proc)
                 return ToolResult(
                     name=RUN_COMMAND_TOOL,
                     ok=False,
                     error=f"Command timed out after {limit:.0f}s",
                 )
+            except asyncio.CancelledError:
+                await terminate_process_tree(proc)
+                raise
         except OSError as exc:
             return ToolResult(name=RUN_COMMAND_TOOL, ok=False, error=f"Cannot execute: {exc}")
 

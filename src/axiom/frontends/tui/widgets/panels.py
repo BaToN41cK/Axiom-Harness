@@ -502,12 +502,14 @@ class StatusPanel(PanelScreen):
         version: str | None,
         model: ModelInfo | None,
         metrics: dict,
+        search_provider: str = "Web",
     ) -> None:
         super().__init__()
         self._ollama_url = ollama_url
         self._version = version
         self._model = model
         self._metrics = dict(metrics)
+        self._search_provider = search_provider or "Web"
 
     def keys_hint(self) -> str:
         return "esc close"
@@ -528,7 +530,7 @@ class StatusPanel(PanelScreen):
             ("Model", self._model.name if self._model else "none"),
             ("Streaming", "on (NDJSON deltas)"),
             ("Reasoning", thinking_text),
-            ("Web Search", "available (DuckDuckGo, key-less)"),
+            ("Web Search", f"available ({self._search_provider}, key-less)"),
         ]
         if self._model is not None:
             rows.append(("Label", self._model.display_name))
@@ -554,6 +556,61 @@ class StatusPanel(PanelScreen):
                 with Horizontal(classes="status-row"):
                     yield Static(key, classes="status-key", markup=False)
                     yield Static(value, classes="status-value", markup=False)
+
+
+class SearchTestPanel(PanelScreen):
+    """``/searchtest`` — a real search connectivity probe (W1.2).
+
+    Shows the engine that answered, the measured latency, the result count and
+    — on failure — the real error, never a fabricated "Online" state.
+    """
+
+    title_text = "SEARCH TEST"
+
+    def __init__(self, report: dict, query: str = "") -> None:
+        super().__init__()
+        self._report = dict(report or {})
+        self._query = query
+
+    def keys_hint(self) -> str:
+        return "esc close"
+
+    def subtitle_lines(self) -> list[str]:
+        line = f"Query: {self._query or '(default)'}"
+        return [line]
+
+    def body(self) -> ComposeResult:
+        ok = bool(self._report.get("ok"))
+        provider = self._report.get("provider") or "—"
+        latency = self._report.get("latency_ms")
+        count = self._report.get("result_count") or 0
+        status = f"{theme.DOT_ACTIVE} Online" if ok else f"{theme.DOT_IDLE} Offline"
+        rows: list[tuple[str, str]] = [
+            ("Status", status),
+            ("Engine", provider),
+            ("Latency", f"{latency} ms" if latency is not None else "—"),
+            ("Results", str(count)),
+        ]
+        error = self._report.get("error")
+        if error:
+            rows.append(("Error", error))
+        hint = self._report.get("hint")
+        if hint:
+            rows.append(("Hint", hint))
+        with Vertical():
+            for key, value in rows:
+                with Horizontal(classes="status-row"):
+                    yield Static(key, classes="status-key", markup=False)
+                    yield Static(value, classes="status-value", markup=False)
+        results = self._report.get("results") or []
+        if results:
+            yield Static("\nTop results", classes="settings-label", markup=False)
+            for index, item in enumerate(results[:5], start=1):
+                title = str(item.get("title") or "(no title)")
+                url = str(item.get("url") or "")
+                yield Static(f"{index}. {title}\n   {url}", markup=False)
+
+
 class TrajectoryPanel(PanelScreen):
     """``/trajectory`` — Trajectory Viewer (п.11/14): timeline шагов запуска."""
 
@@ -845,6 +902,319 @@ class AgentsPanel(PanelScreen):
             for row in self._rows
         ]
         yield OptionList(*rows, id="agents-list")
+
+
+class PluginsPanel(PanelScreen):
+    """``/plugins`` — Plugin Manager: установка, включение/выключение, удаление."""
+
+    title_text = "PLUGINS"
+    BINDINGS = [
+        *PanelScreen.BINDINGS,
+        Binding("d", "remove_selected", "Remove", show=False),
+        Binding("i", "install_folder", "Install", show=False),
+        Binding("?", "show_info", "Info", show=False),
+    ]
+
+    def __init__(
+        self,
+        rows: list[dict],
+        *,
+        bundled: list[dict] | None = None,
+        on_toggle: Callable[[str, bool], Awaitable[dict]] | None = None,
+        on_remove: Callable[[str], Awaitable[dict]] | None = None,
+        on_install: Callable[[str], Awaitable[dict]] | None = None,
+        on_install_bundled: Callable[[str], Awaitable[dict]] | None = None,
+    ) -> None:
+        super().__init__()
+        self._rows = [dict(row) for row in rows]
+        for row in self._rows:
+            row.setdefault("installed", True)
+        for row in bundled or []:
+            entry = dict(row)
+            entry["installed"] = False
+            self._rows.append(entry)
+        self._on_toggle = on_toggle
+        self._on_remove = on_remove
+        self._on_install = on_install
+        self._on_install_bundled = on_install_bundled
+
+    def keys_hint(self) -> str:
+        return "↑↓ select   ·   enter toggle   ·   i install   ·   d remove   ·   ? info   ·   esc close"
+
+    def subtitle_lines(self) -> list[str]:
+        installed = [row for row in self._rows if row.get("installed")]
+        enabled = sum(1 for row in installed if row.get("enabled"))
+        available = len(self._rows) - len(installed)
+        line = f"{enabled}/{len(installed)} plugin(s) enabled"
+        if available:
+            line += f"  ·  {available} built-in available"
+        return [line]
+
+    @staticmethod
+    def _row_text(row: dict) -> str:
+        if row.get("installed") is False:
+            glyph = theme.DOT_IDLE
+        else:
+            glyph = theme.TICK if row.get("enabled") else theme.CROSS
+        version = str(row.get("version") or "")
+        line = f"{glyph} {row.get('name')}  v{version}"
+        if row.get("installed") is False:
+            line += "  (built-in, not installed)"
+        description = str(row.get("description") or "").strip()
+        if description:
+            line += f"\n    {description}"
+        tools = ", ".join(row.get("tools") or [])
+        if tools:
+            line += f"\n    tools: {tools}"
+        return line
+
+    def body(self) -> ComposeResult:
+        rows = [
+            Option(self._row_text(row), id=str(row.get("name") or ""))
+            for row in self._rows
+        ]
+        yield Static(
+            "Plugins — Enter toggles, i installs (folder path or built-in), d removes.",
+            markup=False,
+        )
+        yield OptionList(*rows, id="plugins-list")
+        with Horizontal(classes="plugin-actions"):
+            yield Button("Install…", id="plugin-install")
+            yield Button("Remove", id="plugin-remove")
+            yield Button("Info", id="plugin-info")
+        yield Input(placeholder="folder path (…/my-plugin)…", id="plugin-path")
+
+    def on_mount(self) -> None:
+        if self._rows:
+            self.query_one("#plugins-list", OptionList).focus()
+
+    def _highlighted_name(self) -> str:
+        option_list = self.query_one("#plugins-list", OptionList)
+        index = option_list.highlighted
+        if index is not None and 0 <= index < len(self._rows):
+            return str(self._rows[index].get("name") or "")
+        return ""
+
+    def _refresh_rows(self) -> None:
+        option_list = self.query_one("#plugins-list", OptionList)
+        option_list.clear_options()
+        for row in self._rows:
+            option_list.add_option(Option(self._row_text(row), id=str(row.get("name") or "")))
+
+    def _apply_row(self, result: dict) -> None:
+        name = str(result.get("name") or "")
+        for row in self._rows:
+            if str(row.get("name")) == name:
+                if "enabled" in result:
+                    row["enabled"] = bool(result["enabled"])
+                break
+        self._refresh_rows()
+
+    async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        name = str(event.option.id or "")
+        if not name or self._on_toggle is None:
+            return
+        row = next((r for r in self._rows if str(r.get("name")) == name), None)
+        if row is None:
+            return
+        if row.get("installed") is False:
+            if self.app is not None:
+                self.app.notify(
+                    f"{name}: built-in plugin is not installed yet — press 'i' to install.",
+                    severity="warning",
+                    timeout=4,
+                )
+            return
+        target = not bool(row.get("enabled"))
+        try:
+            result = await self._on_toggle(name, target)
+        except Exception as exc:
+            if self.app is not None:
+                self.app.notify(str(exc), severity="error", timeout=6)
+            return
+        self._apply_row(result)
+        if self.app is not None:
+            state = "enabled" if result.get("enabled") else "disabled"
+            self.app.notify(f"{name}: {state}", title="Plugins", timeout=4)
+
+    async def action_install_folder(self) -> None:
+        await self._install()
+
+    async def action_remove_selected(self) -> None:
+        await self._remove()
+
+    async def _install(self) -> None:
+        # Installing a highlighted built-in plugin needs no folder path.
+        highlighted = self._highlighted_name()
+        selected = next(
+            (r for r in self._rows if str(r.get("name")) == highlighted), None
+        )
+        if selected is not None and selected.get("installed") is False:
+            if self._on_install_bundled is None:
+                return
+            try:
+                result = await self._on_install_bundled(highlighted)
+            except Exception as exc:
+                if self.app is not None:
+                    self.app.notify(str(exc), severity="error", timeout=6)
+                return
+            for row in self._rows:
+                if str(row.get("name")) == highlighted:
+                    row.update(result.get("manifest") or result)
+                    row["installed"] = True
+                    break
+            self._refresh_rows()
+            if self.app is not None:
+                self.app.notify(f"Installed {highlighted}", title="Plugins", timeout=4)
+            return
+        if self._on_install is None:
+            return
+        path = self.query_one("#plugin-path", Input).value.strip()
+        if not path:
+            if self.app is not None:
+                self.app.notify(
+                    "Enter a plugin folder path or select a built-in plugin.",
+                    severity="warning",
+                    timeout=4,
+                )
+            return
+        try:
+            result = await self._on_install(path)
+        except Exception as exc:
+            if self.app is not None:
+                self.app.notify(str(exc), severity="error", timeout=6)
+            return
+        self.query_one("#plugin-path", Input).value = ""
+        installed = dict(result.get("manifest") or {"name": result.get("name")})
+        installed["installed"] = True
+        self._rows.append(installed)
+        self._refresh_rows()
+        if self.app is not None:
+            self.app.notify(f"Installed {result.get('name')}", title="Plugins", timeout=4)
+
+    async def _remove(self) -> None:
+        if self._on_remove is None:
+            return
+        name = self._highlighted_name()
+        if not name:
+            if self.app is not None:
+                self.app.notify("Select a plugin first.", severity="warning", timeout=4)
+            return
+        selected = next((r for r in self._rows if str(r.get("name")) == name), None)
+        if selected is not None and selected.get("installed") is False:
+            if self.app is not None:
+                self.app.notify(
+                    f"{name}: built-in plugin is not installed — nothing to remove.",
+                    severity="warning",
+                    timeout=4,
+                )
+            return
+        try:
+            result = await self._on_remove(name)
+        except Exception as exc:
+            if self.app is not None:
+                self.app.notify(str(exc), severity="error", timeout=6)
+            return
+        if result.get("removed"):
+            removed_row = next((r for r in self._rows if str(r.get("name")) == name), None)
+            self._rows = [r for r in self._rows if str(r.get("name")) != name]
+            # A removed built-in plugin returns to the available catalogue.
+            if removed_row is not None and removed_row.get("bundled"):
+                restored = dict(removed_row)
+                restored["installed"] = False
+                restored["enabled"] = False
+                self._rows.append(restored)
+            self._refresh_rows()
+        if self.app is not None:
+            self.app.notify(f"Removed {name}", title="Plugins", timeout=4)
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "plugin-install":
+            await self._install()
+        elif event.button.id == "plugin-remove":
+            await self._remove()
+        elif event.button.id == "plugin-info":
+            self._show_info()
+
+    async def action_show_info(self) -> None:
+        self._show_info()
+
+    def _show_info(self) -> None:
+        name = self._highlighted_name()
+        if not name:
+            if self.app is not None:
+                self.app.notify("Select a plugin first.", severity="warning", timeout=4)
+            return
+        row = next((r for r in self._rows if str(r.get("name")) == name), None)
+        if row is None:
+            return
+        if self.app is not None:
+            self.app.push_screen(PluginInfoPanel(dict(row)))
+
+
+class PluginInfoPanel(PanelScreen):
+    """Read-only documentation for one plugin — description, tools and README."""
+
+    title_text = "PLUGIN INFO"
+
+    def __init__(self, row: dict) -> None:
+        super().__init__()
+        self._row = dict(row)
+
+    def keys_hint(self) -> str:
+        return "↑↓ scroll   ·   esc close"
+
+    def subtitle_lines(self) -> list[str]:
+        name = str(self._row.get("name") or "")
+        version = str(self._row.get("version") or "")
+        author = str(self._row.get("author") or "")
+        line = f"{name}  v{version}"
+        if author:
+            line += f"  ·  {author}"
+        return [line]
+
+    def _summary(self) -> str:
+        lines: list[str] = []
+        description = str(self._row.get("description") or "").strip()
+        if description:
+            lines.append(description)
+            lines.append("")
+        tools = self._row.get("tools") or []
+        if tools:
+            lines.append("Tools:")
+            lines.extend(f"  • {tool}" for tool in tools)
+            lines.append("")
+        capabilities = self._row.get("capabilities") or []
+        if capabilities:
+            lines.append("Capabilities: " + ", ".join(capabilities))
+        skills = self._row.get("skills") or []
+        if skills:
+            lines.append("Skills: " + ", ".join(skills))
+        providers = self._row.get("providers") or []
+        if providers:
+            lines.append("Providers: " + ", ".join(providers))
+        installed = self._row.get("installed")
+        if installed is False:
+            lines.append("")
+            lines.append("(built-in, not installed — press 'i' in the plugin list to install)")
+        return "\n".join(lines).strip()
+
+    def body(self) -> ComposeResult:
+        summary = self._summary()
+        if summary:
+            yield Static(summary, markup=False, classes="plugin-info-summary")
+        readme = str(self._row.get("readme") or "").strip()
+        if readme:
+            yield Static("─" * 40, markup=False, classes="panel-note")
+            yield Static(readme, markup=False, classes="plugin-info-readme")
+        elif not summary:
+            yield Static(
+                "This plugin ships no description or README.md.",
+                markup=False,
+                classes="settings-empty",
+            )
 
 
 class PermissionsPanel(PanelScreen):

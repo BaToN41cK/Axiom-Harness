@@ -71,6 +71,7 @@ workspace и tools находятся в соседних разделах.
 | `model` | str \| null | `null` | выбранная модель; `null` → авто-выбор первой доступной |
 | `think` | bool \| null | `null` | `null` — следовать capability модели; `true/false` — явный запрос reasoning |
 | `web_search_enabled` | bool | `true` | разрешить агенту web search |
+| `search_provider` | str | `"auto"` | движок поиска: `auto` — цепочка Brave → DuckDuckGo → SearXNG → Wikipedia; либо один из `brave`/`duckduckgo`/`searxng`/`wikipedia` |
 | `search_max_sources` | int 1–10 | `5` | сколько источников удерживать |
 | `search_read_sources` | int 0–10 | `3` | сколько страниц реально читать |
 | `show_reasoning` | bool | `true` | показывать reasoning в UI |
@@ -89,6 +90,9 @@ workspace и tools находятся в соседних разделах.
 * `web_search_enabled`, `temperature`, `system_prompt`, `think`,
   `search_read_sources` читаются ядром **при каждой генерации** — применяются
   без перезапуска.
+* `search_provider`, `search_timeout`, `search_max_sources` пересобирают живой
+  поисковый backend прямо в `set_config` (`_rebuild_search_provider`) —
+  применяются без перезапуска ядра.
 * `reasoning_expanded`, `animations` влияют на **новые** сообщения/запуски.
 * Повреждённый `config.json` не приводит к падению: валидные поля
   сохраняются, невалидные отбрасываются (`Config.load`).

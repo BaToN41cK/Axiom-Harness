@@ -94,6 +94,7 @@ Starting AXIOM …
 | `/trajectory` | Trajectory Viewer: RUN id, шаги с временем, usage; Enter — детали шага |
 | `/providers` | Provider Manager: статусы, Enter — Test, ввод API-ключа (скрытый) → Save key & test, Discover models → выбор модели |
 | `/agents` | Agent Registry: роли, провайдер/модель, набор инструментов |
+| `/plugins` | Plugin Manager: установка из папки, включение/выключение, удаление; `?` — документация плагина |
 | `/exit` | выход |
 
 В панелях работает навигация стрелками, выбор — `Enter`, закрытие — `Esc`.

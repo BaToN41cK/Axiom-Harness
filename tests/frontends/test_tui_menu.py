@@ -164,7 +164,7 @@ async def test_plain_text_never_opens_menu() -> None:
 
 def test_harness_commands_are_registered() -> None:
     names = {command.name for command in COMMANDS}
-    assert {"/trajectory", "/providers", "/agents", "/permissions", "/profiles"} <= names
+    assert {"/trajectory", "/providers", "/agents", "/permissions", "/profiles", "/plugins"} <= names
 
 
 async def test_trajectory_command_opens_viewer() -> None:

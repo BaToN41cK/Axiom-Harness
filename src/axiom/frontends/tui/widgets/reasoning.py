@@ -160,7 +160,8 @@ class ReasoningPanel(Container):
     def _title(self) -> str:
         if self._active:
             glyph = fmt.spinner_frame(self._tick)
-            return f"{glyph}  {theme.PHASE_THINKING}"
+            elapsed = fmt.elapsed_since(self._started) if self._started is not None else 0.0
+            return f"{glyph}  {theme.PHASE_THINKING}  {elapsed:.1f}s"
         if self._state == GenerationState.ERROR.value:
             return f"{theme.CROSS}  {theme.PHASE_THINKING}"
         if self._state == GenerationState.CANCELLED.value:

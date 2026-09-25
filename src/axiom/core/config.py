@@ -60,14 +60,22 @@ class Config(BaseModel):
     search_read_sources: int = Field(default=3, ge=0, le=10)
     #: Per-request timeout for search engines and page reading (seconds)
     search_timeout: float = Field(default=20.0, gt=0.0, le=300.0)
+    #: Search backend used by web search. ``auto`` keeps the resilient
+    #: Brave → DuckDuckGo → SearXNG → Wikipedia chain; a specific id pins a
+    #: single engine (useful when a network blocks part of the chain).
+    search_provider: Literal["auto", "brave", "duckduckgo", "searxng", "wikipedia"] = "auto"
     #: Maximum number of stored conversations (oldest are pruned on save)
     history_limit: int = Field(default=100, ge=1, le=1000)
     #: Show real reasoning when the model provides it
     show_reasoning: bool = True
     #: Whether the reasoning block starts expanded
     reasoning_expanded: bool = False
-    #: UI theme name ("obsidian" is the built-in AXIOM palette)
-    theme: str = "obsidian"
+    #: UI colour scheme; kept separate from the shared accent preset.
+    theme: Literal["obsidian", "light"] = "obsidian"
+    #: Accessible accent shared by Desktop and TUI.
+    accent: Literal["garnet", "blue", "teal", "violet"] = "garnet"
+    #: Highlight interactive panel/list rows while the pointer is over them.
+    panel_hover: bool = True
     #: Subtle animations (spinners, splash, transitions)
     animations: bool = True
     #: Persist conversations between runs

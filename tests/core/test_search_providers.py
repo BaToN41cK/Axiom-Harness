@@ -176,3 +176,108 @@ async def test_multi_retries_transient_provider_failure() -> None:
     assert flaky.calls == 2
     assert results[0].url == "https://example.com/ok"
     assert provider.last_provider == "flaky"
+
+
+# ----------------------------------------------------- provider selection (W1.2)
+
+
+def test_search_provider_choices_cover_all_ids() -> None:
+    from axiom.core.search.multi import SEARCH_PROVIDER_IDS, search_provider_choices
+
+    choices = search_provider_choices()
+    assert [c["id"] for c in choices] == list(SEARCH_PROVIDER_IDS)
+    # Every choice carries a human label for the settings dropdown.
+    assert all(c["name"] for c in choices)
+
+
+def test_build_search_provider_auto_returns_full_chain() -> None:
+    from axiom.core.search.multi import MultiSearchProvider, build_search_provider
+
+    provider = build_search_provider("auto", timeout=5.0)
+    assert isinstance(provider, MultiSearchProvider)
+    # Timeout is retuned across the whole chain.
+    assert provider.providers[0]._timeout.read == 5.0
+
+
+def test_build_search_provider_pins_single_engine() -> None:
+    from axiom.core.search.brave import BraveProvider
+    from axiom.core.search.multi import build_search_provider
+    from axiom.core.search.wikipedia import WikipediaProvider
+
+    assert isinstance(build_search_provider("brave"), BraveProvider)
+    assert isinstance(build_search_provider("wikipedia"), WikipediaProvider)
+
+
+def test_build_search_provider_unknown_id_raises() -> None:
+    from axiom.core.search.multi import build_search_provider
+
+    with pytest.raises(ValueError):
+        build_search_provider("bing")
+
+
+def test_build_search_provider_empty_falls_back_to_auto() -> None:
+    from axiom.core.search.multi import MultiSearchProvider, build_search_provider
+
+    assert isinstance(build_search_provider(None), MultiSearchProvider)
+    assert isinstance(build_search_provider(""), MultiSearchProvider)
+
+
+# --------------------------------------------------- ChatSession.search_test (W1.2)
+
+
+async def test_search_test_reports_online_with_real_results(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path))
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+
+    class Stub(SearchProvider):
+        name = "StubEngine"
+
+        async def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+            return [SearchResult(title="Hit", url="https://example.com", snippet="s")]
+
+        async def fetch(self, url: str, max_chars: int = 4000) -> str:
+            return ""
+
+    session = ChatSession(config=Config(), provider=Stub())
+    report = await session.search_test("axiom")
+    assert report["ok"] is True
+    assert report["provider"] == "StubEngine"
+    assert report["result_count"] == 1
+    assert report["results"][0]["url"] == "https://example.com"
+    assert report["error"] is None
+    assert report["latency_ms"] >= 0
+
+
+async def test_search_test_reports_offline_on_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path))
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+
+    class Dead(SearchProvider):
+        name = "DeadEngine"
+
+        async def search(self, query: str, limit: int = 5) -> list[SearchResult]:
+            raise SearchUnavailableError("no network", hint="check VPN")
+
+        async def fetch(self, url: str, max_chars: int = 4000) -> str:
+            return ""
+
+    session = ChatSession(config=Config(), provider=Dead())
+    report = await session.search_test("axiom")
+    assert report["ok"] is False
+    assert report["provider"] == "DeadEngine"
+    assert report["result_count"] == 0
+    assert report["error"] == "no network"
+    assert report["hint"] == "check VPN"
+
+
+async def test_search_test_rejects_empty_query(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path))
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+
+    session = ChatSession(config=Config())
+    report = await session.search_test("   ")
+    assert report["ok"] is False
+    assert report["error"] == "Empty query"

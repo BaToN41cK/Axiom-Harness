@@ -46,7 +46,12 @@ Homepage = "https://github.com/BaToN41cK/Axiom"
 where = ["src"]
 
 [tool.setuptools.package-data]
-axiom = ["frontends/tui/*.tcss"]
+axiom = [
+    "frontends/tui/*.tcss",
+    "plugins/bundled/*/manifest.json",
+    "plugins/bundled/*/plugin.py",
+    "plugins/bundled/*/README.md",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

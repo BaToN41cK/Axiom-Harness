@@ -20,6 +20,7 @@ Layout (AXIOM design language — minimal, premium, no fake blocks):
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from textual.containers import Container, Horizontal, VerticalScroll
@@ -62,6 +63,7 @@ class AssistantMessage(Container):
         self._active = True
         self._detail: str | None = None
         self._duration_ms: int | None = None
+        self._started: float | None = None
         self._timer = None
         self._reasoning: ReasoningPanel | None = None
         self._search: WebSearchPanel | None = None
@@ -91,12 +93,18 @@ class AssistantMessage(Container):
     # ------------------------------------------------------------------ status
 
     def set_state(self, state: GenerationState, *, detail: str | None = None) -> None:
+        was_busy = self._state.is_busy
         self._state = state
         self._active = state.is_busy
         if state == GenerationState.THINKING:
             self._saw_thinking = True
         if detail is not None:
             self._detail = detail
+        # Start the honest wall-clock timer on the first busy transition; keep it
+        # running across phases and leave it set once finished (the ✓ footer uses
+        # the real duration_ms reported by the core, not this value).
+        if state.is_busy and not was_busy and self._started is None:
+            self._started = time.perf_counter()
         if self._reasoning is not None:
             if state == GenerationState.THINKING:
                 self._reasoning.set_state(state, active=True)
@@ -145,7 +153,8 @@ class AssistantMessage(Container):
                 # status line too would show the user two "Thinking" rows.
                 widget.display = False
                 return
-            label = f"Thinking  {self._tick * 0.12:.1f}s" if self._tick else "Thinking"
+            elapsed = fmt.elapsed_since(self._started) if self._started is not None else 0.0
+            label = f"Thinking  {elapsed:.1f}s" if self._started is not None else "Thinking"
             widget.update(f"{glyph}  {label}")
             return
         widget.update(
@@ -155,6 +164,7 @@ class AssistantMessage(Container):
                 duration_ms=self._duration_ms,
                 detail=self._detail,
                 active=self._active,
+                elapsed=fmt.elapsed_since(self._started) if self._started is not None and self._active else None,
             )
         )
 

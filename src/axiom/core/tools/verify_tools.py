@@ -26,6 +26,7 @@ from axiom.core.tools.base import (
     ToolResult,
 )
 from axiom.core.tools.filesystem import default_workspace_root
+from axiom.core.tools.processes import process_group_options, terminate_process_tree
 
 RUN_TESTS_TOOL = "run_tests"
 RUN_LINTER_TOOL = "run_linter"
@@ -286,6 +287,7 @@ class VerificationTools:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "PYTHONIOENCODING": "utf-8", "CI": "1", "TERM": "dumb"},
+                **process_group_options(),
             )
         except OSError as exc:
             base["error"] = f"Cannot execute: {exc}"
@@ -293,11 +295,14 @@ class VerificationTools:
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
-            proc.kill()
+            await terminate_process_tree(proc)
             base["error"] = f"Command timed out after {timeout:.0f}s"
             base["timed_out"] = True
             base["duration_ms"] = int((time.monotonic() - started) * 1000)
             return base
+        except asyncio.CancelledError:
+            await terminate_process_tree(proc)
+            raise
         text = out.decode("utf-8", errors="replace")
         err_text = err.decode("utf-8", errors="replace")
         body = text
@@ -447,8 +452,13 @@ class VerificationTools:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                **process_group_options(),
             )
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            try:
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            except (TimeoutError, asyncio.CancelledError):
+                await terminate_process_tree(proc)
+                raise
         except (OSError, TimeoutError):
             return False, ""
         if proc.returncode != 0:

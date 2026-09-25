@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Moon, PanelLeft, PanelRight, Sun } from "lucide-react";
+import { Folder, GitBranch, ListChecks, Moon, PanelLeft, PanelRight, Sun, Terminal as TerminalIcon } from "lucide-react";
 import BootScreen from "./components/BootScreen";
 import ProjectSelector from "./components/ProjectSelector";
 import OverlayPanel from "./components/OverlayPanel";
@@ -14,10 +14,11 @@ import { useAxiom } from "./hooks/useAxiom";
 import Explorer from "./components/Explorer";
 import GitPanel from "./components/GitPanel";
 import TerminalPanel from "./components/TerminalPanel";
+import TaskPanel from "./components/TaskPanel";
 import type { AxiomStore } from "./hooks/useAxiom";
 
 function WorkbenchSide({ store: s }: { store: AxiomStore }) {
-  const [tab, setTab] = useState<"files" | "terminal" | "git">("files");
+  const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks">("files");
   // Drag-to-resize of the tools panel (§8). Width lives in the store and is
   // persisted; the CSS transition is switched off while dragging (body.resizing).
   const dragging = useRef(false);
@@ -53,10 +54,25 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
     >
       <div className="side-resizer" onMouseDown={startDrag} title="Изменить размер панели" />
       <div className="side-tabs">
-        <button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>Файлы</button>
-        <button className={tab === "terminal" ? "active" : ""} onClick={() => setTab("terminal")}>Терминал</button>
-        <button className={tab === "git" ? "active" : ""} onClick={() => setTab("git")}>Git</button>
+        <button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>
+          <Folder size={13} strokeWidth={1.8} />
+          <span>Файлы</span>
+        </button>
+        <button className={tab === "terminal" ? "active" : ""} onClick={() => setTab("terminal")}>
+          <TerminalIcon size={13} strokeWidth={1.8} />
+          <span>Терминал</span>
+        </button>
+        <button className={tab === "git" ? "active" : ""} onClick={() => setTab("git")}>
+          <GitBranch size={13} strokeWidth={1.8} />
+          <span>Git</span>
+        </button>
+        <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}>
+          <ListChecks size={13} strokeWidth={1.8} /><span>Задачи</span>
+        </button>
       </div>
+      {tab === "tasks" && <TaskPanel tasks={s.tasks} busy={s.generating || s.taskRequestPending}
+        activeId={s.activeTaskId} onStart={s.startTask} onResume={s.resumeTask}
+        onCancel={s.cancelTask} onRefresh={s.refreshTasks} />}
       {tab === "files" && (
         <Explorer
           root={s.workspace?.current?.path ?? null}
@@ -110,9 +126,11 @@ export default function App() {
     const root = document.documentElement;
     root.classList.add("theme-anim");
     root.dataset.theme = theme;
+    root.dataset.accent = s.config?.accent ?? "garnet";
+    root.classList.toggle("no-panel-hover", s.config?.panel_hover === false);
     const timer = window.setTimeout(() => root.classList.remove("theme-anim"), 480);
     return () => window.clearTimeout(timer);
-  }, [theme]);
+  }, [theme, s.config?.accent, s.config?.panel_hover]);
 
   // Settings → General → animations off silences every transition at once.
   useEffect(() => {
@@ -152,6 +170,20 @@ export default function App() {
            onProviderSaveSettings={s.providerSaveSettings}
            onProviderPickModel={s.providerPickModel}
            onLoadProviders={s.loadProviders}
+           pluginRows={s.pluginRows}
+           pluginLoading={s.pluginLoading}
+           onLoadPlugins={s.loadPlugins}
+           onInstallPlugin={s.installPluginFromFolder}
+           onTogglePlugin={s.togglePlugin}
+           onRemovePlugin={s.removePlugin}
+           bundledPlugins={s.bundledPlugins}
+           onInstallBundledPlugin={s.installBundledPlugin}
+
+           searchProviders={s.searchProviders}
+           onLoadSearchProviders={s.loadSearchProviders}
+           onRunSearchTest={s.runSearchTest}
+           searchTestResult={s.searchTestResult}
+           searchTesting={s.searchTesting}
           />
         )}
         {toasts}
@@ -314,7 +346,21 @@ export default function App() {
            providerLoading={s.providerLoading}
            onProviderSaveSettings={s.providerSaveSettings}
            onProviderPickModel={s.providerPickModel}
+           pluginRows={s.pluginRows}
+           pluginLoading={s.pluginLoading}
+           onLoadPlugins={s.loadPlugins}
+           onInstallPlugin={s.installPluginFromFolder}
+           onTogglePlugin={s.togglePlugin}
+           onRemovePlugin={s.removePlugin}
+           bundledPlugins={s.bundledPlugins}
+           onInstallBundledPlugin={s.installBundledPlugin}
+
            onLoadProviders={s.loadProviders}
+           searchProviders={s.searchProviders}
+           onLoadSearchProviders={s.loadSearchProviders}
+           onRunSearchTest={s.runSearchTest}
+           searchTestResult={s.searchTestResult}
+           searchTesting={s.searchTesting}
          />
       )}
 

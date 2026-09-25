@@ -1,0 +1,588 @@
+# AXIOM Product and Engineering Roadmap
+
+_Last synchronized: 2026-09-25. This document defines product intent and delivery order; it is not evidence that a feature is complete._
+
+## Status legend
+
+- **TODO** — not started.
+- **PARTIAL** — a working vertical slice exists, but the stated scope is not complete.
+- **DONE** — the complete Definition of Done is verified.
+
+A feature is complete only after implementation, real tests, and updated documentation. A mock, placeholder UI, fabricated progress, or simulated tool result never satisfies the DoD.
+
+## Delivery rules
+
+1. Keep Tauri + React/TypeScript, the Rust bridge, and the Python core as the existing architecture; do not introduce a second core or replace the desktop app.
+2. Keep Desktop and TUI as thin adapters over `ChatSession`, the Task Runtime, and the event bus.
+3. Extend existing modules before creating new managers or services.
+4. Prefer the standard library, SQLite, `pydantic`, and `httpx`; justify every new dependency.
+5. Preserve chat, streaming, Ollama, external providers, workspace switching, Global Chat, files, terminal, Git, and web search.
+6. Network-dependent tests are opt-in live tests; deterministic tests use local fakes and never claim live success.
+7. Each delivery updates code, tests, relevant docs, `CHANGELOG.md`, and this roadmap.
+
+## Wave overview
+
+| Wave | Outcome | Current shape |
+|---|---|---|
+| W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 4 done, 1 TODO |
+| W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 7 partial, 2 TODO |
+| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 7 partial, 11 TODO |
+| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 14 partial, 1 TODO |
+
+---
+
+# W1 — Experience and plugin foundations
+
+## W1.1 Configurable Accent and Panel Hover
+
+**Status:** DONE — persisted accent presets and panel-hover preference exist · **Priority:** P1
+
+**Outcome:** A coherent, persisted theme carries across Desktop and TUI without a restart.
+
+**Delivery:** Validated `accent` presets (`garnet`, `blue`, `teal`, `violet`) and the `panel_hover` preference persist across Config, Desktop Settings, and the JSONL bridge; both are applied live to Desktop light/dark CSS and the Textual theme.
+
+**DoD:** Both frontends honor the persisted accent, WCAG AA contrast is recorded for every preset (see CHANGELOG), and Config/bridge round-trip tests pass.
+
+## W1.2 Search Connectivity and a Real Search Test
+
+**Status:** DONE — provider selection and honest connectivity probing exist · **Priority:** P1
+
+**Outcome:** Users see which search engine is active and can verify it with a real probe instead of a fabricated “Online” state.
+
+**Delivery:** Validated `search_provider` config (`auto`, `brave`, `duckduckgo`, `searxng`, `wikipedia`), `build_search_provider`/`search_provider_choices`, `ChatSession.search_test`, `search_providers`/`search_test` bridge commands, Desktop engine dropdown + real test button, and TUI `/searchtest` plus a provider-aware `/status`.
+
+**DoD:** The probe returns real `ok`/engine/latency/error, a provider change applies without restart, and deterministic tests use local fakes without network.
+
+## W1.3 Live Thinking Phase and Elapsed Timer
+
+**Status:** DONE — honest wall-clock phase timing exists · **Priority:** P1
+
+**Outcome:** Active phases show real elapsed time instead of tick-based approximations.
+
+**Delivery:** Wall-clock timers in TUI StatusBar, AssistantMessage, and ReasoningPanel plus the Desktop elapsed timer; `status_line()` gained an `elapsed` parameter.
+
+**DoD:** Thinking displays measured wall-clock duration and collapses to a completed state, and deterministic `status_line` tests cover active/inactive/None/zero cases.
+
+## W1.4 Plugin Manager v0 Live Reload
+
+**Status:** DONE — manifest-validated plugins load live from `~/.axiom/plugins` · **Priority:** P1
+
+**Outcome:** A plugin folder dropped into the plugin directory becomes real tools without a restart, and a bundled catalogue installs with one click.
+
+**Delivery:** `discover_plugins` live reload (manifest validation, atomic install, persisted enabled state, real tool registration), Desktop background polling, TUI `/plugins` discover, a bundled five-plugin catalogue with `install_bundled`, and `docs/plugins.md`.
+
+**DoD:** Dropped folders appear in both frontends, incompatible manifests are rejected, built-ins install/remove round-trip, and bridge integration tests pass.
+
+## W1.5 UI Extension Point Contract
+
+**Status:** TODO · **Priority:** P2
+
+**Outcome:** A versioned contract can later support plugin panels, commands, settings, renderers, and themes without redesigning v0.
+
+**Delivery:** Document manifest fields, API versioning, host guarantees, and compatibility rules in `docs/plugins.md` or `docs/architecture.md`.
+
+**DoD:** A manifest and extension example validate against the contract, including an incompatible-version case.
+
+---
+# W2 — Memory, knowledge, orchestration, and security
+
+## W2.1 Curated Memory
+
+**Status:** TODO — `ProjectMemory` is a project index, not user memory · **Priority:** P0
+
+**Outcome:** The user controls durable local facts, preferences, and project decisions used by future tasks.
+
+**Delivery:** Add atomic `MemoryItem` storage for global/project/conversation scopes and `normal/sensitive/banned` categories; expose read/list/write/forget tools; extract memory as a user-approved suggestion; retrieve only budgeted relevant items; add Desktop memory management and TUI `/memory`.
+
+**DoD:** Model access goes through tools, persisted items are user-editable/deletable, banned content never reaches disk, and scope/retrieval tests pass.
+## W2.2 Knowledge Base (RAG v1)
+
+**Status:** TODO · **Priority:** P0
+
+**Outcome:** Local folders and documents can be indexed and searched with source citations.
+
+**Delivery:** Add `core/knowledge/` with chunking, SQLite/FTS5, optional Ollama embeddings, vector+BM25 retrieval, incremental indexing, knowledge tools, and Desktop/TUI collection views.
+
+**DoD:** Search returns real cited fragments, only changed files are reindexed, BM25 works offline, and unavailable embeddings produce an explicit status.
+
+## W2.3 Orchestrator v2: Timeline, Progress, and Resume
+
+**Status:** PARTIAL — phases, agent cards, steps, review, and verification exist · **Priority:** P1
+
+**Outcome:** Multi-agent runs expose a truthful timeline, topology, budgets, checkpoints, and reruns.
+
+**Delivery:** Extend `OrchestrationBoard.tsx` and `lib/orchestration.ts` with real timings, completed-step counts, DAG views, trajectory links, report comparison, Markdown export, and run budgets. Persist checkpoints; dynamic planning remains in W4.2.
+
+**DoD:** Every element is event-driven, budget exhaustion stops cleanly, exports contain actual data, and an interrupted run resumes without repeating completed work.
+
+## W2.4 GUI Permission Dialog
+
+**Status:** PARTIAL — core callback exists; GUI is simplified · **Priority:** P0
+
+**Outcome:** A blocked tool call pauses until the user grants or denies it.
+
+**Delivery:** Emit `permission.request` with tool, arguments, cwd, and risk; reuse `ConfirmDialog` and `PermissionManager`; provide Allow once / Always for this tool / Deny in Desktop and TUI.
+
+**DoD:** The call waits for a real answer, “once” is not cached, “always” is cached, and denial returns a structured failed `ToolResult`.
+
+## W2.5 Prompt Layers Without Local-Model Overload
+
+**Status:** PARTIAL — profiles and `system_prompt` exist · **Priority:** P0
+
+**Outcome:** Models receive compact, testable decision policy while preserving a strict token budget.
+
+**Delivery:** Add `core/prompt_builder.py` layers for core policy, role, project, memory, knowledge, and skills; prioritize current task and project rules; map `fast/normal/deep` to concise/deep policies; add automatic `mini/full` selection and response style.
+
+**DoD:** `mini` and `full` stay within budget, current prompt invariants pass, and no unverified requirement or hidden chain-of-thought instruction is injected.
+
+## W2.6 SQLite/FTS5 History
+
+**Status:** PARTIAL — JSON conversations and full-text search exist · **Priority:** P1
+
+**Outcome:** Large histories remain fast without breaking existing callers or user data.
+
+**Delivery:** Move `HistoryStore` to `history.db` with FTS5, preserve its public API, and perform an idempotent import of existing JSON files with backups.
+
+**DoD:** Benchmark data shows faster listing/search, old files remain readable, and repeat migration does nothing.
+
+## W2.7 Frontend Decomposition and Virtualization
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** Large CSS/TypeScript modules no longer force slow full-list rendering.
+
+**Delivery:** Split CSS by domain, split `useAxiom.ts` into focused stores/hooks, virtualize messages and Explorer rows, and batch stream updates at about 30 ms.
+
+**DoD:** Behavior and E2E scenarios remain unchanged, bundle size does not regress without justification, and profiler results are recorded.
+
+## W2.8 TUI Package
+
+**Status:** PARTIAL · **Priority:** P1
+
+**Outcome:** TUI exposes the same major workflows as Desktop through event projections.
+
+**Delivery:** Add an orchestration panel, shared accent theme, `Ctrl+F` chat search, `/memory`, `/knowledge`, `/plugins`, and a real `/benchmark` view.
+
+**DoD:** Panels work with mouse and keyboard, TUI tests pass, and business logic remains in the core rather than being duplicated in the frontend.
+
+## W2.9 Security Package
+
+**Status:** PARTIAL — workspace jail, permissions, and command classification exist · **Priority:** P0
+
+**Outcome:** Secrets, network access, tool calls, and agent edits have auditable boundaries and recoverable effects.
+
+**Delivery:** Add optional OS credential storage, JSONL tool audit, pre-edit checkpoints and per-step rollback, SSRF and download limits, untrusted-content marking, Tauri CSP/single-instance review, signed update-channel configuration, and an enforceable Local Only mode.
+
+**DoD:** SSRF cases are blocked, secrets are masked, audit records round-trip, rollback restores the checkpoint, and Local Only blocks every covered network path.
+
+---
+
+# W3 — Extensible platform
+
+W3 turns AXIOM into a user-extensible environment while keeping local use the default. Every external service and extension is explicit opt-in, least-privilege, and observable.
+## W3.1 Plugins with UI API and Sandbox
+
+**Status:** TODO · **Priority:** P0
+
+**Outcome:** Plugins can extend workbench panels, commands, settings, themes, and renderers without gaining the host DOM or unrestricted IPC.
+
+**Delivery:** Implement W1.5 points in an isolated iframe or Worker; expose typed request/response/events only; declare `fs`, `net`, `ui`, and `clipboard` scopes; show requested scopes at install; support API compatibility, hot reload, an example plugin, and an allowlisted v0 catalog.
+
+**DoD:** A sample plugin adds a panel and command without host changes, denied network/file scopes are enforced, and a broken plugin cannot crash AXIOM.
+
+## W3.2 Connectors: Google, Microsoft, Then More
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** User-authorized external data is available through narrow, auditable tools.
+
+**Delivery:** Add OAuth 2.0 Device Flow and OS credential storage; begin with Google Search, Drive, read-only Gmail, and Calendar, followed by Microsoft, GitHub, and Notion through one schema. Scope connectors individually and require approval for mutations.
+
+**DoD:** Sign-in/out works, a Google tool returns real user data, tokens stay out of logs/exports, and disconnect revokes access.
+
+## W3.3 Multitasking: Tabs, Background Work, Notifications
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** Independent chats and long jobs remain usable while the user navigates elsewhere.
+
+**Delivery:** Add project/model/context-isolated chat tabs; background orchestration, indexing, and commands; real progress; a configurable generation limit; per-task cancellation; and completion notifications.
+
+**DoD:** Orchestration survives tab switching, cancellation affects only the selected task, and notifications reflect real terminal state.
+
+## W3.4 Answer Artifacts
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** Answers can contain structured, inspectable artifacts instead of an unstructured wall of text.
+
+**Delivery:** Add validated `render_artifact(type, payload)` support for comparison cards, tables, Mermaid, simple charts, and checklists; persist artifacts with messages; export PNG/SVG/Markdown/CSV.
+
+**DoD:** Real Mermaid and tables render and export, while missing data produces an explicit failure rather than a decorative placeholder.
+
+## W3.5 Full MCP UX and Skills Manager
+
+**Status:** PARTIAL — contracts exist · **Priority:** P2
+
+**Outcome:** Users can manage MCP servers and project-relevant skills without editing config files.
+
+**Delivery:** Add MCP add/status/restart/log/test controls and skill enable, project binding, content inspection, and task-based skill suggestion over the existing contracts.
+
+**DoD:** A real MCP tool call is tested from the GUI, active skills can be inspected, and project/task applicability is respected.
+
+## W3.6 CLI/Headless Mode and Local API
+
+**Status:** TODO · **Priority:** P2
+
+**Outcome:** Scripts, CI, editors, and extensions can drive the same runtime without embedding agent logic.
+
+**Delivery:** Add `axiom run "prompt" --json`; a token-protected localhost HTTP/WebSocket server; task/status endpoints; and integration adapters for VS Code and browser context capture.
+
+**DoD:** Headless output is valid and actionable, non-local bind attempts are rejected, and an integration uses the canonical Task Runtime.
+
+## W3.7 Multimodality
+
+**Status:** PARTIAL — vision exists · **Priority:** P2
+
+**Outcome:** Images, scanned documents, and speech can enter a task with honest availability reporting.
+
+**Delivery:** Add OCR for images/screenshots and local dictation/transcription through Ollama or a compatible Whisper path; support document-from-camera workflows.
+
+**DoD:** Each modality works with a compatible local model and unavailable models/capabilities are reported before use.
+
+## W3.8 Language, Command Palette, and Updates
+
+**Status:** TODO · **Priority:** P2
+
+**Outcome:** RU/EN users get consistent navigation, recoverable settings, and secure updates.
+
+**Delivery:** Add i18n resource catalogs and switching; `Ctrl+Shift+P` actions for files/chats/settings; portable mode; settings backup/restore; and signed Tauri update channels.
+
+**DoD:** Both locales render without hard-coded component text, palette actions are executable, and portable settings survive restart.
+
+## W3.9 Chat 2.0: Branches, Pins, Bookmarks, Search, Export
+
+**Status:** PARTIAL — alternates, copy, regenerate, and continue exist · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Conversations support controlled experimentation and long-term navigation.
+
+**Delivery:** Complete alternate navigation and promotion, persist pins/bookmarks, add `Ctrl+F`, quote selected text into the next prompt, accept attachments, and export real conversations to Markdown/PDF.
+
+**DoD:** Every action works on real history, exports include actual messages/metrics, and E2E covers the new controls.
+## W3.10 Composer 2.0: @file, Command Palette, History
+
+**Status:** PARTIAL — slash commands and completion exist · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** File-aware composition and command discovery are fast and persistent.
+
+**Delivery:** Add incremental workspace-backed `@file` completion and chips; expose one shared command registry with icons, descriptions, and shortcuts; persist prompt history and per-chat drafts.
+
+**DoD:** `@file` inserts a real file, only executable commands are shown, and history/drafts survive restart.
+
+## W3.11 System Tray and Background Notifications
+
+**Status:** TODO · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Background completion is visible without repeatedly opening the application.
+
+**Delivery:** Add a Tauri tray menu and active-task count from real Task State, sidebar Tasks, completion toasts, optional sound, and quiet mode.
+
+**DoD:** Tray and panel counts match, completion produces one real notification, and zero active tasks is represented honestly.
+
+## W3.12 Explorer 2.0
+
+**Status:** PARTIAL — tree, search, git status, and opening exist · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Common workspace operations are available without leaving the application.
+
+**Delivery:** Add create/rename/delete context actions, inline preview, per-file `M/A/U` markers, diff, and git-aware revert. Destructive actions use the permission system.
+
+**DoD:** File operations are real, destructive actions require approval, revert restores git state, and the flow passes E2E.
+
+## W3.13 Terminal UI 2.0
+
+**Status:** PARTIAL — command panel exists · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Interactive terminal use has process status, history, reuse, and coordinated cancellation.
+
+**Delivery:** Persist panel history, support rerun and trusted-command scopes, display stderr/exit code/running state, and bind Stop to the task-wide cancellation path.
+
+**DoD:** Rerun works, Stop actually terminates the process tree and updates status, and trusted commands do not reprompt within scope.
+
+## W3.14 Git UI 2.0
+
+**Status:** PARTIAL — status and diff panel exist · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Users can review and commit real changes through a guarded workflow.
+
+**Delivery:** Add branch graph, stage/unstage, mandatory diff review and confirmation before commit, actual hash/error result, and git-checkpoint-based rollback. Push/history rewrite remain HIGH risk and manual.
+
+**DoD:** All operations use real Git, commit cannot bypass review/confirmation, and agent Git actions use W4.7/W4.9 policy.
+
+## W3.15 Task Automation Scheduler
+
+**Status:** TODO · **Priority:** P3 · **Stage:** 11
+
+**Outcome:** Repetitive approved tasks can run on daily, weekly, or cron-like schedules.
+
+**Delivery:** Persist schedules in `.axiom/automation.json`; create normal W4.1 tasks with source `automation`; expose history/notifications; constrain unattended work to explicit scopes and below HIGH risk.
+
+**DoD:** A schedule really runs as a Task, missed runs are explicit, and automation cannot silently inherit dangerous approval.
+
+## W3.16 VS Code Integration
+
+**Status:** TODO · **Priority:** P3 · **Stage:** 11
+
+**Outcome:** VS Code can submit and monitor work without duplicating agent logic.
+
+**Delivery:** Add an extension/panel over W3.6 local API with workspace selection, authenticated consent, submit task, status/diff links, and deep links to Desktop.
+
+**DoD:** The same Task Runtime executes the task, events match the extension view, and an offline AXIOM produces a clear connection error.
+
+## W3.17 Artifact Workspace
+
+**Status:** TODO · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Generated plans, reports, diagrams, and documents remain editable project assets.
+
+**Delivery:** Add a Documents view, Markdown preview/editor, task association, export, and version history under `.axiom/artifacts/`.
+
+**DoD:** An artifact from a real task opens, edits, and saves to the project; the empty state contains no demo assets.
+
+## W3.18 Accessibility
+
+**Status:** TODO · **Priority:** P2 · **Stage:** 7
+
+**Outcome:** Core workflows are keyboard, assistive-technology, contrast, and motion friendly.
+
+**Delivery:** Audit focus order and keyboard paths; add ARIA roles/labels and visible focus; enforce AA contrast with W1.1; honor `prefers-reduced-motion`; route new UI text through W3.8 i18n.
+
+**DoD:** Primary flows are keyboard-complete, axe/Lighthouse has no critical violations, and all animations respect reduced motion.
+
+---
+
+# W4 — Agentic coding environment
+
+AXIOM becomes a real local coding agent: a task completes only after edits are applied, relevant checks run, failures are repaired or explicitly surfaced, and final project state is known. W4 extends the existing runtime; it never creates a parallel agent core.
+
+## Delivery phases
+
+| Phase | Scope | Exit result |
+|---|---|---|
+| 1 | W4.1 | Task lifecycle over `ChatSession` |
+| 2 | W4.1–W4.2 | Task State, plans, bounded replan |
+| 3 | W4.3–W4.4 | Relevant context and structured compaction |
+| 4 | W4.7 | Unified tool routing and robust tools |
+| 5 | W4.8 | Verify–repair–verify loop |
+| 6 | W4.9 | Modes, risk levels, approval scopes |
+| 7 | W4.5 | Rules and selective skills |
+| 8 | W4.6 | Isolated compact subagents |
+| 9 | W4.10–W4.11 | Hooks, memory scopes, model routing |
+| 10 | W4.12 | Activity, task, tool, diff, context UI |
+| 11 | W4.13 | IPC, memory, and process performance |
+| 12 | W4.14–W4.15 | Recovery, observability, end-to-end acceptance |
+
+After every phase: tests → build/type-check → review changed files → fix regressions → update status.
+
+## W4.1 Agent Runtime and Task System
+
+**Status:** PARTIAL — Task Runtime, atomic Task State, bridge, UI, and restart acceptance exist · **Priority:** P0 · **Phase:** 1–2
+
+**Outcome:** Complex requests have a durable, observable task lifecycle independent of a chat busy flag.
+
+**Delivery:** Use `core/tasks.py` over the existing `ChatSession`/`Agent` loop; persist task metadata, steps, changed files, errors, checks, and results atomically; support pending, planning, executing, verifying, waiting, completed, failed, and cancelled states; expose start/cancel/resume/state/list commands.
+
+**DoD:** Restart preserves state, completed steps are not repeated, invalid transitions and concurrent resume are rejected, and all transitions are observable.
+
+## W4.2 Dynamic Planner
+
+**Status:** PARTIAL — validated JSON plans and bounded replan exist · **Priority:** P0 · **Phase:** 2
+
+**Outcome:** Complex tasks receive a tool-aware plan that can adapt without discarding completed work.
+
+**Delivery:** Detect complexity; generate a strict plan schema; validate tools, dependencies, and step bounds; execute one current step; replan after failure or plan mismatch with a hard budget; persist the plan in Task State.
+
+**DoD:** Invalid/unavailable-tool plans fail safely, replanning cannot loop indefinitely, and resumed execution retains completed steps and rationale.
+
+## W4.3 Context Manager and Context Budget
+
+**Status:** PARTIAL — file collection, Git diff, and compression exist · **Priority:** P0 · **Phase:** 3
+
+**Outcome:** The model receives relevant evidence under explicit category budgets rather than the whole project.
+
+**Delivery:** Rank explicit task paths, mentioned/changed files, and one/two levels of imports; optionally extract symbols instead of full files; configure budgets for system, project, task, files, tool results, and conversation; deduplicate/discard prompt output while retaining trajectory; expose actual category sizes.
+
+**DoD:** A representative settings-button repair includes only relevant frontend/backend files, never exceeds budget, and preserves current context regressions.
+
+## W4.4 Structured Context Compaction
+
+**Status:** PARTIAL — summarizer-based `compress()` exists · **Priority:** P0 · **Phase:** 3
+
+**Outcome:** Long tasks retain structured working state instead of losing the beginning through raw truncation.
+
+**Delivery:** Add a schema for goal, plan, decisions, changed files, errors, tests, and important context; populate it from planner, Git/tool, and verification events; compact at a budget threshold; keep the original trajectory for replay/resume.
+
+**DoD:** A long task continues after compaction without losing plan/errors/files, output validates against the schema, and trigger/schema/trajectory tests pass.
+
+## W4.5 AXIOM.md, Rules, and Skills
+
+**Status:** PARTIAL — `.axiom/` and `core/skills.py` exist · **Priority:** P0 · **Phase:** 7
+
+**Outcome:** Project constraints and reusable procedures are loaded only when relevant.
+
+**Delivery:** Add `core/rules.py` to discover and merge global, project, directory, and task-specific `AXIOM.md`/`.axiom/project.md`; extend `core/skills.py` for `.axiom/skills/`; attach rules only when task paths match and skills only when selected by relevance.
+
+**DoD:** Precedence is deterministic, irrelevant directory rules are absent, user-requested rules win, and a matching skill changes task behavior through a tested contract.
+## W4.6 Isolated Subagents with Compact Results
+
+**Status:** PARTIAL — five roles, review, verification, and trajectory isolation exist · **Priority:** P1 · **Phase:** 8
+
+**Outcome:** Specialist agents work independently without flooding the main context.
+
+**Delivery:** Extend the existing registry with Explorer, Researcher, Tester, Reviewer, Security, Frontend, and Backend roles and scoped tools; return only `RESULT/FINDINGS/FILES/ERRORS/RECOMMENDATIONS`; retain full transcripts in their trajectories; aggregate compact reports in Task State; enforce token/time/tool/retry budgets with partial-result stop.
+
+**DoD:** Internal transcripts never enter the main context, reports contain evidence and errors, budget exhaustion is explicit, and orchestrator tests pass.
+
+## W4.7 Tool Router and Robust Tools
+
+**Status:** PARTIAL — registry metadata and full filesystem tools exist; Git is read-only · **Priority:** P0 · **Phase:** 4
+
+**Outcome:** Every tool follows one validated, permissioned, cancellable, observable contract.
+
+**Delivery:** Route validation → permission → execution → timeout → normalized result → audit; standardize `{tool, ok, content, error, duration_ms, meta}`; add streamed terminal output and process-tree cleanup; keep the existing sandboxed filesystem; add approved `git_add`/`git_commit` with reviewed diff while push remains manual HIGH risk.
+
+**DoD:** No covered tool can hang on stdin, cancellation reaps descendants, commit requires approval, and result shape is consistent.
+
+## W4.8 Verification and Self-Correction
+
+**Status:** PARTIAL — targeted verification detection and orchestrator rework exist · **Priority:** P0 · **Phase:** 5
+
+**Outcome:** A failed check causes a bounded repair attempt rather than a false success or an unbounded loop.
+
+**Delivery:** Trigger minimal relevant pytest/ruff, npm test/lint/build, or cargo check/test after edits; parse failures into file/line/message; prioritize current errors; implement `TEST FAILED → READ → ANALYZE → EDIT → RETEST` with configurable `max_retries` (default 3); end in `waiting_for_user` with an honest report when exhausted.
+
+**DoD:** A deliberately broken test can be repaired and pass or stop at the retry limit, and “passed” is emitted only from a real zero exit status.
+
+## W4.9 Permissions 2.0: Modes, Risk, Approval Scopes
+
+**Status:** PARTIAL — ask/auto modes and approval cache exist · **Priority:** P0 · **Phase:** 6
+
+**Outcome:** Users choose explicit autonomy and approval boundaries that cannot be bypassed by a tool.
+
+**Delivery:** Compose PLAN/EDIT/AUTO/FULL from existing access and permission axes; add configurable `SAFE/LOW/MEDIUM/HIGH/CRITICAL` command policy; support once/task/project/always/deny; never inherit safe approval for dangerous actions; show command, cwd, risk, and reason; add readonly/workspace/workspace-network/full sandbox presets.
+
+**DoD:** PLAN blocks writes, repeated safe commands do not reprompt within scope, `git push`/`rm -rf` always ask, and policy/risk are visible in tools/UI.
+
+## W4.10 Hooks
+
+**Status:** TODO · **Priority:** P1 · **Phase:** 9
+
+**Outcome:** Configurable lifecycle actions can format, test, or audit without breaking the agent loop.
+
+**Delivery:** Add `core/hooks.py` for TaskStart, TaskComplete, Pre/PostToolUse, Pre/PostEdit, Pre/PostCommit, and ContextCompact; load built-ins/config/`.axiom/hooks/`; run sequentially with timeout and permission checks; emit started/completed/failed events; show hook results by task step.
+
+**DoD:** A real PostEdit formatter changes the file, a failing hook warns and continues, and disabling hooks restores prior behavior.
+
+## W4.11 Memory Scopes and Model Routing
+
+**Status:** PARTIAL — `core/router.py` exists; W2.1 storage is pending · **Priority:** P1 · **Phase:** 9
+
+**Outcome:** Memory and models are selected by role and scope without hard-coded provider names.
+
+**Delivery:** Extend W2.1 to Global/Project/Task/Session with task→project→global precedence; use budgeted retrieval; add config rules for main/subagent/search/summarize/coding over existing router and fallback; archive task memory after completion.
+
+**DoD:** Global memory survives restart, task memory is archived, role routing is testable, full memory never enters context, and swapping provider/model needs no agent changes.
+
+## W4.12 Task UI: Activity, Panel, Tool Calls, Diff, Context
+
+**Status:** PARTIAL — Task Panel, activity, tool calls, and context basics exist; diff is pending · **Priority:** P1 · **Phase:** 10
+
+**Outcome:** Users can understand what the task is doing, what changed, and what remains.
+
+**Delivery:** Complete the panel with phases, plan, steps, files, tests, errors, budget, and resume/cancel; group collapsible tool calls; add changed-file diff with +/- counts and review; show actual context category budgets; drive every view from bridge events.
+
+**DoD:** UI state matches backend events, long tool output is collapsed safely, diff matches Git/task state, and no completion state appears without a real event.
+## W4.13 IPC, Streaming, Memory, and Process Performance
+
+**Status:** PARTIAL — streaming, warmup, caches, and output limits exist · **Priority:** P1 · **Phase:** 11
+
+**Outcome:** Long tasks stay responsive and bounded on modest local hardware.
+
+**Delivery:** Send deltas/pagination for trajectory, files, and diffs; batch UI updates at about 30 ms; validate a common event envelope; add EventBus backpressure/filtering; keep one copy of large texts and lazy attachments; TTL/limit caches; index incrementally by mtime/hash; register all task subprocesses and reap them on cancel/exit; measure before/after metrics.
+
+**DoD:** Long tasks show bounded memory and responsive UI, cancellation leaves no orphan process, and large payloads do not resend full state per chunk.
+
+## W4.14 Errors, Cancellation, Resume, Observability
+
+**Status:** PARTIAL — model/orchestrator cancellation, trajectory resume, subprocess cleanup, and Task resume exist · **Priority:** P0 · **Phase:** 12
+
+**Outcome:** Failures and interruption are first-class, recoverable task data rather than transient UI text.
+
+**Delivery:** Add a shared `CancelToken` propagated through model requests, tools, subagents, retries, verification, and process trees; persist Task State at every transition; normalize errors as type/tool/command/exit/stdout/stderr; support user-confirmed resume from current state; publish `task.*`, `context.*`, `model.*`, and `verification.*` events with task/agent IDs and durable trajectory.
+
+**DoD:** Cancellation is prompt and leak-free, resume does not repeat completed work, errors survive restart, and every terminal state is explainable from events.
+
+## W4.15 End-to-End Acceptance
+
+**Status:** PARTIAL — real backend edit/test/restart/resume acceptance exists; browser/Tauri coverage is incomplete · **Priority:** P0 · **Phase:** 12
+
+**Outcome:** A deterministic scenario proves the integrated agent rather than isolated components.
+
+**Delivery:** Extend `desktop/scripts/e2e-harness.mjs` into a real coding task: start Task, plan, inspect/edit multiple files, run terminal and targeted tests, observe tool events/diff, fail and repair once, cancel/resume across restart, and verify final Git/project state. Add browser/Tauri E2E for the user path and mark live provider checks separately.
+
+**DoD:** The scenario passes repeatedly without network, starts from a clean workspace, proves real files/checks, recovers one failure, resumes after interruption, and detects a deliberately broken regression.
+---
+
+# Cross-cutting acceptance
+
+The agent is accepted only when it can:
+
+1. Receive a complex coding task and create a validated plan.
+2. Select relevant context without loading the whole project.
+3. Read and edit real files, use terminal and approved Git, and use web only when needed.
+4. Modify multiple files and report the actual diff.
+5. Run relevant checks, analyze failures, make bounded repairs, and repeat verification.
+6. Block dangerous actions through permission policy and untrusted web content through context rules.
+7. Compact context while preserving goal, plan, changes, errors, and tests.
+8. Apply project rules and relevant skills, retrieve scoped memory, invoke hooks, and delegate bounded subagent work.
+9. Show truthful phases, tool calls, tests, progress, diffs, and context budgets.
+10. Cancel promptly, clean subprocesses, persist state, resume safely, and remain provider/model independent.
+11. Preserve existing chat, streaming, Ollama/API providers, workspace switching, Global Chat, files, terminal, Git, and web search.
+
+# Test matrix
+
+| Area | Required coverage |
+|---|---|
+| Task runtime | lifecycle, invalid transitions, retries, cancel, atomic state, resume |
+| Planner/context | schema/tool validation, relevance, budget, dedup, compaction, plan retention |
+| Tools | filesystem sandbox, stdin, timeout, streaming, process cleanup, normalized errors |
+| Permissions | modes, risk levels, approval scopes, dangerous non-inheritance, Local Only |
+| Verification | pass/fail, targeted selection, repair, max retries, truthful events |
+| Workspace/UI | project isolation, Global Chat, real events, diff, background tasks, accessibility |
+| Regression | full deterministic suite, Ruff, desktop build/type-check, E2E harness |
+
+Network tests use explicit live markers. A skipped live test is not reported as passed.
+
+# Anti-goals
+
+- No fake status, progress, reasoning, terminal result, project switch, context statistic, or test result.
+- No emoji-driven product visuals; use Lucide/Textual glyphs and typography.
+- No whole-project prompt or uncontrolled local-model growth; `mini` profiles and budgets are mandatory.
+- No cloud dependency by default; providers, web, and connectors are explicit opt-in.
+- No UI imports or UI logic in `core/`; enforce the boundary in tests.
+- No heavy dependency or architecture merely to satisfy a checkbox; prefer stdlib and current libraries.
+- No second runtime, parallel permission system, or duplicate business logic in Desktop/TUI/extensions.
+
+# Changelog
+
+| Date | Change |
+|---|---|
+| 2026-09-25 | Created W1–W3 roadmap with 22 items, matrix, and anti-goals. |
+| 2026-09-25 | Added W4 Agentic Coding Environment: 15 items, phases 1–12, mapping, and acceptance criteria. |
+| 2026-09-25 | Integrated W3.9–W3.18 and updates across W1/W2/W4. |
+| 2026-09-25 | Added partial W4.1/W4.2 implementation: Task State, validated planner/replan, bridge/UI, cancellation cleanup, and backend acceptance; last verified with `355 passed, 1 skipped`, Ruff, and Desktop build. |
+| 2026-09-25 | Rewrote this roadmap fully in English and reduced it below 750 lines while preserving all 47 item IDs, statuses, priorities, deliverables, DoD, phases, acceptance rules, anti-goals, and changelog. |
+| 2026-09-25 | Completed W1.1: persisted validated accent presets and panel-hover preference across Config/bridge, Desktop CSS, and the Textual theme; contrast ratios recorded in CHANGELOG. |
+| 2026-09-25 | Completed W1.2: `search_provider` selection, `build_search_provider`/`search_provider_choices`, `ChatSession.search_test`, `search_providers`/`search_test` bridge commands, Desktop Tools engine dropdown + real test button, TUI `/searchtest` panel and provider-aware `/status`; verified with `368 passed, 1 skipped`, Ruff, and the Desktop build. |
+| 2026-09-25 | Completed W1.4: `discover_plugins` live reload (manifest validation, atomic install, persisted enabled state, real tool registration), Desktop polling (folders dropped into `~/.axiom/plugins` appear without restart), TUI `/plugins` discover, 4 bridge integration tests; verified with `392 passed, 1 skipped`, Ruff, and the Desktop build. |
+| 2026-09-25 | Final synchronization: restored DONE sections for W1.1–W1.4 (accent, search test, live thinking timer, plugin live reload) so all 47 item IDs are present, corrected wave counts (W1 `4 done, 1 TODO`, W3 `7 partial, 11 TODO`); verified with `405 passed, 1 skipped` and Ruff. |

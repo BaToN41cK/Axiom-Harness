@@ -22,6 +22,12 @@ import {
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { commandByName, matchingCommands, parseCommand } from "../lib/commands";
 import { stripDataUrl } from "../lib/format";
+import {
+  applyOrchestrationEvent,
+  applyOrchestrationResult,
+  emptyOrchestration,
+  orchestrationMarkdown,
+} from "../lib/orchestration";
 import type {
   AxiomConfig,
   ChatHit,
@@ -31,20 +37,26 @@ import type {
   HealthReport,
   LiveMessage,
   ModelInfo,
+  OrchestrationResult,
   ProjectInfo,
   ProjectSearchResult,
   WorkspaceFilesResult,
   SendResult,
   StartupReport,
   StatusReport,
+  Task,
   TerminalResult,
   ToolInfo,
   ProviderRow,
   ProviderModelRow,
+  PluginRow,
+  PluginInstallResult,
   AgentRow,
   TrajectoryViewer,
   TreeNode,
   WorkspaceState,
+  SearchProviderChoice,
+  SearchTestResult,
 } from "../types";
 
 export type Phase = "booting" | "ready" | "unavailable" | "error";
@@ -53,6 +65,7 @@ export type SettingsSection =
   | "general"
   | "models"
   | "providers"
+  | "plugins"
   | "chat"
   | "tools"
   | "appearance"
@@ -190,47 +203,44 @@ function toolStatusText(name: string, args: Record<string, unknown>): string {
 
 /**
  * Live `/orchestrate` progress (real trajectory steps streamed by the core) →
- * the status pill text plus an optional line for the growing chat message.
- * Returns null for event kinds the UI does not render.
+ * the text of the status pill. The structured board renders every step, so only
+ * the one-line status is derived here. Returns null for kinds without a status.
  */
 export function orchestrationProgress(event: {
   kind: string;
   actor: string;
   summary: string;
-}): { status: string; line: string | null } | null {
+}): string | null {
   const actor = event.actor || "orchestrator";
-  const summary = event.summary || "";
   switch (event.kind) {
     case "orchestration.command":
-      return { status: "Оркестрация: план…", line: null };
     case "orchestrator.plan":
-      return { status: "Оркестрация: план готов", line: `▸ План: ${summary}` };
+      return "Оркестрация: план…";
     case "agent.start":
-      return { status: `Оркестрация: ${actor} выполняет задачу…`, line: `▸ **${actor}**: запущен` };
+      return `Оркестрация: ${actor} выполняет задачу…`;
     case "agent.done":
-      return { status: `Оркестрация: ${actor} готов`, line: `✓ **${actor}**: отчёт получен` };
+      return `Оркестрация: ${actor} готов`;
     case "agent.failed":
-      return { status: `Оркестрация: ${actor} — ошибка`, line: `✗ **${actor}**: ${summary}` };
+      return `Оркестрация: ${actor} — ошибка`;
     case "subagent.model":
-      return { status: `Оркестрация: ${actor} → ${summary}`, line: `🔀 **${actor}** → ${summary}` };
+      return `Оркестрация: ${actor} → ${event.summary}`;
     case "subagent.reasoning":
-      return { status: `Оркестрация: ${actor} — думает…`, line: `💭 **${actor}**: ${summary}` };
+      return `Оркестрация: ${actor} — думает…`;
     case "subagent.answer":
-      return { status: `Оркестрация: ${actor} — пишет…`, line: `✍ **${actor}**: ${summary}` };
+      return `Оркестрация: ${actor} — пишет…`;
     case "subagent.tool.call":
-      return { status: `Оркестрация: ${actor} — ${summary}`, line: null };
     case "subagent.tool.result":
-      return { status: `Оркестрация: ${actor} — ${summary}`, line: `⚙ ${actor}: ${summary}` };
+      return `Оркестрация: ${actor} — ${event.summary}`;
     case "orchestrator.review":
-      return { status: "Оркестрация: review…", line: `✎ Review: ${summary}` };
+      return "Оркестрация: review…";
     case "verification.completed":
-      return { status: "Оркестрация: verification…", line: `◎ Verification: ${summary}` };
+      return "Оркестрация: verification…";
     case "orchestrator.done":
-      return { status: "Оркестрация: завершена", line: "■ Оркестрация завершена" };
+      return "Оркестрация: завершена";
     case "orchestration.cancelled":
-      return { status: "Оркестрация остановлена", line: null };
+      return "Оркестрация остановлена";
     case "orchestration.failed":
-      return { status: "Оркестрация: сбой", line: `✗ Оркестрация: ${summary}` };
+      return "Оркестрация: сбой";
     default:
       return null;
   }
@@ -265,6 +275,9 @@ export function useAxiom() {
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [chatSearch, setChatSearch] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskRequestPending, setTaskRequestPending] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [liveState, setLiveState] = useState("idle");
   const [statusText, setStatusText] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -275,6 +288,12 @@ export function useAxiom() {
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [providerModels, setProviderModels] = useState<ProviderModelRow[]>([]);
   const [providerLoading, setProviderLoading] = useState(false);
+  const [pluginRows, setPluginRows] = useState<PluginRow[]>([]);
+  const [bundledPlugins, setBundledPlugins] = useState<PluginRow[]>([]);
+  const [pluginLoading, setPluginLoading] = useState(false);
+  const [searchProviders, setSearchProviders] = useState<SearchProviderChoice[]>([]);
+  const [searchTestResult, setSearchTestResult] = useState<SearchTestResult | null>(null);
+  const [searchTesting, setSearchTesting] = useState(false);
   const [agents, setAgents] = useState<AgentRow[]>([]);
   const [profiles, setProfiles] = useState<{ active: string; items: { id: string; name: string; prompt: string }[] }>({ active: "", items: [] });
   const [trajectory, setTrajectory] = useState<TrajectoryViewer | null>(null);
@@ -349,6 +368,8 @@ export function useAxiom() {
   const startedAtRef = useRef(0);
   const pendingTextRef = useRef({ content: "", thinking: "" });
   const orchestrationActiveRef = useRef(false);
+  const taskActiveRef = useRef(false);
+  const taskScopeRef = useRef<string | null>(null);
   /** Throttles silent explorer refreshes while workers write files. */
   const lastTreeSyncRef = useRef(0);
   const rafRef = useRef<number | null>(null);
@@ -356,6 +377,15 @@ export function useAxiom() {
   /** Tokens that cancel superseded background tasks (warm-up, chat search). */
   const warmupTokenRef = useRef(0);
   const searchSeqRef = useRef(0);
+  /**
+   * Monotonic generation for workspace operations (switch / clear / boot).
+   * When the user flips the project quickly, in-flight `workspace_info` /
+   * `workspace_tree` / `git_panel` / `recent_workspaces` responses from the
+   * old project can otherwise land AFTER the new ones and silently rewind
+   * the UI (the harness observed exactly that). Each operation bumps the
+   * counter and refresh helpers drop their results if the counter moved on.
+   */
+  const workspaceSeqRef = useRef(0);
 
   // ---------------------------------------------------------------- toasts
   function notify(text: string, kind: Toast["kind"] = "info") {
@@ -414,6 +444,16 @@ export function useAxiom() {
     return () => window.clearInterval(timer);
   }, [generating]);
 
+  // ---------------------------------------------------------- live plugins
+  // While the Plugins settings section is open, poll the disk so a folder the
+  // user drops into ~/.axiom/plugins appears without a restart. The bridge does
+  // the real discovery; we just refresh quietly (no toasts on the timer path).
+  useEffect(() => {
+    if (!settingsOpen || settingsSection !== "plugins") return;
+    const timer = window.setInterval(() => void refreshPluginsQuietly(), 2500);
+    return () => window.clearInterval(timer);
+  }, [settingsOpen, settingsSection]);
+
   // ------------------------------------------------------------ boot probes
   function setStep(id: string, state: BootStep["state"], detail: string | null = null) {
     setBootSteps((steps) => steps.map((step) => (step.id === id ? { ...step, state, detail } : step)));
@@ -436,9 +476,12 @@ export function useAxiom() {
     }
   }, []);
 
-  async function loadWorkspace() {
+  async function loadWorkspace(seq?: number) {
+    const captured = seq ?? workspaceSeqRef.current;
     try {
       const state = await request<{ current: ProjectInfo | null }>("workspace_info");
+      // Drop stale answers if the user switched projects while we were waiting.
+      if (captured !== workspaceSeqRef.current) return state;
       setWorkspace((w) => ({
         current: state.current,
         recent: w?.recent ?? [],
@@ -451,12 +494,14 @@ export function useAxiom() {
     }
   }
 
-  async function loadProjectList() {
+  async function loadProjectList(seq?: number) {
+    const captured = seq ?? workspaceSeqRef.current;
     try {
       const [recent, pinned] = await Promise.all([
         request<{ recent: ProjectInfo[] }>("recent_workspaces"),
         request<{ pinned: ProjectInfo[] }>("pinned_workspaces"),
       ]);
+      if (captured !== workspaceSeqRef.current) return;
       setWorkspace((w) => ({
         current: w?.current ?? null,
         recent: recent.recent,
@@ -488,28 +533,37 @@ export function useAxiom() {
     }
   }
 
-  async function loadTree(silent = false) {
+  async function loadTree(silent = false, seq?: number) {
+    const captured = seq ?? workspaceSeqRef.current;
     if (!silent) setTreeLoading(true);
     try {
-      const data = await request<{ tree: TreeNode[] }>("workspace_tree", { depth: 3 });
+      const data = await request<{ tree: TreeNode[] }>("workspace_tree", { depth: 8 });
+      // A workspace switch that landed while we were waiting means the tree
+      // we just fetched belongs to the previous project — discard it so the
+      // UI never briefly shows the old file structure for the new project.
+      if (captured !== workspaceSeqRef.current) return;
       setTree(data.tree ?? []);
     } catch {
+      if (captured !== workspaceSeqRef.current) return;
       setTree([]);
     } finally {
-      if (!silent) setTreeLoading(false);
+      if (!silent && captured === workspaceSeqRef.current) setTreeLoading(false);
     }
   }
 
-  async function loadGit() {
+  async function loadGit(seq?: number) {
+    const captured = seq ?? workspaceSeqRef.current;
     try {
       const data = await request<{
         project: ProjectInfo | null;
         status: { ok: boolean; content: string; error: string | null } | null;
         log: { ok: boolean; content: string; error: string | null } | null;
       }>("git_panel");
+      if (captured !== workspaceSeqRef.current) return;
       setGitStatus(data.status);
       setGitLog(data.log);
     } catch {
+      if (captured !== workspaceSeqRef.current) return;
       setGitStatus(null);
       setGitLog(null);
     }
@@ -693,17 +747,22 @@ export function useAxiom() {
 
       setStep("workspace", "running");
       try {
+        const seq = ++workspaceSeqRef.current;
         const ws = await request<{ current: ProjectInfo | null }>("workspace_info");
+        // A user-initiated switch can fire while we are still booting; in that
+        // case our workspace_info answer is for the project that was active at
+        // boot time and must not overwrite the user's current selection.
+        if (seq !== workspaceSeqRef.current) return;
         setWorkspace((prev) => ({
           current: ws.current,
           recent: prev?.recent ?? [],
           pinned: prev?.pinned ?? [],
         }));
         setStep("workspace", "ok", ws.current ? `${ws.current.name} · ${ws.current.kind}` : "без проекта");
-        void loadTree();
-        void loadGit();
+        void loadTree(false, seq);
+        void loadGit(seq);
         // Load recent/pinned projects after boot completes to avoid blocking startup
-        void loadProjectList();
+        void loadProjectList(seq);
       } catch {
         setStep("workspace", "ok", "готово");
       }
@@ -855,15 +914,27 @@ export function useAxiom() {
             void loadTree(true);
           }
           const progress = orchestrationProgress(event);
-          if (!progress) break;
-          setStatusText(progress.status);
-          const line = progress.line;
-          if (line) {
-            setMessages((list) =>
-              updateLive(list, (m) => {
-                m.content = m.content ? `${m.content}\n${line}` : line;
-              }),
-            );
+          if (progress) setStatusText(progress);
+          // The board is the primary rendering: every step is reduced into the
+          // typed state instead of being appended to the message text.
+          setMessages((list) =>
+            updateLive(list, (m) => {
+              if (!m.orchestration) return;
+              m.orchestration = applyOrchestrationEvent(m.orchestration, event);
+            }),
+          );
+          break;
+        }
+        case "task": {
+          if (event.task.scope !== taskScopeRef.current) break;
+          setTasks((list) => {
+            const existing = list.find((task) => task.id === event.task.id);
+            if (existing && existing.revision > event.task.revision) return list;
+            return [event.task, ...list.filter((task) => task.id !== event.task.id)];
+          });
+          if (taskActiveRef.current) {
+            setActiveTaskId(event.task_id);
+            setStatusText(`Задача: ${event.task.state}`);
           }
           break;
         }
@@ -948,29 +1019,41 @@ export function useAxiom() {
     orchestrationActiveRef.current = true;
     // «Подключается…» было бы неправдой: план и воркеры уже работают.
     setStatusText("Оркестрация: план…");
-    setMessages((list) => [...list, userMessage, liveAssistant()]);
+    setMessages((list) => {
+      const assistant = liveAssistant();
+      assistant.orchestration = emptyOrchestration(task);
+      return [...list, userMessage, assistant];
+    });
     try {
-      const result = await request<{
-        ok?: boolean;
-        error?: string;
-        cancelled?: boolean;
-        results?: { agent?: string; content?: string; error?: string; status?: string; provider_id?: string; model?: string }[];
-        review?: string;
-        approved?: boolean;
-        completed?: boolean;
-        verification?: { ok?: boolean; summary?: string; error?: string };
-        definition_of_done?: string[];
-        review_details?: { issues?: string[]; required_changes?: string[] };
-      }>("orchestrate", { text: task, limit: 5, max_iterations: 3 });
+      const result = await request<OrchestrationResult>("orchestrate", {
+        text: task,
+        limit: 5,
+        max_iterations: 3,
+      });
+      // The reply is the authority for the final board: it settles the agents,
+      // fills the reports/review/verification sections and writes the compact
+      // Markdown that survives a chat reload (history stores text only).
+      const finalize = (patch: OrchestrationResult) => {
+        setMessages((list) =>
+          list.map((item) => {
+            if (item.role !== "assistant" || !item.streaming) return item;
+            const board = applyOrchestrationResult(
+              item.orchestration ?? emptyOrchestration(task),
+              patch,
+            );
+            return {
+              ...item,
+              orchestration: board,
+              content: orchestrationMarkdown(board),
+              streaming: false,
+              createdAt: Date.now(),
+            };
+          }),
+        );
+      };
       if (result.cancelled || result.error === "cancelled") {
         // Esc / «Остановить» во время оркестрации — это не ошибка.
-        setMessages((list) =>
-          list.map((item) =>
-            item.role === "assistant" && item.streaming
-              ? { ...item, content: "Оркестрация остановлена пользователем.", streaming: false, createdAt: Date.now() }
-              : item,
-          ),
-        );
+        finalize({ cancelled: true });
         generatingRef.current = false;
         setGenerating(false);
         setStatusText(null);
@@ -979,32 +1062,24 @@ export function useAxiom() {
         return;
       }
       if (result.ok === false && result.error) {
-        failGeneration(new Error(result.error));
+        // Patch the error box first: `finalize` closes the streaming message,
+        // and `updateLive` only ever touches the trailing streaming one.
+        const message = result.error;
+        setMessages((list) =>
+          updateLive(list, (m) => {
+            m.error = { message, hint: null };
+          }),
+        );
+        finalize({ ok: false, error: message });
+        generatingRef.current = false;
+        setGenerating(false);
+        setStatusText(null);
+        setLiveState("error");
+        notify(message, "error");
+        void refreshChats();
         return;
       }
-      const verificationLine = result.verification
-        ? `## Verification\n${result.verification.summary ?? result.verification.error ?? "не запускалась"}`
-        : "## Verification\nне запускалась";
-      const done = result.completed ?? result.approved ?? false;
-      const report = [
-        "## Оркестрация завершена",
-        "",
-        ...(result.results ?? []).map((item) => `- **${item.agent ?? "агент"}** (\`${item.provider_id ?? "?"}${item.model ? `/${item.model}` : ""}\`): ${item.content ?? item.error ?? "нет отчёта"}`),
-        "",
-        `## Reviewer (${result.approved ? "APPROVED" : "REWORK"})\n${result.review ?? "Ответ не получен"}`,
-        ...(((result.review_details?.issues ?? []).length)
-          ? [`Issues: ${(result.review_details?.issues ?? []).join("; ")}`] : []),
-        ...(((result.review_details?.required_changes ?? []).length)
-          ? [`Required: ${(result.review_details?.required_changes ?? []).join("; ")}`] : []),
-        "",
-        verificationLine,
-        "",
-        `## Definition of Done\n${(result.definition_of_done ?? []).map((item) => `- ${item}`).join("\n")}`,
-        done ? "\nГотово. Проверка пройдена." : "\nЕсть замечания reviewer или verification не прошла.",
-      ].join("\n");
-      setMessages((list) => list.map((item) => item.role === "assistant" && item.streaming
-        ? { ...item, content: report, streaming: false, createdAt: Date.now() }
-        : item));
+      finalize(result);
       generatingRef.current = false;
       setGenerating(false);
       setStatusText(null);
@@ -1427,6 +1502,67 @@ export function useAxiom() {
     }
   }
 
+  async function refreshTasks() {
+    const seq = workspaceSeqRef.current;
+    try {
+      const rows = await request<Task[]>("tasks");
+      if (seq !== workspaceSeqRef.current) return;
+      setTasks((list) => rows.map((task) => {
+        const newer = list.find((item) => item.id === task.id && item.revision > task.revision);
+        return newer ?? task;
+      }));
+    } catch (err) {
+      notify(errorText(err), "error");
+    }
+  }
+
+  async function runTaskRequest(cmd: "task_start" | "task_resume", args: Record<string, unknown>): Promise<Task | null> {
+    if (generatingRef.current) {
+      notify("Генерация уже идёт — сначала остановите её", "error");
+      return null;
+    }
+    taskActiveRef.current = true;
+    setTaskRequestPending(true);
+    beginGeneration();
+    try {
+      const task = await request<Task>(cmd, args);
+      setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
+      return task;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    } finally {
+      taskActiveRef.current = false;
+      generatingRef.current = false;
+      setTaskRequestPending(false);
+      setActiveTaskId(null);
+      setGenerating(false);
+      setStatusText(null);
+      setLiveState("idle");
+      void loadTree();
+      void loadGit();
+    }
+  }
+
+  function startTask(goal: string): Promise<Task | null> {
+    return runTaskRequest("task_start", { goal });
+  }
+
+  function resumeTask(id: string, acknowledge = false): Promise<Task | null> {
+    return runTaskRequest("task_resume", { id, acknowledge });
+  }
+
+  async function cancelTask(id: string): Promise<boolean> {
+    try {
+      const result = await request<{ cancelled: boolean }>("task_cancel", { id });
+      await refreshTasks();
+      return result.cancelled;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return false;
+    }
+  }
+
   // ---------------------------------------------------------------- config
   async function saveConfig(patch: Partial<AxiomConfig>): Promise<boolean> {
     try {
@@ -1510,6 +1646,103 @@ export function useAxiom() {
     } catch (err) { notify(errorText(err), "error"); }
     finally { setProviderLoading(false); }
   }
+
+  async function loadPlugins() {
+    setPluginLoading(true);
+    try {
+      // discover_plugins is a live reload: it registers folders the user copied
+      // into ~/.axiom/plugins while the app was running (no restart needed),
+      // then returns the full, current plugin list.
+      const result = await request<{ discovered: string[]; plugins: PluginRow[] }>("discover_plugins");
+      setPluginRows(result.plugins);
+      for (const name of result.discovered) notify(`Найден плагин: ${name}`, "ok");
+      // Built-in catalogue: plugins shipped with AXIOM, not installed yet.
+      setBundledPlugins(await request<PluginRow[]>("bundled_plugins"));
+    } catch (err) { notify(errorText(err), "error"); }
+    finally { setPluginLoading(false); }
+  }
+
+  /** Install a built-in AXIOM plugin from the bundled catalogue (one click). */
+  async function installBundledPlugin(name: string): Promise<PluginInstallResult | null> {
+    setPluginLoading(true);
+    try {
+      const result = await request<PluginInstallResult>("install_bundled_plugin", { name });
+      setPluginRows((rows) => [
+        ...rows.filter((row) => row.name !== result.manifest.name),
+        result.manifest,
+      ]);
+      setBundledPlugins((rows) => rows.filter((row) => row.name !== name));
+      notify(`Встроенный плагин «${name}» установлен`, "ok");
+      return result;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    } finally { setPluginLoading(false); }
+  }
+
+  /** Quietly refresh plugins from disk (no toasts, no spinner) — used by polling. */
+  async function refreshPluginsQuietly() {
+    try {
+      const result = await request<{ discovered: string[]; plugins: PluginRow[] }>("discover_plugins");
+      setPluginRows(result.plugins);
+      for (const name of result.discovered) notify(`Найден плагин: ${name}`, "ok");
+    } catch {
+      // A transient bridge error must not spam the UI during background polling.
+    }
+  }
+
+  async function choosePluginFolder(): Promise<string | null> {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<string | null>("pick_folder");
+  }
+
+  async function installPluginFromFolder(path?: string): Promise<PluginInstallResult | null> {
+    setPluginLoading(true);
+    try {
+      const selected = path || await choosePluginFolder();
+      if (!selected) return null;
+      const result = await request<PluginInstallResult>("install_plugin", { path: selected });
+      setPluginRows((rows) => [
+        ...rows.filter((row) => row.name !== result.manifest.name),
+        result.manifest,
+      ]);
+      notify(`${result.name}: ${result.status === "updated" ? "обновлён" : "установлен"}`, "ok");
+      return result;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    } finally { setPluginLoading(false); }
+  }
+
+  async function togglePlugin(name: string, enabled: boolean): Promise<PluginRow | null> {
+    try {
+      const result = await request<{ name: string; enabled: boolean; ok: boolean }>("toggle_plugin", { name, enabled });
+      if (!result.ok) throw new Error(`Плагин «${name}» не найден`);
+      setPluginRows((rows) => rows.map((row) => row.name === name ? { ...row, enabled: result.enabled } : row));
+      notify(`${name}: ${result.enabled ? "включён" : "выключен"}`, "ok");
+      return pluginRows.find((row) => row.name === name)
+        ? { ...pluginRows.find((row) => row.name === name)!, enabled: result.enabled }
+        : null;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    }
+  }
+
+  async function removePlugin(name: string): Promise<boolean> {
+    try {
+      const result = await request<{ name: string; removed: boolean }>("remove_plugin", { name });
+      if (!result.removed) throw new Error(`Плагин «${name}» не найден`);
+      setPluginRows((rows) => rows.filter((row) => row.name !== name));
+      // A removed bundled plugin becomes available in the catalogue again.
+      setBundledPlugins(await request<PluginRow[]>("bundled_plugins"));
+      notify(`${name}: удалён`, "ok");
+      return true;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return false;
+    }
+  }
   async function providerTest(id: string) { try { const status = await request<string>("provider_test", { provider_id: id }); notify(`${id}: ${status}`, status === "error" ? "error" : "ok"); await loadProviders(); } catch (err) { notify(errorText(err), "error"); } }
   async function providerSaveSettings(id: string, apiKey: string, baseUrl: string) {
     try {
@@ -1530,6 +1763,39 @@ export function useAxiom() {
     notify(`Маршрут: ${providerId}/${model}`, "ok");
   }
   async function loadHarness() { try { setAgents(await request<AgentRow[]>("agents")); setProfiles(await request<{ active: string; items: { id: string; name: string; prompt: string }[] }>("profiles")); setTrajectory(await request<TrajectoryViewer>("trajectory")); } catch (err) { notify(errorText(err), "error"); } }
+
+  // ------------------------------------------------------------ search test
+  async function loadSearchProviders() {
+    try {
+      setSearchProviders(await request<SearchProviderChoice[]>("search_providers"));
+    } catch (err) {
+      notify(errorText(err), "error");
+    }
+  }
+
+  /** Run a real search probe (W1.2): honest Online/Offline, latency and errors. */
+  async function runSearchTest(query: string): Promise<SearchTestResult | null> {
+    setSearchTesting(true);
+    try {
+      const report = await request<SearchTestResult>("search_test", { query });
+      setSearchTestResult(report);
+      return report;
+    } catch (err) {
+      const failed: SearchTestResult = {
+        ok: false,
+        provider: "",
+        latency_ms: 0,
+        result_count: 0,
+        results: [],
+        error: errorText(err),
+        hint: null,
+      };
+      setSearchTestResult(failed);
+      return failed;
+    } finally {
+      setSearchTesting(false);
+    }
+  }
 
   function focusComposer() {
     composerRef.current?.focus();
@@ -1590,6 +1856,10 @@ export function useAxiom() {
         openSettings("providers");
         await loadProviders();
         return true;
+      case "/plugins":
+        openSettings("plugins");
+        await loadPlugins();
+        return true;
       case "/permissions":
         openSettings("tools");
         return true;
@@ -1642,6 +1912,12 @@ export function useAxiom() {
     bootedRef.current = true;
     void runBoot();
   }, []);
+
+  useEffect(() => {
+    taskScopeRef.current = workspace?.current?.path ?? null;
+    setTasks([]);
+    if (phase === "ready") void refreshTasks();
+  }, [workspace?.current?.path, phase]);
 
   useEffect(
     () =>
@@ -1726,16 +2002,51 @@ export function useAxiom() {
   }
 
   async function switchWorkspace(path: string) {
+    if (taskActiveRef.current) {
+      notify("Сначала остановите задачу", "error");
+      return;
+    }
+    // Bump the workspace generation BEFORE the round-trip so any in-flight
+    // loadTree / loadGit / loadWorkspace / loadProjectList from the previous
+    // project can no longer apply their results once we settle on the new one.
+    const seq = ++workspaceSeqRef.current;
+    // Optimistically clear UI artifacts from the previous project so the user
+    // sees the switch immediately instead of a brief overlap with the old tree.
+    // Keep the previous `current` until the backend confirms the new project —
+    // an extra optimistic `current: null` here caused React to briefly render
+    // the selector with the wrong label before the second update landed.
+    setOpenFile(null);
+    setTermHistory([]);
+    setPendingTerm(null);
+    setTree([]);
+    setTreeLoading(true);
+    setGitStatus(null);
+    setGitLog(null);
     try {
       const info = await request<ProjectInfo>("set_workspace", { path });
-      setWorkspace((w) => ({ current: info, recent: w?.recent ?? [], pinned: w?.pinned ?? [] }));
-      setOpenFile(null);
-      setTermHistory([]);
-      setPendingTerm(null);
-      await Promise.all([loadWorkspace(), loadTree(), loadGit(), refreshChats(), loadProjectList()]);
+      // Drop the response if another switch raced ahead while we awaited it.
+      if (seq !== workspaceSeqRef.current) return;
+      // Apply the new project immediately: a single, authoritative setState
+      // update is less prone to React 18 commit interleaving than an optimistic
+      // `current: null` followed by a second update (the harness observed the
+      // latter briefly leaving the DOM showing "Global Chat").
+      setWorkspace((w) => ({
+        ...(w ?? { recent: [], pinned: [] }),
+        current: info,
+      }));
+      await Promise.all([
+        loadWorkspace(seq),
+        loadTree(false, seq),
+        loadGit(seq),
+        refreshChats(),
+        loadProjectList(seq),
+      ]);
+      if (seq !== workspaceSeqRef.current) return;
+      setTreeLoading(false);
       await newChat();
       notify(`Проект: ${info.name} (${info.kind})`, "ok");
     } catch (err) {
+      setTreeLoading(false);
       notify(errorText(err), "error");
     }
   }
@@ -1780,16 +2091,33 @@ export function useAxiom() {
 
   /** Global Chat: drop the active project — no file/terminal tools, global history. */
   async function clearWorkspace() {
+    if (taskActiveRef.current) {
+      notify("Сначала остановите задачу", "error");
+      return;
+    }
+    // Bump the generation first so any pending tree/git load from the project
+    // being cleared can no longer overwrite the empty state we set locally.
+    const seq = ++workspaceSeqRef.current;
     try {
       await request("clear_workspace");
+      if (seq !== workspaceSeqRef.current) return;
       setOpenFile(null);
       setTermHistory([]);
       setPendingTerm(null);
       setTree([]);
       setGitStatus(null);
       setGitLog(null);
+      // One authoritative setState that drops `current` to null — avoids the
+      // double-update flicker the harness saw when an optimistic null was
+      // followed by a later workspace_info refresh.
+      setWorkspace((w) => ({
+        ...(w ?? { recent: [], pinned: [] }),
+        current: null,
+      }));
       setConfig(await request<AxiomConfig>("get_config"));
-      await Promise.all([loadWorkspace(), refreshChats(), loadProjectList()]);
+      if (seq !== workspaceSeqRef.current) return;
+      await Promise.all([loadWorkspace(seq), refreshChats(), loadProjectList(seq)]);
+      if (seq !== workspaceSeqRef.current) return;
       await newChat();
       notify("Глобальный чат: проект не активен", "ok");
     } catch (err) {
@@ -1984,6 +2312,13 @@ export function useAxiom() {
   // ---------------------------------------------------------------- commands
   return {
     // boot
+    tasks,
+    taskRequestPending,
+    activeTaskId,
+    startTask,
+    resumeTask,
+    cancelTask,
+    refreshTasks,
     phase,
     bootSteps,
     bootError,
@@ -2065,6 +2400,11 @@ export function useAxiom() {
     providerSaveSettings,
     providerDiscover,
     providerPickModel,
+    searchProviders,
+    loadSearchProviders,
+    runSearchTest,
+    searchTestResult,
+    searchTesting,
     agents,
     profiles,
     trajectory,
@@ -2126,6 +2466,14 @@ export function useAxiom() {
     status,
     statusError,
     loadTools,
+    pluginRows,
+    pluginLoading,
+    loadPlugins,
+    installPluginFromFolder,
+    togglePlugin,
+    removePlugin,
+    bundledPlugins,
+    installBundledPlugin,
     loadStatus,
     debugLog,
     composerRef,

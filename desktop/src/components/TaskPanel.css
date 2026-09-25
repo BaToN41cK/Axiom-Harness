@@ -1,0 +1,13 @@
+.task-panel { overflow-y: auto; padding: 14px; font-size: 12px; }
+.task-panel header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.task-panel header button { margin-left: auto; }
+.task-panel button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; }
+.task-panel textarea { width: 100%; min-height: 75px; resize: vertical; margin-bottom: 8px; }
+.task-panel p, .task-panel label { margin: 8px 0; }
+.task-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 12px; overflow-wrap: anywhere; }
+.task-card small { opacity: 0.7; }
+.task-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+.task-card ol { padding-left: 20px; }
+.task-card li { margin: 8px 0; }
+.task-card label { display: block; }
+.task-card button { margin-top: 10px; }

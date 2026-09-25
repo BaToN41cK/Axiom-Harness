@@ -9,6 +9,119 @@
 
 ## [Unreleased]
 
+### Added — Bundled system plugins (5 built-ins, W1.4)
+
+- new bundled catalogue at `src/axiom/plugins/bundled/` with 5 ready-to-use
+  system plugins, all disabled until the user installs them:
+  - `calculator` — safe AST-based expression evaluator (`calculate`; no `eval`,
+    supports sqrt/sin/cos/log/floor/ceil/pow and constants pi/e/tau);
+  - `datetime` — current time in any IANA time zone and date differences
+    (`current_time`, `date_diff`);
+  - `notes` — persistent tagged notebook in `~/.axiom/notes/notes.md`
+    (`note_add`, `note_list`);
+  - `texttools` — text statistics, case/slug/reverse transforms and
+    base64/base64url/hex/url/html encode+decode (`text_stats`,
+    `text_transform`, `encode_text`);
+  - `security` — UUID v4 generation, md5/sha1/sha256/sha512 checksums and
+    secrets-based strong passwords (`generate_uuid`, `hash_text`,
+    `generate_password`);
+- `PluginManifest` gained a persisted `bundled` flag; `PluginManager` gained
+  `bundled_manifests()` (validated catalogue of not-yet-installed built-ins)
+  and `install_bundled()` (atomic copy into `~/.axiom/plugins`, idempotent,
+  preserves enable state, loads real tools immediately);
+- bridge commands `bundled_plugins` and `install_bundled_plugin`; Desktop
+  settings show an "Встроенные плагины AXIOM" catalogue with one-click install
+  and a "встроенный" badge on installed ones; removing a built-in returns it
+  to the catalogue (Desktop and TUI);
+- TUI `/plugins` lists built-ins with `○ (built-in, not installed)`, `i`
+  installs the highlighted one without a folder path, `d` refuses to remove
+  uninstalled entries, and removal restores the catalogue entry;
+- 6 new unit tests (bundled catalogue, install/load/idempotence, unknown name,
+  removal round-trip) and 3 bridge integration tests (real catalogue listing,
+  install → tools live → toggle → remove → back in catalogue, name validation).
+
+### Added — Plugin Manager v0 Live Reload (W1.4)
+
+- `discover_plugins` bridge command is now a real live reload: it re-reads the
+  persisted registry, picks up folders the user copied into `~/.axiom/plugins`
+  while the app was running, and registers enabled plugins' real tools/skills,
+  returning both the newly discovered names and the full current plugin list;
+- Desktop `useAxiom.loadPlugins` calls `discover_plugins` (instead of the plain
+  `list_plugins`) and announces each newly found plugin; a background poll runs
+  every 2.5 s only while the Plugins settings section is open, so a manually
+  dropped folder appears without a restart (quiet path — no toasts on the timer);
+- TUI `/plugins` now runs `load_plugins()` before showing the panel, so the
+  terminal frontend also sees manually copied folders without a restart;
+- added 4 bridge integration tests: full install → list → toggle → remove
+  round-trip, idempotent reinstall, missing-path/unknown-name error shapes, and
+  `discover_plugins` picking up a manually dropped folder;
+- updated `docs/roadmap.md`: W1.4 status changed from PARTIAL to DONE. Verified
+  with `392 passed, 1 skipped`, Ruff, and the Desktop build.
+
+### Added — Live Thinking Phase and Elapsed Timer (W1.3)
+
+- added real elapsed timer to TUI StatusBar, AssistantMessage, and ReasoningPanel:
+  StatusBar and AssistantMessage now track `_started` wall-clock time when transitioning
+  to busy, display live `X.Xs` elapsed during active phases, and pass it to `status_line`;
+- replaced TUI AssistantMessage's `tick * 0.12` approximation with real
+  `elapsed_since(_started)` so `◌ Thinking 4.8s` shows honest wall-clock time;
+- ReasoningPanel title now shows live elapsed: `◌ THINKING · 4.8s` while active,
+  collapsing to `✓ THINKING · 4.8s` on completion (duration measured from first append);
+- added `elapsed` parameter to `shared.formatting.status_line()` (only displayed when
+  active and non-None); Desktop already had real elapsed timer via `elapsedMs` state;
+- added 5 deterministic tests for `status_line` elapsed behavior (active/inactive/None/zero/with-duration);
+- updated `docs/roadmap.md`: W1.3 status changed from PARTIAL to DONE, wave summary
+  updated to `1 partial, 3 done, 1 TODO`.
+
+### Added — Search Connectivity and a Real Search Test (W1.2)
+
+- added the validated `search_provider` config field (`auto`, `brave`,
+  `duckduckgo`, `searxng`, `wikipedia`): `auto` keeps the resilient
+  Brave → DuckDuckGo → SearXNG → Wikipedia chain, any other id pins a single
+  engine so a user can dodge a blocked provider;
+- added `build_search_provider()` / `search_provider_choices()` in
+  `core/search/multi.py` and `ChatSession.search_test()` — an honest connectivity
+  probe returning `ok`, the engine that answered, measured latency, result count
+  and the real error/hint instead of a fabricated "Online" state;
+- exposed `search_providers` and `search_test` bridge commands; `set_config`
+  now rebuilds the live search backend in place via `_rebuild_search_provider()`
+  so a provider/timeout change applies without a restart;
+- Desktop Tools settings gained an engine dropdown and a real test button
+  (status, latency, results or error); TUI gained `/searchtest` with a
+  `SearchTestPanel` and the `/status` panel now names the configured engine;
+- covered the builder, `search_test` success/timeout/empty-query paths, and the
+  two new bridge commands with deterministic tests (local fakes, no network).
+
+### Added — Configurable Accent and Panel Hover (W1.1)
+
+- added validated `accent` presets (`garnet`, `blue`, `teal`, `violet`) and the
+  `panel_hover` preference to `Config`, Desktop types, Settings, and the JSONL bridge;
+- applied the selected accent without restart to Desktop light/dark CSS variables and
+  the Textual theme, with hover highlighting independently switchable in both frontends;
+- recorded WCAG contrast checks for both semantic roles: light-mode foregrounds on white
+  are garnet `#9F3542` — 6.86:1, blue `#1F58DB` — 6.04:1, teal `#0D6D66` — 6.18:1,
+  violet `#7434DF` — 6.36:1; dark-mode foregrounds on `#0A0A0A` are garnet `#D27882`
+  — 6.36:1, blue `#6B9BFF` — 7.31:1, teal `#56B8AE` — 8.36:1, violet `#B18CFF`
+  — 7.60:1. Filled controls use separate dark tokens with white text; all meet AA 4.5:1;
+- added Config persistence and bridge round-trip coverage for both new fields.
+
+### Added — Persistent Task Runtime and Planner
+
+- added `core/tasks.py` with persistent `Task`/`TaskState`, atomic JSON checkpoints,
+  structured `TaskError`, changed-file tracking, verification reports and typed
+  `task.*` EventBus/trajectory events separate from chat history;
+- added `core/planner.py` with complexity thresholding, strict JSON plan validation,
+  definition-of-done criteria and bounded replan that preserves completed steps;
+- added `ChatSession` task lifecycle methods and bridge commands `task_start`,
+  `task_cancel`, `task_resume`, `task_state` and `tasks`;
+- added Desktop Task Panel for real task steps, tool outcomes, errors, checks,
+  cancellation and explicit acknowledgement before resuming an interrupted tool;
+- added process-group cleanup for cancelled terminal/verification subprocesses and
+  acceptance tests covering real file editing, pytest verification, restart/resume,
+  event ordering and no replay of completed tasks;
+- task completion remains conservative: missing checks, failed checks or a missing
+  reviewer verdict produce `waiting_for_user`, never a fabricated success.
+
 ### Added — Production-grade Verification Tools and Runtime Pipeline
 
 - added `VerificationTools` (`run_tests`, `run_linter`, `build_project`, `verify_changes`)
@@ -57,8 +170,7 @@
   in `data` for the trajectory viewer;
 - Desktop renders the live feed: the status pill shows
   «Оркестрация: coder — write_file index.html»/«думает…»/«пишет…»/«review…»/
-  «verification…», the message accumulates ▸/✓/✗/🔀/💭/✍/⚙ progress lines,
-  and the final report replaces them when the run finishes;
+  «verification…» instead of leaving the user on an unrelated status;
 - `/orchestrate` starts with «Оркестрация: план…» instead of a misleading
   «Подключается…» for the whole run (a normal `send` keeps its own statuses);
 - the explorer refreshes itself after an orchestration (and, throttled,
@@ -68,6 +180,26 @@
   `test_watch_orchestration_streams_live_trajectory_steps` and
   `tests/core/test_orchestrator_runtime_d.py` (live, non-duplicated worker
   tool, model, reasoning and prose events).
+
+### Added — Orchestration board in the Desktop chat
+
+- the emoji progress lines are gone: every `orchestration` event is now reduced
+  into a typed `LiveMessage.orchestration` state (`desktop/src/lib/orchestration.ts`)
+  instead of being appended to the message text;
+- new `OrchestrationBoard` renders that state: a header with the real task,
+  elapsed time and a phase rail (План → Работа → Review → Проверка → Итог),
+  adaptive worker cards (id, `provider/model`, live action, tool counters, its
+  own last thought/answer on demand) and a collapsible tool timeline with
+  category icons (read/write/search/web/fetch/terminal/git/folder/verification);
+- `subagent.reasoning`/`subagent.answer` no longer spam the feed: each worker
+  keeps only its latest segment, expanded per card;
+- the final sections are rendered as cards — agent reports (with provider/model
+  and tool counters), Reviewer verdict with `REWORK` issues/required changes,
+  Verification `PASSED`/`FAILED` and Definition of Done — instead of a Markdown
+  dump; a failed or cancelled run is surfaced explicitly;
+- `content` still carries a compact Markdown summary generated from the same
+  state, so a reloaded chat (history stores text only) stays readable and the
+  structured board remains the primary rendering.
 
 ### Fixed — Orchestrator runtime gaps
 

@@ -35,6 +35,7 @@ from axiom.core.mcp import MCPClient, MCPManager, MCPServer
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.orchestrator import Orchestrator
 from axiom.core.parallel import ParallelResult, run_parallel
+from axiom.core.planner import Planner, PlanStep, TaskPlan
 from axiom.core.plugins import PluginManifest, PluginRegistry
 from axiom.core.presets import AgentPreset, PresetStore, detect_mode
 from axiom.core.project_index import ProjectIndex, ProjectMemory, index_project
@@ -58,6 +59,7 @@ from axiom.core.sandbox import Sandbox
 from axiom.core.skills import Skill, SkillRegistry
 from axiom.core.state import GenerationState
 from axiom.core.state_machine import GenerationStateMachine
+from axiom.core.tasks import Task, TaskError, TaskEvent, TaskState, TaskStore
 from axiom.core.trajectory import Trajectory
 from axiom.core.trajectory_store import TrajectoryStore
 from axiom.core.verify import VerificationLoop
@@ -92,6 +94,14 @@ __all__ = [
     "Trajectory",
     "TrajectoryStore",
     "Orchestrator",
+    "PlanStep",
+    "Planner",
+    "Task",
+    "TaskError",
+    "TaskEvent",
+    "TaskPlan",
+    "TaskState",
+    "TaskStore",
     "ContextEngine",
     "VerificationLoop",
     "Sandbox",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleX, Terminal, TriangleAlert } from "lucide-react";
 import type { TerminalResult } from "../types";
 
 interface Props {
@@ -34,14 +34,30 @@ export default function TerminalPanel(props: Props) {
         {!enabled && <span className="term-off">выключен</span>}
       </div>
       <div className="term-body" ref={bodyRef}>
-        {history.map((h, i) => (
-          <div key={i} className="term-entry">
-            <div className="term-cmd"><span className="term-ps">›</span> {h.command}</div>
-            <pre className={"term-out" + (h.result.ok ? "" : " err")}>
-              {h.result.ok ? h.result.content : h.result.error ?? "(no output)"}
-            </pre>
-          </div>
-        ))}
+        {history.map((h, i) => {
+          const failed = !h.result.ok;
+          const exit = h.result.exit_code;
+          return (
+            <div key={i} className="term-entry">
+              <div className="term-cmd">
+                <span className="term-ps">›</span> {h.command}
+              </div>
+              <pre className={"term-out" + (failed ? " err" : "")}>
+                {h.result.ok ? h.result.content || "(no output)" : h.result.error ?? "(no output)"}
+              </pre>
+              {exit != null && (
+                <div className={"term-exit " + (exit === 0 ? "ok" : "err")}>
+                  {exit === 0 ? (
+                    <CircleCheck size={11} strokeWidth={2} />
+                  ) : (
+                    <CircleX size={11} strokeWidth={2} />
+                  )}
+                  <span>код {exit}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
         {pendingConfirm && (
           <div className="term-confirm">
             <TriangleAlert size={14} strokeWidth={1.9} />
