@@ -191,7 +191,7 @@ export default function Explorer(props: Props) {
       <div className="ex-root" title={root ?? ""}>
         {root ? (root.split(/[\\/]/).pop() ?? root) : "нет активного проекта"}
       </div>
-      <div className="ex-search">
+      <div className="ex-search" aria-busy={searchLoading}>
         <input
           value={search}
           onChange={(event) => onSearch(event.target.value)}

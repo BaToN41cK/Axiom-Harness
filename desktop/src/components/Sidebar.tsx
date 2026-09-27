@@ -76,6 +76,8 @@ export default function Sidebar(props: Props) {
   } = props;
 
   const dragging = useRef(false);
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (panelRef.current) panelRef.current.inert = !open; }, [open]);
   const lastWidth = useRef(width);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
@@ -120,6 +122,7 @@ export default function Sidebar(props: Props) {
     <>
       {drawer && open && <div className="sidebar-backdrop" onClick={onClose} />}
       <aside
+        ref={panelRef}
         className={"sidebar" + (open ? " open" : "") + (drawer ? " drawer" : "")}
         style={{ width: open ? width : 0, "--sidebar-w": `${width}px` } as CSSProperties}
       >

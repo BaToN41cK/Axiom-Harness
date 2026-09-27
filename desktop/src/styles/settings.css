@@ -1,0 +1,180 @@
+/* Settings only. Semantic palette, no overrides of other app dialogs. */
+.modal.axiom-settings {
+  width: min(880px, calc(100vw - 48px));
+  height: min(680px, calc(100vh - 64px));
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 32px);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  isolation: isolate;
+  /* Do not retain a transform containing block for nested confirmations. */
+  animation-fill-mode: backwards;
+}
+.axiom-settings .axiom-settings-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.axiom-settings .axiom-settings-head h2 { display: flex; align-items: center; gap: 14px; margin: 0; font-size: 13px; font-weight: 500; line-height: 1.4; }
+.axiom-settings .settings-wordmark { color: var(--text-muted); font: 10px var(--mono); letter-spacing: .14em; padding-right: 14px; border-right: 1px solid var(--border-default); }
+.axiom-settings .axiom-settings-workspace {
+  display: grid;
+  grid-template-columns: 174px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.axiom-settings .settings-nav {
+  padding: 14px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 12px;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+}
+.axiom-settings .settings-nav-group { display: flex; flex-direction: column; gap: 1px; }
+.axiom-settings .settings-nav-group-label { padding: 0 8px 4px; color: var(--text-muted); font-size: 10px; font-weight: 500; }
+.axiom-settings .settings-nav-item { min-height: 30px; padding: 6px 8px; gap: 8px; border-radius: 5px; font-size: 12px; box-shadow: none; }
+.axiom-settings .settings-nav-item.active { background: var(--accent-soft); color: var(--text-primary); box-shadow: inset 2px 0 var(--accent); }
+.axiom-settings .settings-nav-item.active .settings-nav-icon { color: var(--accent-text); }
+.axiom-settings .settings-main { min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 22px 24px; }
+.axiom-settings .settings-section-title { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; padding-bottom: 20px; }
+.axiom-settings .settings-section-title h3 { font-size: 16px; font-weight: 600; letter-spacing: -.015em; line-height: 1.4; margin: 0; }
+.axiom-settings .settings-section-title p { font-size: 11.5px; line-height: 1.5; color: var(--text-muted); margin: 5px 0 0; max-width: 500px; }
+.axiom-settings .settings-content { gap: 0; animation: fade-in 140ms ease; }
+.axiom-settings .settings-group-title { margin: 20px 0 0; padding: 0 0 6px; font-size: 11px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); }
+.axiom-settings .settings-group-title:first-child { margin-top: 0; }
+.axiom-settings .settings-row { padding: 11px 0; align-items: center; gap: 20px; border-bottom: 1px solid var(--border-subtle); border-radius: 0; }
+.axiom-settings .settings-row:focus-within { background: transparent; }
+.axiom-settings .settings-row-label { font-size: 12px; font-weight: 500; line-height: 1.45; }
+.axiom-settings .settings-row-hint { font-size: 11px; line-height: 1.5; color: var(--text-muted); margin-top: 3px; overflow-wrap: anywhere; }
+.axiom-settings .settings-row-control { min-width: 0; max-width: 52%; justify-content: flex-end; }
+.axiom-settings .settings-row-control:has(textarea) { width: 100%; max-width: none; }
+.axiom-settings .settings-row:has(textarea) { flex-wrap: wrap; }
+.axiom-settings .settings-row-control :is(input, select, textarea) {
+  width: 250px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+.axiom-settings .settings-row-control input[type="number"] { width: 116px; }
+.axiom-settings .settings-row-control textarea { width: 100%; min-height: 80px; resize: vertical; line-height: 1.6; }
+.axiom-settings .settings-row-control :is(input, select, textarea):focus { border-color: var(--accent-border); box-shadow: none; }
+.axiom-settings .btn { justify-content: center; font-size: 11.5px; padding: 6px 11px; min-height: 30px; border-radius: 5px; line-height: 1.4; box-shadow: none; white-space: nowrap; }
+.axiom-settings .btn.small { min-height: 28px; padding: 5px 9px; font-size: 11px; }
+.axiom-settings .btn:active { transform: none; }
+.axiom-settings .btn.ghost { background: transparent; border-color: var(--border-default); color: var(--text-secondary); }
+.axiom-settings .btn.primary { background: var(--accent-fill); color: #fff; }
+.axiom-settings .btn.primary:hover:not(:disabled) { background: var(--accent-dark); }
+.axiom-settings .btn.danger { color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 25%, var(--border-subtle)); background: transparent; }
+.axiom-settings .btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--bad) 8%, transparent); border-color: var(--bad); }
+.axiom-settings :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; box-shadow: none; }
+.axiom-settings button:disabled { opacity: .45; cursor: not-allowed; }
+.axiom-settings .switch { width: 36px; height: 21px; box-shadow: none; }
+.axiom-settings .switch-knob { width: 15px; height: 15px; }
+.axiom-settings .switch.on { background: var(--accent-fill); border-color: var(--accent-fill); box-shadow: none; }
+.axiom-settings .axiom-settings-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--border-subtle); background: var(--bg-secondary); }
+.axiom-settings .settings-save { min-width: 92px; }
+.axiom-settings .settings-save-hint { color: var(--text-muted); font-size: 11px; max-width: 220px; line-height: 1.5; margin-left: 6px; }
+.axiom-settings .settings-restart { border-color: transparent; padding-left: 0; }
+
+/* Quiet section surfaces shared by Providers, Plugins, Memory and Knowledge. */
+.axiom-settings :is(.provider-settings, .plugin-settings, .memory-settings) { display: flex; flex-direction: column; gap: 14px; }
+.axiom-settings .settings-card { padding: 0 0 18px; background: transparent; border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; }
+.axiom-settings .settings-card:last-child { border-bottom: 0; padding-bottom: 0; }
+.axiom-settings .settings-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.axiom-settings .settings-card-head h4 { margin: 0; font-size: 12px; font-weight: 500; }
+.axiom-settings .settings-field { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
+.axiom-settings .settings-field :is(input, select) { width: 100%; min-width: 0; padding: 7px 9px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-default); border-radius: 5px; font: inherit; }
+.axiom-settings .settings-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.axiom-settings .settings-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; }
+.axiom-settings .settings-card-foot > span, .axiom-settings .settings-inline-note { font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.axiom-settings .settings-inline-note { margin-top: 10px; }
+.axiom-settings .provider-summary { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--text-muted); font-size: 11px; margin-top: 8px; }
+.axiom-settings .provider-summary code { overflow-wrap: anywhere; }
+.axiom-settings .settings-status-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-muted); background: var(--bg-hover); padding: 3px 7px; border-radius: 4px; white-space: nowrap; font-weight: 500; }
+.axiom-settings .settings-status-pill.ready { color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+.axiom-settings .settings-status-pill.error { color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.axiom-settings .settings-section-head { padding: 0; border: 0; gap: 18px; align-items: center; }
+.axiom-settings .settings-section-head h3 { font-size: 12px; font-weight: 500; margin: 0; }
+.axiom-settings .settings-section-head p { max-width: none; margin-top: 5px; font-size: 11px; line-height: 1.5; color: var(--text-muted); }
+.axiom-settings .settings-count { color: var(--text-muted); margin-left: 5px; font: 11px var(--mono); }
+.axiom-settings .plugin-path-hint { margin-top: -8px; font-size: 11px; }
+.axiom-settings .plugin-list { gap: 0; margin: 0; border-top: 1px solid var(--border-subtle); }
+.axiom-settings .plugin-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 12px 0; background: transparent; border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; box-shadow: none; }
+.axiom-settings .plugin-card.plugin-card:is(:hover, :focus-within) { border-color: var(--border-subtle); box-shadow: none; }
+.axiom-settings .plugin-card-title { gap: 7px; font-size: 12px; }
+.axiom-settings .plugin-card-title strong { overflow-wrap: anywhere; }
+.axiom-settings .plugin-card-title .btn { order: 5; margin-left: 0 !important; }
+.axiom-settings .plugin-card-description { font-size: 11.5px; line-height: 1.5; margin-top: 5px; overflow-wrap: anywhere; }
+.axiom-settings .plugin-card-meta { line-height: 1.6; gap: 4px 12px; overflow-wrap: anywhere; }
+.axiom-settings .plugin-card-actions { gap: 9px; align-items: center; }
+.axiom-settings .plugin-status-dot { width: 6px; height: 6px; box-shadow: none; }
+.axiom-settings .plugin-card-readme { padding: 0; margin: 0; border: 0; max-height: none; min-height: 0; overflow: hidden; background: none; }
+.axiom-settings .plugin-card-readme pre { margin: 12px 0 0; padding: 12px; background: var(--bg-primary); border: 0; border-radius: 6px; font: 11.5px/1.7 var(--mono); color: var(--text-secondary); max-height: 260px; overflow: auto; }
+.axiom-settings .plugin-disclosure { max-height: none; }
+.axiom-settings .plugin-disclosure.open { max-height: none; }
+.axiom-settings .plugin-security-note { margin: 0; padding: 2px 0 2px 10px; border: 0; border-left: 2px solid var(--warn); border-radius: 0; background: transparent; color: var(--text-muted); font-size: 11px; line-height: 1.55; }
+.axiom-settings .settings-empty { padding: 24px; margin: 0; border: 1px dashed var(--border-default); background: transparent; line-height: 1.7; font-size: 12px; }
+.axiom-settings .memory-form { padding: 0 0 14px; border-bottom: 1px solid var(--border-subtle); border-radius: 0; background: transparent; gap: 10px; }
+.axiom-settings .memory-input { background: var(--bg-primary); border-color: var(--border-default); font-size: 12px; line-height: 1.6; padding: 10px 12px; }
+.axiom-settings .memory-form-controls { gap: 10px; }
+.axiom-settings .memory-form-controls .memory-input { flex: 1 1 180px; width: auto; min-width: 0; }
+.axiom-settings .memory-card { background: transparent; padding: 12px 0; border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; }
+.axiom-settings .memory-card-actions { flex-wrap: wrap; justify-content: flex-end; max-width: 45%; gap: 6px; }
+.axiom-settings .memory-badge { background: var(--bg-hover); border: 0; border-radius: 4px; }
+.axiom-settings .search-test-control { min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+.axiom-settings .search-test-control input { min-width: 0; flex: 1; }
+.axiom-settings .about-text, .axiom-settings .about-grid { max-width: none; }
+.axiom-settings .about-grid { gap: 12px; }
+.axiom-settings .about-grid > div { padding: 16px; background: var(--bg-tertiary); }
+.axiom-settings .about-grid b { font-size: 12px; margin-bottom: 6px; }
+.axiom-settings .about-grid span { font-size: 12px; line-height: 1.6; }
+
+/* Nested plugin confirmations are still Settings-local and keyboard scoped. */
+.axiom-settings .settings-confirm-backdrop { z-index: 2; }
+.axiom-settings .settings-confirm { width: 540px; max-height: calc(100vh - 64px); background: var(--bg-secondary); animation: none; box-shadow: var(--shadow-modal); }
+.axiom-settings .settings-confirm .modal-body { padding: 22px; gap: 12px; }
+.axiom-settings .settings-confirm .modal-body p { margin: 0; }
+.axiom-settings .settings-confirm .modal-head, .axiom-settings .settings-confirm .modal-foot { padding: 18px 22px; flex: none; }
+
+@media (max-width: 850px) {
+  .axiom-settings .axiom-settings-workspace { grid-template-columns: 174px minmax(0, 1fr); }
+  .axiom-settings .settings-main { padding: 20px; }
+  .axiom-settings .settings-save-hint { display: none; }
+  .axiom-settings .settings-row { gap: 16px; }
+  .axiom-settings .settings-field-grid { grid-template-columns: 1fr; }
+  .axiom-settings .plugin-card { grid-template-columns: minmax(0, 1fr); }
+  .axiom-settings .plugin-card-actions { justify-content: flex-end; }
+}
+@media (max-width: 600px) {
+  .modal.axiom-settings { width: calc(100vw - 24px); height: calc(100vh - 24px); max-height: calc(100vh - 24px); }
+  .axiom-settings .axiom-settings-head { padding: 10px 14px; }
+  .axiom-settings .axiom-settings-workspace { grid-template-columns: 142px minmax(0, 1fr); }
+  .axiom-settings .settings-nav { padding: 16px 8px; }
+  .axiom-settings .settings-nav-item { font-size: 11px; padding: 8px; gap: 6px; }
+  .axiom-settings .settings-nav-group-label { padding-left: 6px; font-size: 9px; }
+  .axiom-settings .settings-main { padding: 18px 14px; }
+  .axiom-settings .settings-row { flex-wrap: wrap; gap: 10px; }
+  .axiom-settings .settings-row-text { flex-basis: 100%; }
+  .axiom-settings .settings-row-control { max-width: 100%; }
+  .axiom-settings .settings-card { padding: 0 0 14px; }
+  .axiom-settings .settings-card-foot, .axiom-settings .settings-section-head { flex-wrap: wrap; }
+  .axiom-settings .axiom-settings-foot { padding: 12px; flex-wrap: wrap; }
+  .axiom-settings .settings-restart span { display: none; }
+  .axiom-settings .memory-card { flex-wrap: wrap; }
+  .axiom-settings .memory-card-actions { max-width: none; }
+  .axiom-settings .about-grid { grid-template-columns: 1fr; }
+}

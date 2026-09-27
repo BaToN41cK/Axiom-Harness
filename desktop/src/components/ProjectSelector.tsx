@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, FolderOpen, Globe, MessageSquare, Pin, X } from "lucide-react";
 import type { ProjectInfo } from "../types";
+import Presence from "./Presence";
+import { playUiSound } from "../lib/sound";
 
 interface Props {
   current: ProjectInfo | null;
@@ -39,7 +41,7 @@ export default function ProjectSelector(props: Props) {
     <div className="ws-selector" ref={ref}>
       <button
         className={"ws-current" + (current ? "" : " none")}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { playUiSound("panel"); setOpen((v) => !v); }}
         aria-haspopup="listbox"
         aria-expanded={open}
         title={current?.path ?? "Глобальный чат — проект не открыт"}
@@ -49,11 +51,11 @@ export default function ProjectSelector(props: Props) {
         ) : (
           <Globe size={14} strokeWidth={1.8} />
         )}
-        <span className="ws-name">{current?.name ?? "Global Chat"}</span>
+        <span className="ws-name" key={current?.path ?? "global"}>{current?.name ?? "Global Chat"}</span>
         {current && <span className="ws-kind">{current.kind}</span>}
         <ChevronDown size={13} strokeWidth={1.8} className={"chevron" + (open ? " open" : "")} />
       </button>
-      {open && (
+      <Presence open={open}>
         <div className="ws-menu" role="listbox">
           <div className="ws-menu-title">Проекты</div>
           {current && (
@@ -153,8 +155,9 @@ export default function ProjectSelector(props: Props) {
             <FolderOpen size={14} strokeWidth={1.8} /> Открыть проект…
           </button>
         </div>
-      )}
+      </Presence>
 
+      <Presence open={!!confirmRemove}>
       {confirmRemove && (
         <div className="modal-backdrop" onClick={() => setConfirmRemove(null)}>
           <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
@@ -187,6 +190,7 @@ export default function ProjectSelector(props: Props) {
           </div>
         </div>
       )}
+      </Presence>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import type { AxiomConfig } from "../types";
 import { matchingCommands, type SlashCommand } from "../lib/commands";
 import { readPromptHistory, writePromptHistory } from "../lib/composerStorage";
 import { formatCount } from "../lib/format";
+import Presence from "./Presence";
 
 interface Props {
   generating: boolean;
@@ -327,7 +328,7 @@ export default function Composer(props: Props) {
 
   return (
     <div className="composer-area" ref={containerRef}>
-      {mentionMatches.length > 0 && (
+      <Presence open={mentionMatches.length > 0}>
         <div className="mention-palette" role="listbox" aria-label="Файлы проекта">
           <div className="mention-palette-head">ФАЙЛЫ ПРОЕКТА</div>
           {mentionMatches.map((file, index) => (
@@ -342,8 +343,8 @@ export default function Composer(props: Props) {
             </button>
           ))}
         </div>
-      )}
-      {paletteOpen && (
+      </Presence>
+      <Presence open={paletteOpen}>
         <div className="palette" role="listbox">
           <div className="palette-head">COMMANDS</div>
           {commands.map((command, index) => (
@@ -366,9 +367,9 @@ export default function Composer(props: Props) {
             <CornerDownLeft size={11} strokeWidth={2} /> выбрать · ↑↓ навигация · Esc закрыть
           </div>
         </div>
-      )}
+      </Presence>
 
-      <div className={"composer" + (images.length > 0 ? " has-attach" : "")}>
+      <div className={"composer" + (images.length > 0 ? " has-attach" : "") + (generating ? " generating" : "")}>
         {notice && <div className="composer-notice">{notice}</div>}
 
         {images.length > 0 && (

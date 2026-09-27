@@ -23,6 +23,8 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { commandByName, matchingCommands, parseCommand } from "../lib/commands";
 import { clearComposerData, readComposerDraft, writeComposerDraft } from "../lib/composerStorage";
 import { stripDataUrl } from "../lib/format";
+import { playUiSound } from "../lib/sound";
+import type { UiSound } from "../lib/sound";
 import {
   activeProviderLabel,
   errorText,
@@ -106,6 +108,7 @@ export interface Toast {
   id: number;
   text: string;
   kind: "info" | "ok" | "error";
+  leaving?: boolean;
 }
 
 /** Real boot sequence — each label is a probe that really runs. */
@@ -293,10 +296,14 @@ export function useAxiom() {
   const workspaceSeqRef = useRef(0);
 
   // ---------------------------------------------------------------- toasts
-  function notify(text: string, kind: Toast["kind"] = "info") {
+  function notify(text: string, kind: Toast["kind"] = "info", sound?: UiSound) {
     const id = ++toastId;
     setToasts((list) => [...list.slice(-2), { id, text, kind }]);
+    window.setTimeout(() => setToasts((list) => list.map((t) => t.id === id ? { ...t, leaving: true } : t)), 4020);
     window.setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), 4200);
+    if (sound) playUiSound(sound);
+    else if (kind === "ok") playUiSound("success");
+    else if (kind === "error") playUiSound("error");
   }
 
   /**
@@ -744,6 +751,7 @@ export function useAxiom() {
   }
 
   function finishGeneration(metrics: DoneMetrics) {
+    const wasGenerating = generatingRef.current;
     flushText();
     setMessages((list) =>
       updateLive(list, (m) => {
@@ -761,6 +769,7 @@ export function useAxiom() {
     setStatusText(null);
     setLiveState(metrics.state);
     setLastMetrics(metrics);
+    if (wasGenerating && metrics.state === "completed") playUiSound("complete");
     notifyAnswerReady(metrics);
     void refreshChats();
   }
@@ -1059,6 +1068,7 @@ export function useAxiom() {
       notify("Ollama недоступна — проверьте подключение", "error");
       return;
     }
+    if (forceSearch) playUiSound("search");
     const userMessage: LiveMessage = {
       id: nextUserId(),
       role: "user",
@@ -1397,7 +1407,7 @@ export function useAxiom() {
       }));
       void loadModelDetail(model.name, model.providerId ?? providerId);
       if (providerId === "ollama" && config?.warmup_model) trackWarmup(name);
-      if (!silent) notify(`Активная модель: ${model.displayName}`, "ok");
+      if (!silent) notify(`Активная модель: ${model.displayName}`, "ok", "model");
       return true;
     } catch (err) {
       const message = errorText(err);
@@ -1638,12 +1648,14 @@ export function useAxiom() {
   }
 
   function toggleSidebar() {
+    playUiSound("panel");
     const next = !sidebarOpen;
     setSidebarOpen(next);
     if (config) void saveConfig({ sidebar_open: next });
   }
 
   function toggleRightPanel() {
+    playUiSound("panel");
     setRightPanelOpen((prev) => {
       const next = !prev;
       try {
@@ -1671,11 +1683,13 @@ export function useAxiom() {
 
   // --------------------------------------------------------------------- ui
   function openSettings(section: SettingsSection = "general") {
+    playUiSound("settings");
     setSettingsSection(section);
     setSettingsOpen(true);
   }
 
   function openOverlay(next: Overlay) {
+    if (next) playUiSound("panel");
     setOverlay(next);
     if (next === "tools") void loadTools();
     if (next === "status") void loadStatus();
@@ -1837,6 +1851,7 @@ export function useAxiom() {
   }
 
   async function searchKnowledge(query: string): Promise<KnowledgeHit[]> {
+    if (query.trim()) playUiSound("search");
     try {
       const hits = await request<KnowledgeHit[]>("knowledge_search", { query });
       setKnowledgeHits(hits);
@@ -1913,7 +1928,7 @@ export function useAxiom() {
     const selected = await selectModel(model, providerId, true);
     if (!selected) return;
     await refreshModels();
-    notify(`Маршрут: ${providerId}/${model}`, "ok");
+    notify(`Маршрут: ${providerId}/${model}`, "ok", "model");
   }
   async function loadHarness() { try { setAgents(await request<AgentRow[]>("agents")); setProfiles(await request<{ active: string; items: { id: string; name: string; prompt: string }[] }>("profiles")); setTrajectory(await request<TrajectoryViewer>("trajectory")); } catch (err) { notify(errorText(err), "error"); } }
 
@@ -1928,6 +1943,7 @@ export function useAxiom() {
 
   /** Run a real search probe (W1.2): honest Online/Offline, latency and errors. */
   async function runSearchTest(query: string): Promise<SearchTestResult | null> {
+    if (query.trim()) playUiSound("search");
     setSearchTesting(true);
     try {
       const report = await request<SearchTestResult>("search_test", { query });

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Cpu, Eye, Loader2, RefreshCw, Sparkles, Wrench, AlertTriangle, X } from "lucide-react";
 import type { ModelInfo } from "../types";
 import { formatBytes, formatCount } from "../lib/format";
+import Presence from "./Presence";
 
 interface Props {
   models: ModelInfo[];
@@ -142,7 +143,7 @@ export default function ModelSelector(props: Props) {
         aria-expanded={open}
       >
         {busy ? <Loader2 size={14} className="spin" /> : <Cpu size={14} strokeWidth={1.8} />}
-        <span className="model-btn-label">{active?.displayName ?? "Модель не выбрана"}</span>
+        <span className="model-btn-label" key={`${active?.providerId}/${active?.name}`}>{active?.displayName ?? "Модель не выбрана"}</span>
         {active && (
           <span className="model-btn-caps">
             {CAPABILITY_LABELS.filter((c) => active.capabilities.includes(c.key)).map((c) => (
@@ -153,7 +154,7 @@ export default function ModelSelector(props: Props) {
         <ChevronDown size={14} strokeWidth={1.8} className={"chevron" + (open ? " open" : "")} />
       </button>
 
-      {open && (
+      <Presence open={open}>
         <div className="model-menu" role="listbox">
           <div className="model-menu-head">
             <span>MODEL</span>
@@ -242,7 +243,7 @@ export default function ModelSelector(props: Props) {
             Данные: Ollama <code>/api/tags</code> · <code>/api/ps</code> · <kbd>Esc</kbd> закрыть
           </div>
         </div>
-      )}
+      </Presence>
     </div>
   );
 }

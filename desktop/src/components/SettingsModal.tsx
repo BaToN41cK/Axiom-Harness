@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useId, createContext, useContext, isValidElement, cloneElement } from "react";
 import {
   BookOpen,
   Brain,
@@ -28,6 +28,8 @@ import type {
   KnowledgeHit,
 } from "../types";
 import type { SettingsSection } from "../hooks/useAxiom";
+import { isSoundEnabled, playUiSound, setSoundEnabled } from "../lib/sound";
+import "../styles/settings.css";
 
 interface Props {
   config: AxiomConfig;
@@ -87,6 +89,79 @@ const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
   { key: "about", label: "О программе", icon: <Info size={14} strokeWidth={1.8} /> },
 ];
 
+const SECTION_GROUPS: { label: string; keys: SettingsSection[] }[] = [
+  { label: "Рабочее пространство", keys: ["general", "appearance", "chat", "shortcuts"] },
+  { label: "AI и подключения", keys: ["models", "providers", "tools"] },
+  { label: "Данные", keys: ["memory", "knowledge"] },
+  { label: "Расширения", keys: ["plugins"] },
+  { label: "Система", keys: ["about"] },
+];
+
+const SECTION_META: Record<SettingsSection, { eyebrow: string; title: string; description: string }> = {
+  general: { eyebrow: "Рабочее пространство", title: "Общие", description: "История, системный промпт и базовое поведение AXIOM." },
+  appearance: { eyebrow: "Рабочее пространство", title: "Вид", description: "Тема, акцент, плотность интерфейса и анимации." },
+  chat: { eyebrow: "Рабочее пространство", title: "Чат", description: "Как AXIOM отображает и сопровождает поток ответа." },
+  shortcuts: { eyebrow: "Рабочее пространство", title: "Горячие клавиши", description: "Быстрые команды для навигации и работы с диалогом." },
+  models: { eyebrow: "AI и подключения", title: "Модели", description: "Ollama endpoint, reasoning и параметры генерации." },
+  providers: { eyebrow: "AI и подключения", title: "Провайдеры", description: "Подключения к локальным моделям и внешним API." },
+  tools: { eyebrow: "AI и подключения", title: "Инструменты", description: "Web search, файлы, terminal и режимы разрешений." },
+  memory: { eyebrow: "Данные", title: "Память", description: "Сохранённые факты и предпочтения, доступные для редактирования." },
+  knowledge: { eyebrow: "Данные", title: "Знания", description: "Коллекции документов и цитируемый локальный поиск." },
+  plugins: { eyebrow: "Расширения", title: "Плагины", description: "Установка, доверие и управление кодом расширений AXIOM." },
+  about: { eyebrow: "Система", title: "О программе", description: "Локальная архитектура AXIOM и сведения о безопасности." },
+};
+
+/** Settings-local dialog focus scope; nested confirmations take precedence. */
+function useSettingsFocus(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const items = () => Array.from(node.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex='0']",
+    )).filter((el) => el.getClientRects().length && getComputedStyle(el).visibility !== "hidden" && !el.closest("[inert]"));
+    (items()[0] ?? node).focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => {
+      if (node.closest("[inert]") || node.querySelector('[role="dialog"]')) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        close.current();
+      }
+      if (event.key === "Tab") {
+        const list = items();
+        const first = list[0];
+        const last = list[list.length - 1];
+        if (!first) { event.preventDefault(); node.focus(); return; }
+        if (!node.contains(document.activeElement) || (event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
+  return ref;
+}
+
+function SettingsConfirmation({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const ref = useSettingsFocus(onClose);
+  const titleId = useId();
+  return <div className="modal-backdrop settings-confirm-backdrop" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+    <div className="modal confirm settings-confirm" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-head"><h2 id={titleId}>{title}</h2><button className="icon-btn" aria-label="Закрыть подтверждение" onClick={onClose}><X size={16} /></button></div>
+      {children}
+    </div>
+  </div>;
+}
+
 const SHORTCUTS: { keys: [string, string] | string; label: string }[] = [
   { keys: "Ctrl+N", label: "Новый разговор" },
   { keys: "Ctrl+B", label: "Показать/скрыть боковую панель" },
@@ -142,6 +217,9 @@ export default function SettingsModal({
   onSearchKnowledge,
 }: Props) {
   const [draft, setDraft] = useState<AxiomConfig>(config);
+  const dialogRef = useSettingsFocus(onClose);
+  const contentRef = useRef<HTMLElement>(null);
+  const meta = SECTION_META[section];
 
   useEffect(() => {
     setDraft(config);
@@ -155,13 +233,7 @@ export default function SettingsModal({
     if (section === "knowledge") void onLoadKnowledge();
   }, [section]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEffect(() => { if (contentRef.current) contentRef.current.scrollTop = 0; }, [section]);
 
   const set = <K extends keyof AxiomConfig>(key: K, value: AxiomConfig[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -212,30 +284,47 @@ export default function SettingsModal({
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h2>Настройки</h2>
-          <button className="icon-btn" onClick={onClose}>
+    <div className="modal-backdrop axiom-settings-backdrop" onClick={onClose}>
+      <div className="modal axiom-settings" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="axiom-settings-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
+        <div className="axiom-settings-head">
+          <h2 id="axiom-settings-title"><span className="settings-wordmark">AXIOM</span>Настройки</h2>
+          <button className="icon-btn" aria-label="Закрыть настройки" title="Закрыть (Esc)" onClick={onClose}>
             <X size={16} strokeWidth={1.8} />
           </button>
         </div>
 
-        <div className="modal-body settings-layout">
-          <nav className="settings-nav">
-            {SECTIONS.map((s) => (
-              <button
-                key={s.key}
-                className={"settings-nav-item" + (section === s.key ? " active" : "")}
-                onClick={() => setSection(s.key)}
-              >
-                <span className="settings-nav-icon">{s.icon}</span>
-                {s.label}
-              </button>
+        <div className="axiom-settings-workspace">
+          <nav className="settings-nav" aria-label="Разделы настроек">
+            {SECTION_GROUPS.map((group) => (
+              <div className="settings-nav-group" key={group.label}>
+                <div className="settings-nav-group-label">{group.label}</div>
+                {group.keys.map((key) => {
+                  const item = SECTIONS.find((candidate) => candidate.key === key)!;
+                  return (
+                    <button
+                      key={item.key}
+                      data-section={item.key}
+                      className={"settings-nav-item" + (section === item.key ? " active" : "")}
+                      aria-current={section === item.key ? "page" : undefined}
+                      onClick={() => { if (section !== item.key) playUiSound("panel"); setSection(item.key); }}
+                    >
+                      <span className="settings-nav-icon">{item.icon}</span>
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             ))}
           </nav>
 
-          <div className="settings-content">
+          <main className="settings-main" ref={contentRef} aria-labelledby="settings-section-heading" tabIndex={0}>
+            <header className="settings-section-title">
+              <div>
+                <h3 id="settings-section-heading">{meta.title}</h3>
+                <p>{meta.description}</p>
+              </div>
+            </header>
+            <div className="settings-content" key={section}>
             {section === "general" && <GeneralSection draft={draft} set={set} />}
             {section === "models" && <ModelsSection draft={draft} set={set} config={config} onRestartCore={onRestartCore} />}
             {section === "providers" && <ProvidersSection rows={providerRows} models={providerModels} loading={providerLoading} onSave={onProviderSaveSettings} onPickModel={onProviderPickModel} />}
@@ -258,19 +347,21 @@ export default function SettingsModal({
             {section === "appearance" && <AppearanceSection draft={draft} set={set} />}
             {section === "shortcuts" && <ShortcutsSection />}
             {section === "about" && <AboutSection />}
-          </div>
+            </div>
+          </main>
         </div>
 
-        <div className="modal-foot">
-          <button className="btn ghost" onClick={onRestartCore}>
+        <div className="axiom-settings-foot">
+          <button className="btn ghost settings-restart" onClick={onRestartCore}>
             <RefreshCw size={14} strokeWidth={1.8} />
             <span>Перезапустить ядро</span>
           </button>
+          <span className="settings-save-hint">{["providers", "plugins", "memory", "knowledge"].includes(section) ? "Действия в этом разделе применяются сразу" : "Параметры применяются кнопкой «Сохранить»"}</span>
           <div className="modal-foot-spacer" />
           <button className="btn ghost" onClick={onClose}>
             Отмена
           </button>
-          <button className="btn primary" onClick={save}>
+          <button className="btn primary settings-save" onClick={save}>
             Сохранить
           </button>
         </div>
@@ -302,26 +393,30 @@ function ProvidersSection({ rows, models, loading, onSave, onPickModel }: {
   useEffect(() => setBaseUrl(row?.base_url || ""), [row?.id, row?.base_url]);
   const providerModels = models.filter((item) => item.provider_id === selected);
   return <div className="provider-settings">
-    <Row label="Provider" hint="Статус и endpoint берутся из реального ProviderManager">
-      <select value={selected} onChange={(e) => { setSelected(e.target.value); setKey(""); }}>
-        {rows.map((item) => <option key={item.id} value={item.id}>{item.label} · {item.status}</option>)}
-      </select>
-    </Row>
-    <Row label="API key" hint="Ключ сохраняется локально и никогда не возвращается в GUI">
-      <input type="password" value={key} placeholder={row?.configured ? "•••••••• (сохранён)" : "не задан"} onChange={(e) => setKey(e.target.value)} />
-    </Row>
-    <Row label="Base URL" hint="Для OpenAI Compatible укажите endpoint с /v1, например http://localhost:8000/v1">
-      <div className="provider-endpoint"><input value={baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setBaseUrl(e.target.value)} /></div>
-    </Row>
-    <div className="settings-actions">
-      <button className="btn primary" disabled={!row || loading} onClick={() => void onSave(selected, key, baseUrl.trim())}>Сохранить</button>
-          </div>
-    <Row label="Модель маршрута" hint="Выбранная модель будет реально использоваться следующим запросом">
-      <select value="" onChange={(e) => { if (e.target.value) void onPickModel(selected, e.target.value); }}>
+    <div className="settings-card provider-picker-card">
+      <div className="settings-card-head">
+        <h4>Подключение</h4>
+        {row && <span className="settings-status-pill">{row.status}</span>}
+      </div>
+      <label className="settings-field"><span>Провайдер</span><select value={selected} onChange={(e) => { setSelected(e.target.value); setKey(""); }}>
+        {rows.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+      </select></label>
+      {row && <div className="provider-summary"><span>{row.configured ? "Подключение настроено" : "Требуется настройка"}</span><code>{row.base_url || "endpoint не задан"}</code></div>}
+    </div>
+    <div className="settings-card">
+      <div className="settings-field-grid">
+        <label className="settings-field"><span>API key</span><input type="password" value={key} placeholder={row?.configured ? "•••••••• (сохранён)" : "Не задан"} onChange={(e) => setKey(e.target.value)} /></label>
+        <label className="settings-field"><span>Base URL</span><input value={baseUrl} spellCheck={false} placeholder="https://api.example.com/v1" onChange={(e) => setBaseUrl(e.target.value)} /></label>
+      </div>
+      <div className="settings-card-foot"><span>Пустой ключ — оставить текущий. Endpoint: /v1.</span><button className="btn primary" disabled={!row || loading} onClick={() => void onSave(selected, key, baseUrl.trim())}>{loading ? "Проверка…" : "Сохранить и проверить"}</button></div>
+    </div>
+    <div className="settings-card">
+      <label className="settings-field"><span>Модель для следующих запросов</span><select value="" onChange={(e) => { if (e.target.value) void onPickModel(selected, e.target.value); }}>
         <option value="">Выберите модель…</option>
         {providerModels.map((item) => <option key={item.id} value={item.model}>{item.label} · {item.capabilities.join(", ")}</option>)}
-      </select>
-    </Row>
+      </select></label>
+      {!providerModels.length && <div className="settings-inline-note">Модели появятся после проверки подключения.</div>}
+    </div>
   </div>;
 }
 
@@ -346,6 +441,7 @@ function PluginsSection({
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [pendingTrust, setPendingTrust] = useState<{ plugin: PluginRow | null; action: "install" | "run"; run: () => Promise<unknown> } | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<PluginRow | null>(null);
 
   const requestTrust = (plugin: PluginRow | null, action: "install" | "run", run: () => Promise<unknown>) => {
     setPendingTrust({ plugin, action, run });
@@ -365,8 +461,7 @@ function PluginsSection({
     <div className="plugin-settings">
       <div className="settings-section-head">
         <div>
-          <h3>Плагины</h3>
-          <p>Плагин — это папка с manifest.json и plugin.py. Код запускается в процессе AXIOM.</p>
+          <h3>Установленные <span className="settings-count">{rows.length}</span></h3>
         </div>
         <button className="btn primary" disabled={loading} onClick={() => requestTrust(null, "install", onInstall)}>
           {loading ? "Загрузка…" : "Установить из папки"}
@@ -386,14 +481,16 @@ function PluginsSection({
                   <span className={"plugin-status-dot" + (plugin.enabled ? " enabled" : "")} />
                   <strong>{plugin.name}</strong>
                   <span className="plugin-version">v{plugin.version}</span>
+                  <span className={"settings-status-pill " + (plugin.enabled ? "ready" : "idle")}>{plugin.enabled ? "Включён" : "Выключен"}</span>
                   {plugin.bundled && <span className="plugin-version">встроенный</span>}
                   {plugin.readme && (
                     <button
                       className="btn ghost small"
                       onClick={() => toggleExpand(plugin.name)}
+                      aria-expanded={expanded === plugin.name}
                       style={{ marginLeft: "auto" }}
                     >
-                      {expanded === plugin.name ? "Скрыть документацию" : "Показать документацию"}
+                      <BookOpen size={13} />{expanded === plugin.name ? "Скрыть" : "Документация"}
                     </button>
                   )}
                 </div>
@@ -405,9 +502,11 @@ function PluginsSection({
                   {plugin.tools.length > 0 && <span>Инструменты: {plugin.tools.join(", ")}</span>}
                   {plugin.skills.length > 0 && <span>Skills: {plugin.skills.join(", ")}</span>}
                 </div>
-                {expanded === plugin.name && plugin.readme && (
+                {plugin.readme && (
+                  <div className={"plugin-disclosure" + (expanded === plugin.name ? " open" : "")} aria-hidden={expanded !== plugin.name}>
                   <div className="plugin-card-readme">
                     <pre>{plugin.readme}</pre>
+                  </div>
                   </div>
                 )}
               </div>
@@ -424,7 +523,7 @@ function PluginsSection({
                 >
                   <span className="switch-knob" />
                 </button>
-                <button className="btn danger ghost" disabled={loading} onClick={() => void onRemove(plugin.name)}>
+                <button className="btn danger ghost" disabled={loading} aria-label={`Удалить плагин ${plugin.name}`} onClick={() => setPendingRemove(plugin)}>
                   Удалить
                 </button>
               </div>
@@ -437,8 +536,8 @@ function PluginsSection({
         <>
           <div className="settings-section-head">
             <div>
-              <h3>Встроенные плагины AXIOM</h3>
-              <p>Поставляются вместе с AXIOM и отключены по умолчанию — установите те, что нужны, и включайте/выключайте их одним переключателем.</p>
+              <h3>Каталог AXIOM <span className="settings-count">{bundled.length}</span></h3>
+              <p>Встроенные расширения. После установки остаются выключенными.</p>
             </div>
           </div>
           <div className="plugin-list">
@@ -454,9 +553,10 @@ function PluginsSection({
                       <button
                         className="btn ghost small"
                         onClick={() => toggleExpand(plugin.name)}
+                        aria-expanded={expanded === plugin.name}
                         style={{ marginLeft: "auto" }}
                       >
-                        {expanded === plugin.name ? "Скрыть документацию" : "Показать документацию"}
+                        <BookOpen size={13} />{expanded === plugin.name ? "Скрыть" : "Документация"}
                       </button>
                     )}
                   </div>
@@ -467,9 +567,11 @@ function PluginsSection({
                     {plugin.author && <span>Автор: {plugin.author}</span>}
                     {plugin.tools.length > 0 && <span>Инструменты: {plugin.tools.join(", ")}</span>}
                   </div>
-                  {expanded === plugin.name && plugin.readme && (
+                  {plugin.readme && (
+                    <div className={"plugin-disclosure" + (expanded === plugin.name ? " open" : "")} aria-hidden={expanded !== plugin.name}>
                     <div className="plugin-card-readme">
                       <pre>{plugin.readme}</pre>
+                    </div>
                     </div>
                   )}
                 </div>
@@ -489,9 +591,7 @@ function PluginsSection({
         Включение плагина означает согласие запускать его код в этой и следующих сессиях, пока плагин включён.
       </div>
       {pendingTrust && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setPendingTrust(null)}>
-          <div className="modal confirm" role="dialog" aria-modal="true" aria-labelledby="plugin-trust-title" onClick={(event) => event.stopPropagation()}>
-            <div className="modal-head"><h2 id="plugin-trust-title">Подтвердить доверие к плагину</h2></div>
+        <SettingsConfirmation title="Подтвердить доверие к плагину" onClose={() => setPendingTrust(null)}>
             <div className="modal-body">
               <strong>{pendingTrust.plugin ? `${pendingTrust.plugin.name} v${pendingTrust.plugin.version}` : "Плагин из выбранной папки"}</strong>
               {pendingTrust.plugin?.description && <p className="about-text">{pendingTrust.plugin.description}</p>}
@@ -506,8 +606,13 @@ function PluginsSection({
               <div className="modal-foot-spacer" />
               <button className="btn danger" onClick={() => void acceptTrust()}>{pendingTrust.action === "run" ? "Доверять и запустить" : "Подтвердить установку"}</button>
             </div>
-          </div>
-        </div>
+        </SettingsConfirmation>
+      )}
+      {pendingRemove && (
+        <SettingsConfirmation title="Удалить плагин?" onClose={() => setPendingRemove(null)}>
+          <div className="modal-body"><strong>{pendingRemove.name}</strong><p className="about-text">Плагин будет удалён из AXIOM. Его инструменты и расширения станут недоступны. Для повторного использования потребуется установка.</p></div>
+          <div className="modal-foot"><button className="btn ghost" onClick={() => setPendingRemove(null)}>Отмена</button><div className="modal-foot-spacer" /><button className="btn danger" onClick={() => { const name = pendingRemove.name; setPendingRemove(null); void onRemove(name); }}>Удалить плагин</button></div>
+        </SettingsConfirmation>
       )}
     </div>
   );
@@ -804,23 +909,35 @@ function KnowledgeSection({
   );
 }
 
+const RowLabel = createContext<string | undefined>(undefined);
+
+function GroupTitle({ children }: { children: ReactNode }) {
+  return <h4 className="settings-group-title">{children}</h4>;
+}
+
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  const id = useId();
+  const control = isValidElement(children) && typeof children.type === "string" && ["input", "select", "textarea"].includes(children.type)
+    ? cloneElement(children as React.ReactElement<{ "aria-labelledby"?: string; "aria-describedby"?: string }>, { "aria-labelledby": id, "aria-describedby": hint ? `${id}-hint` : undefined })
+    : children;
   return (
     <div className="settings-row">
       <div className="settings-row-text">
-        <div className="settings-row-label">{label}</div>
-        {hint && <div className="settings-row-hint">{hint}</div>}
+        <div className="settings-row-label" id={id}>{label}</div>
+        {hint && <div className="settings-row-hint" id={`${id}-hint`}>{hint}</div>}
       </div>
-      <div className="settings-row-control">{children}</div>
+      <div className="settings-row-control"><RowLabel.Provider value={label}>{control}</RowLabel.Provider></div>
     </div>
   );
 }
 
-function Toggle({ value, onChange }: { value: boolean | null; onChange: (v: boolean) => void }) {
+function Toggle({ value, onChange, label }: { value: boolean | null; onChange: (v: boolean) => void; label?: string }) {
+  const rowLabel = useContext(RowLabel);
   return (
     <button
       className={"switch" + (value ? " on" : "")}
       role="switch"
+      aria-label={label ?? rowLabel}
       aria-checked={!!value}
       onClick={() => onChange(!value)}
     >
@@ -832,6 +949,7 @@ function Toggle({ value, onChange }: { value: boolean | null; onChange: (v: bool
 function GeneralSection({ draft, set }: SectionProps) {
   return (
     <>
+      <GroupTitle>История и хранение</GroupTitle>
       <Row label="Сохранять историю" hint="Разговоры хранятся локально в ~/.axiom">
         <Toggle value={draft.save_history} onChange={(v) => set("save_history", v)} />
       </Row>
@@ -844,6 +962,7 @@ function GeneralSection({ draft, set }: SectionProps) {
           onChange={(e) => set("history_limit", Number(e.target.value))}
         />
       </Row>
+      <GroupTitle>Поведение ассистента</GroupTitle>
       <Row label="Temperature" hint="Пусто — значение модели по умолчанию">
         <input
           type="number"
@@ -870,6 +989,7 @@ function GeneralSection({ draft, set }: SectionProps) {
 function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { config: AxiomConfig; onRestartCore: () => void }) {
   return (
     <>
+      <GroupTitle>Подключение к Ollama</GroupTitle>
       <Row label="Ollama URL" hint={`Текущее соединение: ${config.ollama_url}`}>
         <input
           value={draft.ollama_url}
@@ -877,6 +997,7 @@ function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { c
           onChange={(e) => set("ollama_url", e.target.value)}
         />
       </Row>
+      <GroupTitle>Рассуждение и генерация</GroupTitle>
       <Row label="Think-режим" hint="Уровень рассуждений: авто — решает ядро по запросу">
         <select
           value={
@@ -915,6 +1036,7 @@ function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { c
           <option value="deep">Глубокий</option>
         </select>
       </Row>
+      <GroupTitle>Память и лимиты</GroupTitle>
       <Row label="Прогрев модели" hint="Загрузить модель в память сразу после старта">
         <Toggle value={draft.warmup_model} onChange={(v) => set("warmup_model", v)} />
       </Row>
@@ -960,6 +1082,7 @@ function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { c
 function ChatSection({ draft, set }: SectionProps) {
   return (
     <>
+      <GroupTitle>Отображение ответа</GroupTitle>
       <Row label="Markdown" hint="Рендеринг ответов в Markdown с подсветкой кода">
         <Toggle value={draft.render_markdown} onChange={(v) => set("render_markdown", v)} />
       </Row>
@@ -972,6 +1095,7 @@ function ChatSection({ draft, set }: SectionProps) {
       <Row label="Автоскролл" hint="Следить за потоком генерации">
         <Toggle value={draft.auto_scroll} onChange={(v) => set("auto_scroll", v)} />
       </Row>
+      <GroupTitle>Контекст и метрики</GroupTitle>
       <Row label="Метрики ответа" hint="Время, токены, скорость после генерации">
         <Toggle value={draft.show_metrics} onChange={(v) => set("show_metrics", v)} />
       </Row>
@@ -1007,6 +1131,7 @@ function ToolsSection({
   const [testQuery, setTestQuery] = useState("AXIOM local AI");
   return (
     <>
+      <GroupTitle>Поиск в интернете</GroupTitle>
       <Row label="Веб-поиск" hint="Инструмент поиска в интернете (требует сеть, остальное — локально)">
         <Toggle value={draft.web_search_enabled} onChange={(v) => set("web_search_enabled", v)} />
       </Row>
@@ -1029,6 +1154,7 @@ function ToolsSection({
         <div className="search-test-control">
           <input
             value={testQuery}
+            aria-label="Запрос для проверки веб-поиска"
             spellCheck={false}
             placeholder="запрос"
             onChange={(e) => setTestQuery(e.target.value)}
@@ -1066,6 +1192,7 @@ function ToolsSection({
           ))}
         </div>
       )}
+      <GroupTitle>Доступ и разрешения</GroupTitle>
       <Row
         label="Файлы проекта"
         hint="Разрешить модели читать и редактировать файлы этой папки: list_files, read_file, write_file, edit_file"
@@ -1092,6 +1219,7 @@ function ToolsSection({
       <Row label="Терминал AI" hint="Разрешить модели выполнять команды в папке проекта">
         <Toggle value={draft.terminal_enabled} onChange={(v) => set("terminal_enabled", v)} />
       </Row>
+      <GroupTitle>Лимиты веб-поиска</GroupTitle>
       <Row label="Источников на запрос" hint="Сколько результатов возвращает поиск">
         <input
           type="number"
@@ -1137,8 +1265,10 @@ const ACCENT_LABELS: Record<AxiomConfig["accent"], string> = {
 };
 
 function AppearanceSection({ draft, set }: SectionProps) {
+  const [soundEnabled, setSoundEnabledState] = useState(isSoundEnabled);
   return (
     <>
+      <GroupTitle>Цвет и оформление</GroupTitle>
       <Row label="Тема">
         <select
           value={draft.theme}
@@ -1164,9 +1294,21 @@ function AppearanceSection({ draft, set }: SectionProps) {
       <Row label="Подсветка панелей" hint="Выделять строки и кнопки панели при наведении">
         <Toggle value={draft.panel_hover} onChange={(v) => set("panel_hover", v)} />
       </Row>
+      <GroupTitle>Движение и звук</GroupTitle>
       <Row label="Анимации" hint="Плавные переходы интерфейса">
         <Toggle value={draft.animations} onChange={(v) => set("animations", v)} />
       </Row>
+      <Row label="Тихие UI-звуки" hint="Выключены по умолчанию. Применяется сразу, только в desktop UI. Без звука при вводе текста.">
+        <Toggle
+          value={soundEnabled}
+          label="Тихие UI-звуки"
+          onChange={(value) => {
+            setSoundEnabledState(value);
+            setSoundEnabled(value);
+          }}
+        />
+      </Row>
+      <GroupTitle>Плотность и панели</GroupTitle>
       <Row label="Плотность" hint="Отступы сообщений и списков">
         <select
           value={draft.density}

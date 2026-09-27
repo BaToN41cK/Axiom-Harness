@@ -10,6 +10,8 @@ import MessageList from "./components/MessageList";
 import Composer from "./components/Composer";
 import ModelSelector from "./components/ModelSelector";
 import { useAxiom } from "./hooks/useAxiom";
+import Presence from "./components/Presence";
+import { installSoundActivation, playUiSound } from "./lib/sound";
 
 import Explorer from "./components/Explorer";
 import GitPanel from "./components/GitPanel";
@@ -29,7 +31,13 @@ const THEME_LABELS: Record<ThemePreset, string> = {
 };
 
 function WorkbenchSide({ store: s }: { store: AxiomStore }) {
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => { if (panelRef.current) panelRef.current.inert = !s.rightPanelOpen; }, [s.rightPanelOpen]);
   const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks">("files");
+  const pickTab = (next: typeof tab) => {
+    if (tab !== next) playUiSound("panel");
+    setTab(next);
+  };
   // Drag-to-resize of the tools panel (§8). Width lives in the store and is
   // persisted; the CSS transition is switched off while dragging (body.resizing).
   const dragging = useRef(false);
@@ -60,24 +68,25 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   };
   return (
     <aside
+      ref={panelRef}
       className="workbench-side"
       style={{ "--side-w": `${s.rightPanelWidth}px` } as CSSProperties}
     >
       <div className="side-resizer" onMouseDown={startDrag} title="Изменить размер панели" />
       <div className="side-tabs">
-        <button className={tab === "files" ? "active" : ""} onClick={() => setTab("files")}>
+        <button className={tab === "files" ? "active" : ""} onClick={() => pickTab("files")}>
           <Folder size={13} strokeWidth={1.8} />
           <span>Файлы</span>
         </button>
-        <button className={tab === "terminal" ? "active" : ""} onClick={() => setTab("terminal")}>
+        <button className={tab === "terminal" ? "active" : ""} onClick={() => pickTab("terminal")}>
           <TerminalIcon size={13} strokeWidth={1.8} />
           <span>Терминал</span>
         </button>
-        <button className={tab === "git" ? "active" : ""} onClick={() => setTab("git")}>
+        <button className={tab === "git" ? "active" : ""} onClick={() => pickTab("git")}>
           <GitBranch size={13} strokeWidth={1.8} />
           <span>Git</span>
         </button>
-        <button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}>
+        <button className={tab === "tasks" ? "active" : ""} onClick={() => pickTab("tasks")}>
           <ListChecks size={13} strokeWidth={1.8} /><span>Задачи</span>
         </button>
       </div>
@@ -142,6 +151,7 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
 
 export default function App() {
   const s = useAxiom();
+  useEffect(installSoundActivation, []);
 
   // Reflect the configured theme on <html>; styles.css owns the complete palette.
   // The coordinated fade is enabled only for the duration of a theme switch.
@@ -153,7 +163,7 @@ export default function App() {
   const nextTheme = THEME_ORDER[(themeIndex + 1) % THEME_ORDER.length];
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.add("theme-anim");
+    if (root.dataset.theme) root.classList.add("theme-anim");
     root.dataset.theme = theme;
     root.dataset.accent = s.config?.accent ?? "garnet";
     root.classList.toggle("no-panel-hover", s.config?.panel_hover === false);
@@ -166,11 +176,11 @@ export default function App() {
     document.documentElement.classList.toggle("no-anim", s.config?.animations === false);
   }, [s.config?.animations]);
 
-  const toasts = s.toasts.map((toast) => (
-    <div key={toast.id} className={"toast toast-" + toast.kind}>
+  const toasts = <div className="toast-stack" aria-live="polite" aria-atomic="false">{s.toasts.map((toast) => (
+    <div key={toast.id} className={"toast toast-" + toast.kind + (toast.leaving ? " leaving" : "")}>
       {toast.text}
     </div>
-  ));
+  ))}</div>;
 
   // The boot sequence is a real screen: it shows while the probes run and
   // explains a failure instead of leaving an empty window behind.
@@ -185,7 +195,8 @@ export default function App() {
           onRestartCore={() => void s.restartCore()}
           onOpenSettings={() => s.openSettings()}
         />
-        {s.settingsOpen && s.config && (
+        <Presence open={s.settingsOpen && !!s.config}>
+        {s.config && (
                    <SettingsModal
            config={s.config}
            section={s.settingsSection}
@@ -231,6 +242,7 @@ export default function App() {
            searchTesting={s.searchTesting}
           />
         )}
+        </Presence>
         {toasts}
       </div>
     );
@@ -379,7 +391,8 @@ export default function App() {
 
       <ConfirmDialog pending={s.pendingPermission} onDecision={s.respondPermission} />
 
-      {s.settingsOpen && s.config && (
+      <Presence open={s.settingsOpen && !!s.config}>
+      {s.config && (
                  <SettingsModal
            config={s.config}
            section={s.settingsSection}
@@ -426,6 +439,9 @@ export default function App() {
          />
       )}
 
+      </Presence>
+
+      <Presence open={!!s.overlay}>
       <OverlayPanel
         overlay={s.overlay}
         onClose={() => s.setOverlay(null)}
@@ -440,6 +456,7 @@ export default function App() {
         providers={s.providerRows}
         trajectory={s.trajectory}
       />
+      </Presence>
 
       {toasts}
     </div>

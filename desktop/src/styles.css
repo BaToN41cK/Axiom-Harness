@@ -55,6 +55,9 @@
   --sidebar-w: 268px;
   --shadow-panel: 0 18px 42px rgba(0, 0, 0, 0.38);
   --shadow-modal: 0 24px 72px rgba(0, 0, 0, 0.58);
+  --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-fast: 140ms;
+  --motion-panel: 240ms;
 }
 
 /* AXIOM Light — the same hierarchy with warm paper surfaces. */
@@ -219,12 +222,17 @@
 :root.theme-anim .composer,
 :root.theme-anim .modal,
 :root.theme-anim .model-menu,
+:root.theme-anim .workbench-side,
+:root.theme-anim .ws-menu,
 :root.theme-anim .chat-scroll {
   transition:
     background-color 0.32s ease,
     color 0.32s ease,
     border-color 0.32s ease,
-    box-shadow 0.32s ease !important;
+    box-shadow 0.32s ease,
+    width var(--motion-panel) var(--ease-ui),
+    opacity 180ms ease,
+    transform var(--motion-panel) var(--ease-ui);
 }
 
 html, body, #root { height: 100%; margin: 0; }
@@ -286,6 +294,7 @@ kbd {
   min-width: 0;
 }
 .workbench-side {
+  --side-visible-w: var(--side-w, 340px);
   width: var(--side-w, 340px);
   min-width: 0;
   flex-shrink: 0;
@@ -296,12 +305,14 @@ kbd {
   overflow: hidden;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-subtle);
-  transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.22s ease;
+  transition: width var(--motion-panel) var(--ease-ui), opacity 180ms ease;
 }
 /* Drag handle on the left edge of the tools panel (§8: resize panels).
    The width transition is disabled while dragging so the panel tracks
    the mouse 1:1 instead of lagging behind it. */
-body.resizing .workbench-side { transition: none; }
+body.resizing .workbench-side,
+body.resizing .sidebar,
+body.resizing .sidebar-inner { transition: none !important; }
 .side-resizer {
   position: absolute;
   left: 0;
@@ -358,6 +369,8 @@ body.resizing .workbench-side { transition: none; }
   background: var(--bg-panel); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 8px;
   box-shadow: var(--shadow-panel);
+  transform-origin: top left;
+  animation: menu-rise 180ms var(--ease-ui) both;
 }
 .ws-menu-title { font-size: 11px; letter-spacing: 0.08em; color: var(--text-faint); padding: 4px 8px 8px; }
 .ws-subtitle { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); padding: 6px 8px 2px 8px; }
@@ -601,7 +614,7 @@ body.resizing .workbench-side { transition: none; }
   position: relative;
   flex-shrink: 0;
   overflow: hidden;
-  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width var(--motion-panel) var(--ease-ui);
 }
 
 .sidebar:not(.open) { width: 0 !important; }
@@ -615,7 +628,10 @@ body.resizing .workbench-side { transition: none; }
   border-right: 1px solid var(--border-subtle);
   padding: 12px 10px 10px;
   gap: 12px;
+  transition: opacity 180ms ease, transform var(--motion-panel) var(--ease-ui);
 }
+
+.sidebar:not(.open) .sidebar-inner { opacity: 0; transform: translateX(-10px); }
 
 .sidebar-resizer {
   position: absolute;
@@ -1746,7 +1762,8 @@ body.resizing .workbench-side { transition: none; }
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   padding: 5px;
   z-index: 50;
-  animation: fade-rise 0.16s ease both;
+  transform-origin: bottom right;
+  animation: menu-rise 180ms var(--ease-ui) both;
 }
 
 .model-menu-empty { padding: 12px; color: var(--text-faint); font-size: 12.5px; }
@@ -1781,7 +1798,7 @@ body.resizing .workbench-side { transition: none; }
   align-items: center;
   justify-content: center;
   z-index: 100;
-  animation: fade 0.15s ease both;
+  animation: fade 180ms ease both;
 }
 
 .modal {
@@ -1794,7 +1811,7 @@ body.resizing .workbench-side { transition: none; }
   border: 1px solid var(--border-default);
   border-radius: var(--radius);
   box-shadow: var(--shadow-modal);
-  animation: modal-in 0.22s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+  animation: modal-in var(--motion-panel) var(--ease-ui) both;
 }
 
 .modal-head {
@@ -1950,11 +1967,21 @@ body.resizing .workbench-side { transition: none; }
 .btn.danger:hover { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); border-color: var(--bad); }
 
 /* --------------------------------------------------------------- toast */
-.toast {
+.toast-stack {
   position: fixed;
   bottom: 108px;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1962,9 +1989,11 @@ body.resizing .workbench-side { transition: none; }
   font-size: 12.5px;
   color: var(--text);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-  z-index: 200;
-  animation: toast-in 0.25s cubic-bezier(0.34, 1.4, 0.64, 1) both;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  animation: toast-in 200ms var(--ease-ui) both;
 }
+.toast.leaving { animation: toast-in 180ms ease reverse both; }
 
 /* ---------------------------------------------------------- animations */
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
@@ -1980,13 +2009,13 @@ body.resizing .workbench-side { transition: none; }
 }
 
 @keyframes modal-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, 10px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes pulse {
@@ -1999,7 +2028,14 @@ body.resizing .workbench-side { transition: none; }
 @keyframes caret-blink { 50% { opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  :root, :root *, :root *::before, :root *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ------------------------------------------------- visual polish (v2) */
@@ -3163,12 +3199,16 @@ body.resizing .workbench-side { transition: none; }
 
 
 /* Animations off (Settings → General) still keeps everything usable. */
+:root.no-anim,
 :root.no-anim *,
 :root.no-anim *::before,
 :root.no-anim *::after {
   animation-duration: 0.001ms !important;
   animation-iteration-count: 1 !important;
+  animation-delay: 0ms !important;
   transition-duration: 0.001ms !important;
+  transition-delay: 0ms !important;
+  scroll-behavior: auto !important;
 }
 
 
@@ -3215,17 +3255,123 @@ body.resizing .workbench-side { transition: none; }
 
 
 /* ------------------------------------------------- responsive layout (§16) */
+/* Shared chrome polish. No token/message animations or permanent GPU layers. */
+.presence { display: contents; }
+.presence[data-state="closed"] { pointer-events: none; }
+.presence[data-state="closed"] > .modal-backdrop {
+  animation: fade 160ms ease reverse both;
+}
+.presence[data-state="closed"] > .modal-backdrop > .modal {
+  animation: modal-in 160ms ease reverse both;
+}
+.presence[data-state="closed"] > :is(.model-menu, .ws-menu, .palette, .mention-palette) {
+  animation: menu-rise 160ms ease reverse both;
+}
+
+:is(.btn, .icon-btn, .model-btn, .ws-current, .switch, .side-tabs button,
+    .settings-nav-item, .model-item, .ws-item, .ex-node, .chip, .side-action) {
+  transition-property: background-color, border-color, color, box-shadow, opacity, transform;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-ui);
+}
+:is(.icon-btn, .model-btn, .ws-current):active:not(:disabled) { transform: scale(0.97); }
+:is(.btn, .icon-btn, .model-btn, .ws-current, .switch, .model-item):focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.btn:disabled { cursor: default; opacity: 0.45; transform: none; }
+.modal { box-shadow: var(--shadow-modal), inset 0 1px 0 var(--border-subtle); }
+.model-menu, .ws-menu { box-shadow: var(--shadow-panel), inset 0 1px 0 var(--border-subtle); }
+.model-btn.open { border-color: var(--accent-border); background: var(--accent-soft); }
+.model-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+.settings-nav-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+.settings-nav-icon { transition: color var(--motion-fast) ease; }
+.settings-content { animation: fade-slide 180ms var(--ease-ui); }
+.settings-row { border-radius: 5px; transition: background-color var(--motion-fast) ease; }
+.settings-row-label { font-weight: 500; }
+.settings-row-hint { line-height: 1.6; }
+.settings-row:focus-within { background: color-mix(in srgb, var(--accent-soft) 35%, transparent); }
+.settings-row-control :is(input, select, textarea) {
+  transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+}
+.settings-row-control :is(input, select, textarea):focus {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.switch-knob { transition: transform 200ms var(--ease-ui), background-color 160ms ease; }
+.switch.on { box-shadow: 0 2px 8px var(--accent-soft); }
+.plugin-card {
+  border-radius: var(--radius);
+  background: linear-gradient(150deg, var(--bg-elevated), var(--bg-secondary));
+  box-shadow: inset 0 1px 0 var(--border-subtle);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+:root:not(.no-panel-hover) .plugin-card:hover,
+.plugin-card:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 0 var(--border-subtle), 0 4px 16px color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.plugin-card-title { flex-wrap: wrap; }
+.plugin-card-actions { align-self: flex-start; }
+.plugin-disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 220ms var(--ease-ui), opacity 160ms ease, visibility 220ms;
+}
+.plugin-disclosure.open { grid-template-rows: 1fr; max-height: 320px; opacity: 1; visibility: visible; }
+.plugin-card-readme { min-height: 0; overflow: hidden; }
+.plugin-card-readme pre {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11.5px/1.65 var(--mono);
+  color: var(--text-secondary);
+  user-select: text;
+}
+.plugin-security-note { color: var(--text-muted); font-size: 11.5px; line-height: 1.6; }
+.side-search, .ex-search {
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+.ex-search:focus-within { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
+.side-search > svg { transition: color 180ms ease, transform 180ms var(--ease-ui); }
+.side-search:focus-within > svg { color: var(--accent); transform: scale(1.08); }
+.ex-search[aria-busy="true"] { border-color: var(--accent-border); }
+.model-btn-label, .ws-name { animation: fade-slide 180ms var(--ease-ui); }
+.workbench-side > :is(.explorer, .terminal, .gitpanel, .task-panel) {
+  width: var(--side-visible-w);
+  animation: fade-slide 180ms var(--ease-ui);
+}
+.send-btn { transition: background-color 160ms ease, transform 160ms var(--ease-ui), opacity 160ms ease, box-shadow 160ms ease; }
+.send-btn:hover:not(:disabled) { box-shadow: 0 3px 12px var(--accent-soft); }
+.send-btn.stop > svg { animation: menu-rise 180ms var(--ease-ui); }
+.composer.generating { border-color: var(--accent-border); }
+.mention-palette { animation: menu-rise 180ms var(--ease-ui); }
+.chat-item { animation: none; } /* Search filtering is immediate, not a cascade of row animations. */
+
 /* Workbench panels shrink on narrow windows instead of squeezing the chat.
    `panel-closed` (user-toggled) always wins over these widths. */
 @media (max-width: 1100px) {
+  .workbench-side { --side-visible-w: 300px; }
   .workbench:not(.panel-closed) .workbench-side { width: 300px; }
 }
 @media (max-width: 920px) {
+  .workbench-side { --side-visible-w: 240px; }
   .workbench:not(.panel-closed) .workbench-side { width: 240px; }
   .topbar { flex-wrap: wrap; row-gap: 4px; }
   .composer-area { padding: 0 16px 12px; }
 }
 @media (max-width: 760px) {
+  .workbench-side { --side-visible-w: min(300px, 60vw); position: absolute; right: 0; top: 0; bottom: 0; z-index: 40; }
   /* Panels overlay the chat instead of sharing the row with it. */
   .workbench { position: relative; }
   .workbench:not(.panel-closed) .workbench-side {
