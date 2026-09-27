@@ -9,7 +9,7 @@ import pytest
 
 from axiom.core.knowledge import KnowledgeManager
 from axiom.core.security import CheckpointStore, NetGuard, ToolAudit, mark_untrusted, mask_secrets
-from axiom.core.tools.base import ToolDefinition, ToolResult
+from axiom.core.tools.base import ToolDefinition, ToolPermission, ToolResult
 from axiom.core.tools.registry import ToolRegistry
 from axiom.core.tools.web_search import WebSearchTool
 
@@ -41,7 +41,7 @@ def test_registry_writes_audit_record(tmp_path: Path) -> None:
     async def handler(**kwargs) -> ToolResult:
         return ToolResult(name="demo", ok=True, content="ok")
 
-    registry.register(ToolDefinition(name="demo", description="demo"), handler)
+    registry.register(ToolDefinition(name="demo", description="demo", permission=ToolPermission.ALWAYS), handler)
     import asyncio
 
     result = asyncio.run(registry.execute("demo", {"token": "secret"}))

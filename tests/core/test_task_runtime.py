@@ -9,11 +9,11 @@ import sys
 
 import pytest
 
-from axiom.core.events import ErrorEvent
-from axiom.core.events import ToolCallEvent, ToolResultEvent
+from axiom.core.events import ErrorEvent, ToolCallEvent, ToolResultEvent
 from axiom.core.ollama import StreamChunk, ToolCallRequest
 from axiom.core.planner import PlanStep, TaskPlan
 from axiom.core.tasks import Task, TaskState
+from axiom.core.tools.base import ToolResult
 from axiom.core.tools.processes import process_group_options
 from tests.core.test_orchestrator_runtime_a import _session
 from tests.test_bridge import _bridge_module
@@ -291,7 +291,6 @@ async def test_quality_scenario_failed_check_repairs_then_diff_can_be_rejected(t
     async def execute(*, step, prompt, on_event):
         prompts.append((step.id, prompt))
         if step.id == "fix":
-            args = {"path": "calc.py"}
             on_event(ToolCallEvent(name="write_file", arguments={"path": "calc.py", "content": "value = 2\n"}))
             (ws / "calc.py").write_text("value = 2\n", encoding="utf-8")
             on_event(ToolResultEvent(name="write_file", ok=True, content="written"))
@@ -311,6 +310,28 @@ async def test_quality_scenario_failed_check_repairs_then_diff_can_be_rejected(t
     assert reviewed.review_status == "rejected"
     assert "calc.py" in reviewed.diffs
     assert (ws / "calc.py").read_text(encoding="utf-8") == "value = 1\n"
+
+
+async def test_verify_task_rejects_contradictory_check_without_reviewer(tmp_path, monkeypatch):
+    session = _session(tmp_path, monkeypatch, tmp_path)
+    called = []
+
+    async def fake_execute(name, args, *, approved):
+        return ToolResult(name=name, ok=True, content="Checks PASSED",
+                          data={"status": "passed", "steps": [
+                              {"name": "test", "ok": True, "exit_code": 1},
+                          ]})
+
+    async def fake_reviewer(**kwargs):
+        called.append(True)
+        return {"content": '{"approved": true}'}
+
+    monkeypatch.setattr(session.tools, "execute", fake_execute)
+    monkeypatch.setattr(session, "_subagent_runner", fake_reviewer)
+    report = await session._verify_task(Task(goal="Fix it"))
+    assert report["ok"] is False
+    assert "non-zero" in report["error"]
+    assert called == []
 
 
 async def test_quality_scenario_add_feature_runs_real_pytest(tmp_path, monkeypatch):

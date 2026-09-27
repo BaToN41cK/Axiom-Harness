@@ -13,8 +13,10 @@ bridge). This module only *launches* it:
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -587,6 +589,102 @@ def _launch_exe(exe: Path) -> bool:
     return True
 
 
+def _frontend_dev_server_ready() -> bool:
+    """Return true only when Tauri's configured local frontend answers HTTP."""
+    connection = http.client.HTTPConnection("127.0.0.1", 1420, timeout=0.3)
+    try:
+        connection.request("GET", "/")
+        return connection.getresponse().status == 200
+    except OSError:
+        return False
+    finally:
+        connection.close()
+
+
+def _stop_dev_process(process: subprocess.Popen) -> None:
+    """Stop a failed Tauri dev launch and its build children."""
+    if process.poll() is not None:
+        return
+    try:
+        if _IS_WINDOWS:
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, creationflags=_HIDDEN, timeout=10,
+            )
+        else:
+            import signal
+
+            os.killpg(process.pid, signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _wait_for_dev_start(
+    process: subprocess.Popen,
+    log_path: Path,
+    log_offset: int,
+    *,
+    timeout: float = 900,
+    poll_interval: float = 0.2,
+) -> tuple[bool, str]:
+    """Mirror fresh Tauri output and wait for both the shell and frontend.
+
+    `tauri dev` exits zero as soon as the app is started by the caller, but the
+    GUI launcher runs it detached. Watching its log avoids reporting success
+    just because Popen succeeded, which used to hide Rust/Vite startup errors.
+    """
+    started = time.monotonic()
+    last_status = started
+    output = ""
+    running_shell = re.compile(
+        r"Running\s+[`'\"]?target[/\\]debug[/\\]axiom-desktop(?:\.exe)?",
+        re.IGNORECASE,
+    )
+
+    with log_path.open("rb") as log:
+        log.seek(log_offset)
+        while True:
+            chunk = log.read(64 * 1024)
+            if chunk:
+                text = chunk.decode("utf-8", errors="replace")
+                sys.stderr.write(text)
+                sys.stderr.flush()
+                output = (output + text)[-32_000:]
+                if re.search(r"error\[E\d{4}\]:|error: could not compile ", output, re.IGNORECASE):
+                    return False, "Сборка Rust завершилась с ошибкой."
+                if "Could not connect to `http://127.0.0.1:1420/`" in output:
+                    return False, "Tauri не смог подключиться к frontend-серверу Vite."
+
+            plain_output = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
+            shell_started = running_shell.search(plain_output) is not None
+            if shell_started and _frontend_dev_server_ready():
+                # Do not call this a launch if the watcher has already failed.
+                code = process.poll()
+                if code is None:
+                    return True, ""
+                return False, f"Процесс Tauri завершился сразу после запуска (код {code})."
+
+            code = process.poll()
+            if code is not None:
+                return False, f"Процесс сборки Tauri завершился до запуска GUI (код {code})."
+
+            elapsed = time.monotonic() - started
+            if elapsed >= timeout:
+                return False, f"GUI не запустился за {int(timeout)} секунд."
+            if time.monotonic() - last_status >= 10:
+                seconds = int(elapsed)
+                sys.stderr.write(
+                    f"\n… Сборка ещё выполняется ({seconds // 60:02d}:{seconds % 60:02d}).\n"
+                )
+                sys.stderr.flush()
+                last_status = time.monotonic()
+            time.sleep(poll_interval)
+
+
 def _run_dev(desktop: Path) -> int:
     """Start the Tauri dev shell (Vite + Rust build) fully detached.
 
@@ -635,38 +733,41 @@ def _run_dev(desktop: Path) -> int:
         if install.returncode != 0:
             return _EXIT_ERROR
     log_path = desktop / "tauri_dev.log"
-    if _IS_WINDOWS:
-        # No console window; build output goes to the log.
-        log = open(log_path, "ab")  # noqa: SIM115 - stays open for the child lifetime
-        subprocess.Popen(
-            [node, str(tauri_cli), "dev"],
-            cwd=desktop,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            creationflags=_HIDDEN,
-            close_fds=True,
-        )
-        log.close()
-    else:
-        log = open(log_path, "ab")  # noqa: SIM115 - stays open for the child lifetime
-        subprocess.Popen(
-            [node, str(tauri_cli), "dev"],
-            cwd=desktop,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        log.close()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_offset = log_path.stat().st_size if log_path.exists() else 0
+    argv = [node, str(tauri_cli), "dev"]
     print(
-        "AXIOM Desktop собирается и запустится в отдельном процессе — "
-        "первая сборка Rust может занять несколько минут.\n"
-        "Это окно терминала можно закрыть в любой момент: GUI от него не "
-        "зависит.\n"
-        f"Лог сборки: {log_path}",
+        "Собираю AXIOM Desktop. Ниже будет отображаться реальный вывод Rust/Tauri; "
+        "первый запуск может занять несколько минут.\n"
+        f"Полный лог: {log_path}",
         file=sys.stderr,
+        flush=True,
     )
+    try:
+        with log_path.open("ab") as log:
+            log.write(("\n> " + subprocess.list2cmdline(argv) + "\n").encode("utf-8"))
+            log.flush()
+            process = subprocess.Popen(
+                argv,
+                cwd=desktop,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                creationflags=_HIDDEN if _IS_WINDOWS else 0,
+                start_new_session=not _IS_WINDOWS,
+                close_fds=True,
+            )
+    except OSError as exc:
+        print(f"✕ Не удалось запустить Tauri: {exc}\nЛог: {log_path}", file=sys.stderr)
+        return _EXIT_ERROR
+
+    ok, error = _wait_for_dev_start(process, log_path, log_offset)
+    if not ok:
+        _stop_dev_process(process)
+        print(f"\n✕ {error}\nПодробности: {log_path}", file=sys.stderr)
+        return _EXIT_ERROR
+    print("\n✓ Frontend отвечает, Tauri запустил окно AXIOM.", file=sys.stderr)
+    print("Процесс приложения работает отдельно от этого терминала.", file=sys.stderr)
     return _EXIT_OK
 
 

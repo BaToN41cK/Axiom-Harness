@@ -17,6 +17,7 @@ class VerifyStep:
     command: str
     ok: bool = False
     output: str = ""
+    exit_code: int | None = None
 
 
 @dataclass
@@ -55,8 +56,12 @@ class VerificationLoop:
             if self._runner is not None:
                 try:
                     res = await self._runner(command=step.command, step=step.name)
-                    ok = bool(res.get("ok", False))
+                    exit_code = res.get("exit_code")
+                    step.exit_code = exit_code if isinstance(exit_code, int) else None
+                    ok = res.get("ok") is True and ("exit_code" not in res or exit_code == 0)
                     output = str(res.get("output") or res.get("content") or res.get("error") or "")
+                    if "exit_code" in res and exit_code != 0:
+                        output = f"exit code {exit_code}: {output}"
                 except Exception as exc:
                     ok = False
                     output = f"{type(exc).__name__}: {exc}"

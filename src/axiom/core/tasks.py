@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from axiom.core.bus import EventBus
 from axiom.core.config import axiom_home
+from axiom.core.context_engine import CompactionState, ContextEngine
 from axiom.core.events import ToolCallEvent, ToolResultEvent
 from axiom.core.planner import Planner, PlanStep, TaskPlan
 from axiom.core.trajectory import Trajectory
@@ -56,6 +57,7 @@ class Task(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
     errors: list[TaskError] = Field(default_factory=list)
     tests: list[dict] = Field(default_factory=list)
+    context_snapshot: CompactionState | None = None
     pending_tool: dict | None = None
     active_processes: list[dict] = Field(default_factory=list)
     commands: list[dict] = Field(default_factory=list)
@@ -139,8 +141,9 @@ class TaskRunner:
 
     def __init__(self, *, store: TaskStore, planner: Planner, execute: Callable[..., Awaitable[dict]],
                  verify: Callable[[], Awaitable[dict]], tools: list[str], bus: EventBus,
-                 trajectory: Trajectory, max_replans: int = 1, max_verification_repairs: int = 2,
-                 workspace_root: Path | None = None) -> None:
+                 trajectory: Trajectory, max_replans: int = 1, max_verification_repairs: int = 3,
+                 workspace_root: Path | None = None, context_engine: ContextEngine | None = None,
+                 context_max_tokens: int | None = None) -> None:
         self.store = store
         self.planner = planner
         self.execute = execute
@@ -151,6 +154,9 @@ class TaskRunner:
         self.max_replans = max_replans
         self.max_verification_repairs = max(0, max_verification_repairs)
         self.workspace_root = workspace_root.resolve() if workspace_root is not None else None
+        self.context_engine = context_engine or ContextEngine(max_tokens=context_max_tokens)
+        self.context_max_tokens = context_max_tokens
+        self.context_messages: list[dict] = []
         self._permission_previous_state: TaskState | None = None
         self._permission_tool_name: str | None = None
 
@@ -317,6 +323,29 @@ class TaskRunner:
             return
         self.publish(task, "task.tool")
 
+    async def _compact_task_context(self, task: Task) -> None:
+        """Compact accumulated step context while retaining durable task facts."""
+        if not self.context_messages or self.context_max_tokens is None:
+            return
+        state = CompactionState(
+            goal=task.goal,
+            plan=[f"{step.id}: {step.goal} ({step.state})" for step in (task.plan.steps if task.plan else [])],
+            decisions=[task.detail] if task.detail else [],
+            changed_files=list(task.changed_files),
+            errors=[error.message for error in task.errors[-16:]],
+            tests=[str(report.get("summary") or report.get("error") or report)[:1000]
+                   for report in task.tests[-16:]],
+            important_context=[f"replans={task.replans}", f"state={task.state.value}"],
+        )
+        result = await self.context_engine.compact_structured(
+            self.context_messages, state, preserve_count=1,
+            max_tokens=self.context_max_tokens, trajectory=self.trajectory,
+        )
+        if result.compacted:
+            self.context_messages = result.messages
+            task.context_snapshot = result.state
+            self.publish(task, "task.state")
+
     async def run(self, task: Task, *, resume: bool = False, acknowledge: bool = False) -> Task:
         try:
             self.publish(task, "task.resumed" if resume else "task.started")
@@ -328,6 +357,11 @@ class TaskRunner:
                 return task
             if acknowledge:
                 task.pending_tool = None
+            if resume and task.context_snapshot is not None:
+                self.context_messages = [{
+                    "role": "system",
+                    "content": "[Structured context compaction]\n" + task.context_snapshot.model_dump_json(indent=2),
+                }]
             self.transition(task, TaskState.ANALYZING)
             if task.plan is None:
                 self.transition(task, TaskState.PLANNING)
@@ -353,9 +387,27 @@ class TaskRunner:
                           "Inspect actual workspace state before editing; a previous attempt may have applied changes.")
                 if task.errors:
                     prompt += "\nCurrent errors:\n" + "\n".join(e.message[:1000] for e in task.errors[-5:])
+                if self.workspace_root is not None:
+                    # Use the same ranked, workspace-guarded evidence builder as
+                    # the standalone context API. Keep space for the tool loop.
+                    file_budget = min(4000, max(0, (self.context_max_tokens or 4096) * 2 - len(prompt)))
+                    evidence = self.context_engine.build_task_context(
+                        f"{task.goal}\n{step.goal}", [], workspace_root=self.workspace_root,
+                        changed_files=task.changed_files, budgets={"task": 0, "files": file_budget},
+                    )
+                    if evidence.files and evidence.messages:
+                        prompt += "\n" + str(evidence.messages[0]["content"])
+                        self.trajectory.append("context.files", "Relevant task files selected",
+                                               data={"task_id": task.id, "files": evidence.files,
+                                                     "categories": evidence.report["categories"]})
+                await self._compact_task_context(task)
+                if self.context_messages and self.context_messages[0].get("role") == "system":
+                    prompt += "\n" + str(self.context_messages[0]["content"])
+                self.context_messages.append({"role": "user", "content": prompt})
                 result = await self.execute(step=step, prompt=prompt,
                                             on_event=partial(self.observe, task, step))
                 step.result = str(result.get("content") or "")[:8000]
+                self.context_messages.append({"role": "assistant", "content": step.result})
                 error = result.get("error") or ("Tool calls failed" if result.get("tools_failed") else None)
                 if not step.result and not error:
                     error = "Empty model response"
@@ -387,15 +439,37 @@ class TaskRunner:
                 message = str(report.get("error") or report.get("summary") or "Verification unavailable")
                 if not report.get("executed") or attempt >= self.max_verification_repairs:
                     task.errors.append(TaskError(type="verification", message=message))
-                    self.transition(task, TaskState.WAITING_FOR_USER, message)
+                    reason = (f"Verification repair limit ({self.max_verification_repairs}) exhausted: {message}"
+                              if attempt >= self.max_verification_repairs and report.get("executed") else message)
+                    self.transition(task, TaskState.WAITING_FOR_USER, reason)
                     break
                 repair = PlanStep(id=f"verification-repair-{attempt + 1}",
                                   goal="Исправить ошибки проверки и сохранить вывод проверки",
                                   tools=self.tools, done_when="Ошибки проверки устранены")
                 repair.state = "running"
                 self.transition(task, TaskState.EXECUTING, repair.goal)
+                diagnostics = report.get("checks", {}).get("diagnostics", [])
+                if not diagnostics:
+                    for step_report in report.get("checks", {}).get("steps", []):
+                        diagnostics.extend(step_report.get("diagnostics", []))
+                # Prioritize diagnostics in the files the task actually changed.
+                if diagnostics and task.changed_files:
+                    changed = frozenset(p.replace("\\", "/") for p in task.changed_files)
+
+                    def _rank(item: dict, changed: frozenset[str] = changed) -> int:
+                        file_name = str(item.get("file") or "").replace("\\", "/")
+                        return 0 if any(file_name.endswith(c) or c.endswith(file_name)
+                                        for c in changed) else 1
+
+                    diagnostics = sorted(diagnostics, key=_rank)
+                diagnostic_text = "\n".join(
+                    f"- {item.get('file')}:{item.get('line')}: {item.get('message')}"
+                    for item in diagnostics[:20]
+                )
                 prompt = (f"Task: {task.goal}\nVerification failed. Repair the cause using this exact report:\n"
                           f"{json.dumps(report, ensure_ascii=False)[:16000]}\n"
+                          "Prioritized diagnostics:\n"
+                          f"{diagnostic_text or '(no structured file/line diagnostic was reported)'}\n"
                           "Do not claim success. Make a focused fix; the verifier will run again.")
                 result = await self.execute(step=repair, prompt=prompt,
                                             on_event=partial(self.observe, task, repair))

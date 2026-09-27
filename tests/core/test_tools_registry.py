@@ -66,6 +66,87 @@ async def test_never_permission_tool_is_blocked_and_hidden():
     assert registry.schemas() == []
 
 
+async def test_static_ask_requires_approval_and_denial_is_audited(tmp_path):
+    from axiom.core.security import ToolAudit
+
+    invoked = []
+
+    async def mutate() -> ToolResult:
+        invoked.append(True)
+        return ToolResult(name="mutate", ok=True, content="done")
+
+    registry = ToolRegistry(audit=ToolAudit(tmp_path / "audit.jsonl"))
+    registry.register(ToolDefinition(name="mutate", description="unsafe", permission=ToolPermission.ASK), mutate)
+    denied = await registry.execute("mutate")
+    assert not denied.ok and denied.data == {"permission": "ask"}
+    assert invoked == []
+    assert (tmp_path / "audit.jsonl").read_text(encoding="utf-8").count("\n") == 1
+    assert (await registry.execute("mutate", approved=True)).ok
+    assert invoked == [True]
+
+
+async def test_registry_timeout_cancels_hanging_handler_and_audits(tmp_path):
+    import asyncio
+
+    from axiom.core.security import ToolAudit
+
+    invoked = []
+
+    async def hanging() -> ToolResult:
+        invoked.append(True)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            invoked.append("cancelled")
+            raise
+        return ToolResult(name="hang", ok=True)
+
+    registry = ToolRegistry(audit=ToolAudit(tmp_path / "audit.jsonl"))
+    registry.register(
+        ToolDefinition(name="hang", description="hang", permission=ToolPermission.ALWAYS,
+                       timeout=0.05, cancellable=True),
+        hanging,
+    )
+    result = await registry.execute("hang")
+    assert not result.ok and "timed out" in (result.error or "")
+    assert result.data == {"timed_out": True}
+    assert invoked == [True, "cancelled"]
+    assert (tmp_path / "audit.jsonl").exists()
+
+
+async def test_result_contract_and_output_cap():
+    registry = ToolRegistry()
+
+    async def verbose() -> ToolResult:
+        return ToolResult(name="verbose", ok=True, content="0123456789")
+
+    registry.register(
+        ToolDefinition(name="verbose", description="verbose", permission=ToolPermission.ALWAYS,
+                       max_output=4, risk="medium", cancellable=False),
+        verbose,
+    )
+    result = await registry.execute("verbose")
+    assert result.ok
+    assert len(result.content) <= 4
+    assert result.meta["truncated"] is True
+    contract = result.as_contract()
+    assert set(contract) == {"tool", "ok", "content", "error", "duration_ms", "meta"}
+    assert contract["tool"] == "verbose"
+    assert contract["meta"]["risk"] == "medium"
+
+
+async def test_classifier_never_blocks_even_if_approved():
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(name="disabled", description="disabled", permission=ToolPermission.ALWAYS),
+        ok_handler,
+        permission_for=lambda name, args: ToolPermission.NEVER,
+    )
+    denied = await registry.execute("disabled", approved=True)
+    assert denied.ok is False
+    assert "disabled" in (denied.error or "")
+
+
 async def test_unknown_tool_returns_structured_error():
     registry = ToolRegistry()
     result = await registry.execute("nope", {"a": 1})
@@ -78,7 +159,7 @@ async def test_handler_axiom_error_becomes_tool_error():
         raise AxiomError("backend down")
 
     registry = ToolRegistry()
-    registry.register(ToolDefinition(name="t", description="d"), failing)
+    registry.register(ToolDefinition(name="t", description="d", permission=ToolPermission.ALWAYS), failing)
     result = await registry.execute("t", {})
     assert result.ok is False
     assert result.error == "backend down"
@@ -89,7 +170,7 @@ async def test_handler_crash_never_propagates():
         raise RuntimeError("boom")
 
     registry = ToolRegistry()
-    registry.register(ToolDefinition(name="t", description="d"), crashing)
+    registry.register(ToolDefinition(name="t", description="d", permission=ToolPermission.ALWAYS), crashing)
     result = await registry.execute("t", {})
     assert result.ok is False
     assert "RuntimeError" in (result.error or "")
@@ -100,7 +181,7 @@ async def test_invalid_arguments_reported():
         return ToolResult(name="t", ok=True, content=required)
 
     registry = ToolRegistry()
-    registry.register(ToolDefinition(name="t", description="d"), strict)
+    registry.register(ToolDefinition(name="t", description="d", permission=ToolPermission.ALWAYS), strict)
     result = await registry.execute("t", {})
     assert result.ok is False
     assert "Invalid arguments" in (result.error or "")

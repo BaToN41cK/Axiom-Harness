@@ -8,6 +8,7 @@ changes — frontends render :class:`~axiom.core.events.ToolCallEvent` and
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Iterable
 from copy import copy, deepcopy
@@ -136,20 +137,39 @@ class ToolRegistry:
             result = ToolResult(name=name, ok=False, error=f"Tool '{name}' is disabled")
             self.audit.record(name, arguments or {}, False, 0)
             return result
-        classifier = self.classifier.get(name)
-        if (not approved and classifier is not None
-                and classifier(name, arguments or {}) is ToolPermission.ASK):
-            return ToolResult(
-                name=name,
-                ok=False,
-                error=(
-                    "Permission required: this command was not pre-approved by the user. "
-                    "Do not retry it — tell the user which command you need and why."
-                ),
+        try:
+            permission = self.permission_for(name, arguments)
+        except Exception as exc:
+            result = ToolResult(name=name, ok=False, error=f"Permission check failed: {exc}")
+            self.audit.record(name, arguments or {}, False, 0)
+            return result
+        if permission is ToolPermission.NEVER:
+            result = ToolResult(name=name, ok=False, error=f"Tool '{name}' is disabled")
+            self.audit.record(name, arguments or {}, False, 0)
+            return result
+        if permission is ToolPermission.ASK and not approved:
+            result = ToolResult(
+                name=name, ok=False,
+                error=("Permission required: this command was not pre-approved by the user. "
+                       "Do not retry it — tell the user which command you need and why."),
                 data={"permission": "ask"},
             )
+            self.audit.record(name, arguments or {}, False, 0)
+            return result
         try:
-            result = await handler(**(arguments or {}))
+            call = handler(**(arguments or {}))
+            timeout = definition.timeout
+            arg_timeout = (arguments or {}).get("timeout")
+            if isinstance(arg_timeout, (int, float)) and arg_timeout > 0:
+                timeout = min(timeout, float(arg_timeout)) if timeout is not None else float(arg_timeout)
+            result = await asyncio.wait_for(call, timeout=timeout) if timeout is not None else await call
+        except TimeoutError:
+            # Cancellable handlers (process tools) clean up their process tree on
+            # cancellation before re-raising; the registry converts the outcome to
+            # a structured, auditable timeout result instead of hanging forever.
+            result = ToolResult(name=name, ok=False,
+                                error=f"Tool '{name}' timed out after {timeout:.0f}s",
+                                data={"timed_out": True})
         except AxiomError as exc:
             result = ToolResult(name=name, ok=False, error=str(exc))
         except TypeError as exc:
@@ -158,5 +178,16 @@ class ToolRegistry:
             result = ToolResult(name=name, ok=False, error=f"{type(exc).__name__}: {exc}")
         result.name = name
         result.duration_ms = int((time.perf_counter() - started) * 1000)
+        if definition.max_output is not None and len(result.content) > definition.max_output:
+            original_size = len(result.content)
+            marker = "\n… output truncated"
+            if definition.max_output > len(marker):
+                result.content = result.content[:definition.max_output - len(marker)] + marker
+            else:
+                result.content = result.content[:definition.max_output]
+            result.meta = {**result.meta, "truncated": True, "original_chars": original_size,
+                           "max_output": definition.max_output}
+        result.meta = {**result.meta, "risk": definition.risk,
+                       "timeout": definition.timeout, "cancellable": definition.cancellable}
         self.audit.record(name, arguments or {}, result.ok, result.duration_ms)
         return result

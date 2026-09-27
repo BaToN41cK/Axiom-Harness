@@ -9,6 +9,7 @@ from axiom.core.agent import Agent
 from axiom.core.chat import ChatSession
 from axiom.core.config import Config
 from axiom.core.context import ContextManager, ContextReport
+from axiom.core.context_engine import CompactionState, ContextEngine, StructuredCompaction
 from axiom.core.errors import AxiomError, InvalidResponseError, SearchUnavailableError
 from axiom.core.events import (
     ContentChunk,
@@ -39,8 +40,10 @@ __all__ = [
     "AxiomError",
     "ChatSession",
     "ChatStreamParser",
+    "CompactionState",
     "Config",
     "ContentChunk",
+    "ContextEngine",
     "ContextManager",
     "ContextReport",
     "Done",
@@ -62,6 +65,7 @@ __all__ = [
     "ReasoningChunk",
     "RetryResult",
     "SearchUnavailableError",
+    "StructuredCompaction",
     "Task",
     "TaskError",
     "TaskEvent",

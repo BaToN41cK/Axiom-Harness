@@ -27,7 +27,7 @@ A feature is complete only after implementation, real tests, and updated documen
 | W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
 | W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
 | W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 7 partial, 11 TODO |
-| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 14 partial, 1 TODO |
+| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 6 done, 8 partial, 1 TODO |
 
 ---
 
@@ -387,7 +387,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.1 Agent Runtime and Task System
 
-**Status:** PARTIAL — Task Runtime, atomic Task State, bridge, UI, and restart acceptance exist · **Priority:** P0 · **Phase:** 1–2
+**Status:** DONE — Task Runtime, atomic Task State, bridge, UI, restart acceptance; concurrent resume rejected, completed steps never repeated · **Priority:** P0 · **Phase:** 1–2
 
 **Outcome:** Complex requests have a durable, observable task lifecycle independent of a chat busy flag.
 
@@ -397,7 +397,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.2 Dynamic Planner
 
-**Status:** PARTIAL — validated JSON plans and bounded replan exist · **Priority:** P0 · **Phase:** 2
+**Status:** DONE — strict schema/tool validation, bounded replan preserves completed steps, plans persisted in Task State · **Priority:** P0 · **Phase:** 2
 
 **Outcome:** Complex tasks receive a tool-aware plan that can adapt without discarding completed work.
 
@@ -407,7 +407,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.3 Context Manager and Context Budget
 
-**Status:** PARTIAL — file collection, Git diff, and compression exist · **Priority:** P0 · **Phase:** 3
+**Status:** DONE — relevance-ranked files (explicit/mentioned/imports), per-category budgets, actual category sizes, dedupe, never whole-project · **Priority:** P0 · **Phase:** 3
 
 **Outcome:** The model receives relevant evidence under explicit category budgets rather than the whole project.
 
@@ -417,7 +417,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.4 Structured Context Compaction
 
-**Status:** PARTIAL — summarizer-based `compress()` exists · **Priority:** P0 · **Phase:** 3
+**Status:** DONE — validated task snapshot, budget-triggered runtime compaction, durable resume state and trajectory event · **Priority:** P0 · **Phase:** 3
 
 **Outcome:** Long tasks retain structured working state instead of losing the beginning through raw truncation.
 
@@ -446,7 +446,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.7 Tool Router and Robust Tools
 
-**Status:** PARTIAL — registry metadata and full filesystem tools exist; Git is read-only · **Priority:** P0 · **Phase:** 4
+**Status:** DONE — unified validation/permission/timeout/result/audit router, streamed terminal output, approval-gated reviewed `git_add`/`git_commit`, push manual HIGH risk · **Priority:** P0 · **Phase:** 4
 
 **Outcome:** Every tool follows one validated, permissioned, cancellable, observable contract.
 
@@ -456,7 +456,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.8 Verification and Self-Correction
 
-**Status:** PARTIAL — targeted verification detection and orchestrator rework exist · **Priority:** P0 · **Phase:** 5
+**Status:** DONE — configurable repair budget (default 3), changed-file-prioritized file/line diagnostics, real pytest fail→repair→pass acceptance, zero-exit verification · **Priority:** P0 · **Phase:** 5
 
 **Outcome:** A failed check causes a bounded repair attempt rather than a false success or an unbounded loop.
 
@@ -602,7 +602,8 @@ Network tests use explicit live markers. A skipped live test is not reported as 
  | 2026-09-27 | Completed W2.7: Desktop frontend decomposition and virtualization. CSS split by domain (`styles.css` shrank from 3941 to 3242 lines; boot/orchestration extracted verbatim to `src/styles/boot.css` + `src/styles/orchestration.css`, and the new virtualization rules live in `src/styles/virtualization.css`, all imported in the original cascade order from `main.tsx`); `useAxiom.ts` sheds its pure helpers into `useAxiom.helpers.ts` (liveMessage/updateLive factories, tool labels/targets/status, model resolution, orchestration status), re-exported for existing consumers; `MessageList` rows are `React.memo`'d with ref-stabilised callbacks and live props gated to the streaming row only; chat messages and Explorer rows use native `content-visibility: auto` + `contain-intrinsic-size` (no DOM/behavior/visual change — the dark theme is untouched); streaming deltas flush on a fixed ~30 ms cadence instead of per animation frame; Rollup `manualChunks` split vendor-react/vendor-markdown/vendor-highlight, so the largest chunk dropped from 822.72 kB (245.22 kB gzip) to a max 342.86 kB (105.71 kB gzip) with the aggregate shrinking slightly (822.72 → 818.87 kB minified) and the 500 kB warning gone. Verified: `tsc --noEmit` clean, Vite build clean, E2E harness 47/47 checks; W2 wave summary now `6 done, 3 partial, 0 TODO`. |
  |  | 2026-09-27 | Completed W2.8: TUI already had real `/memory`, `/knowledge`, `/plugins` and the shared W1.1 accent theme; added `Ctrl+F` search over the mounted current transcript with Enter/Shift+Enter navigation, a live `OrchestrationPanel` projecting only post-baseline `ChatSession.trajectory` events with `s` cancellation, and `/benchmark [repetitions]` using isolated real `BenchmarkRunner` sessions with explicit failed runs instead of fabricated success. Added dark-theme TCSS, tests, and TUI documentation; verified with `42 passed` across TUI/benchmark/permission tests and Ruff; W2 wave summary remains `7 done, 2 partial, 0 TODO`. |
   |  | 2026-09-27 | Completed W2.3/W2.9: orchestration plans now expose dependency topology; trajectory runs persist, export recorded Markdown, resume through `orchestrate_resume`, and skip workers already marked `agent.done`. Security is wired at core boundaries: ToolRegistry JSONL audit with masked arguments and hashes, per-file checkpoints/rollback for workspace mutations, NetGuard SSRF validation, untrusted fetch markers, and `local_only` blocking search/fetch/embeddings; added deterministic security and completion tests; verified with `463 passed, 1 skipped, 9 deselected` (legacy disabled-by-default plugin tests excluded), Ruff and compileall; W2 wave summary now `9 done, 0 partial, 0 TODO`. |
-
-
-
-
+| 2026-09-27 | Completed W4.1/W4.2: Task Runtime and Dynamic Planner verified against DoD. Concurrent resume is rejected (busy guard + interrupted-step acknowledgement pause), restarted runs never repeat completed steps (new regression test), transitions persist atomically before events, bounded replan preserves completed steps and never loops. Also reconciled the plugin consent contract: install/bundled-install mark plugins disabled (no code execution without explicit enable); updated 8 stale core/bridge plugin tests to install → toggle-on → load; fixed Ruff import/unused-var and trailing-newline hygiene; verified with `501 passed, 1 skipped`, Ruff clean; W4 wave summary now `2 done, 12 partial, 1 TODO`. |
+| 2026-09-27 | Completed W4.3: ContextEngine gains relevance-ranked, budgeted task context. `rank_files` orders explicit task paths -> changed files -> names mentioned in the task text -> one level of local Python imports (AST), dedupes by workspace-relative path, prunes heavy dirs, and never escapes the workspace; `build_task_context` clips each category (system/project/task/files/tool_results/conversation) to its own budget via `DEFAULT_CATEGORY_BUDGETS` and reports actual `categories` sizes + `over_budget` in the report. A representative settings-button repair includes only the relevant frontend/backend files and never the whole project; existing `build()`/`compress()` regressions preserved. Added 5 deterministic tests in `tests/core/test_context.py`; verified with the context/harness/tasks slice (51 passed) and Ruff; W4 wave summary now `3 done, 11 partial, 1 TODO`. |
+| 2026-09-27 | Completed W4.4: `CompactionState` (goal/plan/decisions/changed_files/errors/tests/important_context) is validated before use; `ContextEngine.compact_structured()` triggers at 75% of a known window, leaves original messages intact and emits a `context.compacted` trajectory event. TaskRunner persists a compact snapshot in Task State, restores it on restart/resume, and does not re-execute completed steps. W4.3 budgets were hardened for long task/history/trajectory payloads and oversized files. Deterministic trigger/schema/trajectory/three-step continuation/restart tests added; W4 summary `4 done, 10 partial, 1 TODO`. |
+| 2026-09-27 | Completed W4.7: ToolRegistry routes validation → permission → timeout → normalized result → audit. Static/classified ASK fail closed without approval; classified NEVER blocks even with `approved=True`; denials are audited. `max_output` enforced at the registry; `ToolResult.as_contract()` exposes `{tool, ok, content, error, duration_ms, meta}`; registry-level timeout cancels handlers and process tools reap their process trees on `CancelledError`; terminal output streams line-by-line via `on_output`. Agent `git_add` stages only explicit workspace files and requires fresh `allow_once` consent even in auto mode; agent `git_commit` requires a SHA-256 hash of the real staged diff (shown in the permission dialog) and fresh per-call consent, failing when the staged diff changed after review; `git_push` stays manual HIGH risk and absent from the registry. Tests: timeout/cancellation/audit, streaming, explicit-file staging, reviewed-diff commit acceptance/staleness; verified with the tool/git/security suites and Ruff. |
+| 2026-09-27 | Completed W4.8: `Config.max_retries` (default 3) bounds the TaskRunner repair loop; real subprocess `exit_code` is preserved so `ok=True` with a non-zero exit can never pass; structured `{file, line, message}` diagnostics are extracted from pytest/Ruff/TypeScript/Rust output and prioritized by the task's changed files in the repair prompt; the ChatSession boundary refuses a reviewer when any real check failed; a deterministic acceptance runs real pytest failing → focused file repair → passing. Tests: diagnostics extraction/prioritization, retry-limit honesty, contradictory-exit rejection, real fail→repair→pass; W4 wave summary now `6 done, 8 partial, 1 TODO`; verified with the verification/task suites and Ruff. |

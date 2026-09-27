@@ -917,10 +917,18 @@ class ChatSession:
             return {"ok": False, "executed": False, "error": "Verification permission denied"}
         result = await self.tools.execute(name, {}, approved=True)
         data = dict(result.data or {})
-        executed = bool(data.get("steps"))
+        steps = data.get("steps")
+        executed = bool(steps)
+        nonzero = [step for step in steps or []
+                   if isinstance(step, dict) and step.get("exit_code") not in (None, 0)]
+        failed_steps = [step for step in steps or []
+                        if isinstance(step, dict) and step.get("ok") is not True]
+        real_checks = bool(executed and not nonzero and not failed_steps)
         report = {"ok": False, "executed": executed, "summary": result.content,
                   "error": result.error, "checks": data}
-        if not result.ok or not executed:
+        if not result.ok or not real_checks:
+            if real_checks is False and executed and not result.error:
+                report["error"] = "Verification report contains a failed or non-zero check"
             return report
         # Passing tests alone do not prove the requested change was implemented.
         review = await self._subagent_runner(
@@ -1155,7 +1163,8 @@ class ChatSession:
             store=self.task_store, planner=Planner(self._plan_task), execute=self._execute_task_step,
             verify=lambda: self._verify_task(task), tools=[d.name for d in self.tools.definitions()],
             bus=self.bus, trajectory=self.trajectory,
-            workspace_root=self.workspace_root,
+            workspace_root=self.workspace_root, context_max_tokens=self._context_budget(),
+            max_verification_repairs=self.config.max_retries,
         )
         self.active_task = task
         self.active_task_runner = runner
@@ -1649,6 +1658,7 @@ class ChatSession:
             self.project_tools.register(self.tools)
         if self.git_tools is not None:
             self.git_tools.set_root(target)
+            self.permissions.git_tools = self.git_tools
             self.git_tools.register(self.tools)
         if self.project_tools is not None:
             self.project_tools.set_root(target)

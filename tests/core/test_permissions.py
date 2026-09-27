@@ -30,6 +30,29 @@ async def test_auto_approve_all_allows_everything():
     assert await mgr.decide("run", {}, ToolPermission.NEVER) is False
 
 
+async def test_git_add_always_requires_fresh_allow_once_even_in_auto_mode():
+    calls: list[dict[str, Any]] = []
+
+    def callback(name: str, args: dict[str, Any]) -> PermissionOutcome:
+        calls.append(args)
+        return PermissionOutcome.ALLOW_ONCE
+
+    mgr = PermissionManager(config=Config(permission_mode="auto_approve_all"), request_callback=callback)
+    assert await mgr.decide("git_add", {"paths": ["a.txt"]}, ToolPermission.ASK)
+    assert await mgr.decide("git_add", {"paths": ["b.txt"]}, ToolPermission.ASK)
+    assert calls == [{"paths": ["a.txt"]}, {"paths": ["b.txt"]}]
+    assert not await PermissionManager(config=Config(permission_mode="auto_approve_all")).decide(
+        "git_add", {"paths": ["a.txt"]}, ToolPermission.ASK,
+    )
+
+
+async def test_git_add_refuses_always_approval():
+    mgr = PermissionManager(config=Config(permission_mode="ask"),
+                            request_callback=lambda name, args: PermissionOutcome.ALLOW_ALWAYS)
+    assert not await mgr.decide("git_add", {"paths": ["a.txt"]}, ToolPermission.ASK)
+    assert "git_add" not in mgr._always_allowed
+
+
 async def test_never_permission_blocked():
     mgr = PermissionManager()
     mgr.mode = PermissionMode.AUTO_APPROVE_ALL

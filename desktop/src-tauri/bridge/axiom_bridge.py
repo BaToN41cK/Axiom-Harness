@@ -345,6 +345,23 @@ async def _watch_orchestration(session: ChatSession, baseline: int,
 
 
 async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
+    if cmd in {"set_workspace", "clear_workspace"}:
+        # A workspace belongs to the whole ChatSession. Switching it during a
+        # response would let that response continue with a different project
+        # root and history store. Keep this invariant at the protocol boundary
+        # as well as in the GUI, since other IPC clients can call the bridge.
+        if session.busy:
+            raise ValueError("Stop the active generation before switching workspace")
+        if cmd == "set_workspace":
+            target = Path(str(args.get("path") or "")).expanduser()
+            if not target.is_dir():
+                # Preserve the current terminal session when the requested
+                # workspace is invalid and the core will reject the switch.
+                raise ValueError(f"Not a directory: {target.resolve()}")
+        shell = getattr(session, "gui_shell", None)
+        if shell is not None:
+            shell.stop()
+            session.gui_shell = None
     if cmd in {"task_start", "task_resume", "task_launch", "task_continue"}:
         # Push directly from the core bus; no polling, model calls or state
         # transitions in the frontend. The subscription is request-scoped.

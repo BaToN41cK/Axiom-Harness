@@ -7,13 +7,16 @@ from pathlib import Path
 
 import pytest
 
+from axiom.core.tools.base import ToolPermission
 from axiom.core.tools.git_tools import (
+    GitTools,
     git_commit,
     git_diff_file,
     git_stage,
     git_switch,
     git_unstage,
 )
+from axiom.core.tools.registry import ToolRegistry
 
 
 def git(root: Path, *args: str) -> str:
@@ -46,6 +49,59 @@ def test_stage_and_commit(repo: Path):
     assert out
     assert "two" in (repo / "a.txt").read_text(encoding="utf-8")
     assert "change a" in git(repo, "log", "-1", "--pretty=%s")
+
+
+async def test_agent_git_add_requires_approval_and_explicit_file(repo: Path):
+    (repo / "a.txt").write_text("two\n", encoding="utf-8")
+    registry = ToolRegistry()
+    GitTools(repo).register(registry)
+    assert registry.permission_for("git_add", {"paths": ["a.txt"]}) is ToolPermission.ASK
+    assert "git_commit" in registry.names  # present, but approval + reviewed-diff gated
+    assert "git_push" not in registry.names  # push stays manual, HIGH risk
+
+    denied = await registry.execute("git_add", {"paths": ["a.txt"]})
+    assert not denied.ok and denied.data == {"permission": "ask"}
+    assert not git(repo, "diff", "--cached", "--name-only").strip()
+
+    accepted = await registry.execute("git_add", {"paths": ["a.txt"]}, approved=True)
+    assert accepted.ok, accepted.error
+    assert git(repo, "diff", "--cached", "--name-only").strip() == "a.txt"
+
+
+async def test_agent_git_commit_requires_reviewed_diff_and_fresh_consent(repo: Path):
+    (repo / "a.txt").write_text("two\n", encoding="utf-8")
+    registry = ToolRegistry()
+    tools = GitTools(repo)
+    tools.register(registry)
+
+    # Stage the change, then try to commit without a reviewed diff hash.
+    git_stage(repo, ["a.txt"])
+    expected = tools._staged_diff_hash()
+
+    denied = await registry.execute("git_commit", {"message": "change a", "reviewed_diff": expected})
+    assert not denied.ok and denied.data == {"permission": "ask"}
+    assert "change a" not in git(repo, "log", "-1", "--pretty=%s")
+
+    # Wrong (stale) hash is rejected even with approval.
+    wrong = await registry.execute("git_commit", {"message": "change a", "reviewed_diff": "deadbeef"},
+                                   approved=True)
+    assert not wrong.ok and "stale" in (wrong.error or "")
+    assert "change a" not in git(repo, "log", "-1", "--pretty=%s")
+
+    # Correct reviewed hash + explicit approval commits the staged diff.
+    accepted = await registry.execute("git_commit", {"message": "change a", "reviewed_diff": expected},
+                                      approved=True)
+    assert accepted.ok, accepted.error
+    assert "change a" in git(repo, "log", "-1", "--pretty=%s")
+
+
+async def test_agent_git_add_rejects_stage_all_and_workspace_escape(repo: Path):
+    registry = ToolRegistry()
+    GitTools(repo).register(registry)
+    for paths in ([], ["."], ["-A"], ["../outside.txt"], [".git"]):
+        result = await registry.execute("git_add", {"paths": paths}, approved=True)
+        assert not result.ok, paths
+    assert not git(repo, "diff", "--cached", "--name-only").strip()
 
 
 def test_unstage(repo: Path):

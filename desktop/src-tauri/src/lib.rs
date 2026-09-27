@@ -11,7 +11,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 #[cfg(debug_assertions)]
 use std::time::{Duration, Instant};
 #[cfg(windows)]
@@ -23,6 +24,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 struct Bridge {
     child: Mutex<Option<BridgeProcess>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
+    generation: Arc<AtomicU64>,
 }
 
 struct BridgeProcess {
@@ -386,6 +388,9 @@ fn find_python() -> String {
 
 
 fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
+    let state: State<Bridge> = app.state();
+    let generation_state = Arc::clone(&state.generation);
+    let generation = state.generation.fetch_add(1, Ordering::AcqRel) + 1;
     let python = find_python();
     // 1. Repository layout (dev): <root>/desktop/src-tauri/bridge/axiom_bridge.py
     // 2. Bundled layout (installed): the bridge script ships as a Tauri
@@ -472,21 +477,28 @@ fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
+            if generation_state.load(Ordering::Acquire) != generation {
+                break;
+            }
             let payload: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => Value::String(line.clone()),
             };
             let _ = emitter.emit("bridge://line", payload);
         }
-        let _ = emitter.emit(
-            "bridge://line",
-            serde_json::json!({
-                "type": "reply",
-                "req": 0,
-                "ok": false,
-                "error": "bridge-exited"
-            }),
-        );
+        // A restart may replace the child before this reader observes EOF.
+        // Do not let the old process report the newly started core as dead.
+        if generation_state.load(Ordering::Acquire) == generation {
+            let _ = emitter.emit(
+                "bridge://line",
+                serde_json::json!({
+                    "type": "reply",
+                    "req": 0,
+                    "ok": false,
+                    "error": "bridge-exited"
+                }),
+            );
+        }
     });
 
     let err_app = app.clone();
@@ -504,7 +516,6 @@ fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
         }
     });
 
-    let state: State<Bridge> = app.state();
     *state.child.lock().unwrap() = Some(BridgeProcess {
         child,
         #[cfg(windows)]
@@ -533,6 +544,9 @@ fn bridge_request(state: State<'_, Bridge>, payload: Value) -> Result<Value, Str
 fn bridge_restart(app: AppHandle) -> Result<(), String> {
     {
         let state: State<Bridge> = app.state();
+        // Invalidate the old stdout reader before terminating the child. The
+        // new spawn advances the generation again before it starts its reader.
+        state.generation.fetch_add(1, Ordering::AcqRel);
         state.child.lock().unwrap().take();
         *state.stdin.lock().unwrap() = None;
     }
@@ -606,6 +620,18 @@ fn quit_app(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    let _single_instance = match windows_process::SingleInstance::acquire() {
+        Ok(Some(instance)) => instance,
+        Ok(None) => {
+            windows_process::show_error("AXIOM уже запущен.");
+            return;
+        }
+        Err(err) => {
+            windows_process::show_error(&format!("Не удалось проверить экземпляр AXIOM: {err}"));
+            return;
+        }
+    };
     #[cfg(debug_assertions)]
     let _dev_server = match start_dev_server() {
         Ok(server) => server,
@@ -627,6 +653,7 @@ pub fn run() {
             app.manage(Bridge {
                 child: Mutex::new(None),
                 stdin: Mutex::new(None),
+                generation: Arc::new(AtomicU64::new(0)),
             });
             if let Err(err) = spawn_bridge(&handle) {
                 eprintln!("bridge startup error: {err}");

@@ -45,6 +45,8 @@ class Config(BaseModel):
     num_predict: int | None = Field(default=None, ge=16, le=131072)
     #: How many previous messages are sent back to the model
     context_messages: int = Field(default=20, ge=4, le=200)
+    #: Maximum repair attempts after a failing task verification.
+    max_retries: int = Field(default=3, ge=0, le=10)
     #: Enable the web-search capability (search still only runs when needed)
     web_search_enabled: bool = True
     #: Give the model real filesystem tools inside the workspace

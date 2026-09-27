@@ -146,7 +146,10 @@ def test_load_registers_real_tools_and_unload_removes_them(tmp_path):
     src = _plugin_folder(tmp_path / "src")
     manager = PluginManager(root=tmp_path / "plugins")
     manager.install_from_folder(src)
+    # Install is not consent: the plugin starts disabled until explicitly enabled.
+    assert manager.registry.get("demo").enabled is False
     session = _FakeSession()
+    assert manager.toggle("demo", True, session=session) is True
 
     names = manager.load("demo", session)
     assert names == ["hello"]
@@ -177,7 +180,7 @@ def test_toggle_applies_immediately(tmp_path):
     manager.install_from_folder(src)
     session = _FakeSession()
 
-    manager.load("demo", session)
+    manager.toggle("demo", True, session=session)
     assert "hello" in session.tools.names
 
     assert manager.toggle("demo", False, session=session) is True
@@ -207,7 +210,7 @@ def test_remove_deletes_folder_and_forgets_plugin(tmp_path):
     manager = PluginManager(root=tmp_path / "plugins")
     manager.install_from_folder(src)
     session = _FakeSession()
-    manager.load("demo", session)
+    manager.toggle("demo", True, session=session)
 
     assert manager.remove("demo", session=session) is True
     assert "demo" not in manager.registry
@@ -241,6 +244,7 @@ def test_register_hook_contract(tmp_path):
     manager = PluginManager(root=tmp_path / "plugins")
     manager.install_from_folder(src)
     session = _FakeSession()
+    manager.toggle("demo", True, session=session)
     assert manager.load("demo", session) == ["ping"]
     assert "ping" in session.tools.names
 
@@ -278,8 +282,13 @@ def test_install_bundled_copies_and_loads_tools(tmp_path):
     manifest, status = manager.install_bundled("calc", session=session, bundled_root=bundled_root)
     assert status == "installed"
     assert manifest.bundled is True
+    # Bundled install is also not consent: enable before tools register.
+    assert manifest.enabled is False
     assert (manager.root / "calc" / DEFAULT_ENTRY).exists()
     assert "calc" in manager.registry
+    assert "hello" not in session.tools.names
+
+    manager.toggle("calc", True, session=session)
     assert "hello" in session.tools.names
     result = asyncio.run(session.tools.execute("hello", {"name": "Al"}))
     assert result.ok is True
@@ -296,6 +305,9 @@ def test_install_bundled_is_idempotent(tmp_path):
     manifest, status = manager.install_bundled("calc", session=session, bundled_root=bundled_root)
     assert status == "updated"
     assert manifest.bundled is True
+    # Re-install is a fresh consent boundary: still disabled until toggled on.
+    assert manifest.enabled is False
+    manager.toggle("calc", True, session=session)
     assert "hello" in session.tools.names
 
 

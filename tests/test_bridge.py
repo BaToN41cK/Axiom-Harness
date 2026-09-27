@@ -376,7 +376,8 @@ def test_plugin_install_toggle_remove_round_trip(tmp_path: Path) -> None:
         listed = proc.request(2, "list_plugins")
         assert listed["ok"] is True
         assert [row["name"] for row in listed["data"]] == ["demo"]
-        assert listed["data"][0]["enabled"] is True
+        # Install is not consent: new plugins start disabled until toggled on.
+        assert listed["data"][0]["enabled"] is False
 
         # Reinstall is idempotent: it updates in place, never duplicates.
         again = proc.request(3, "install_plugin", {"path": str(source)})
@@ -384,12 +385,12 @@ def test_plugin_install_toggle_remove_round_trip(tmp_path: Path) -> None:
         relisted = proc.request(4, "list_plugins")
         assert [row["name"] for row in relisted["data"]] == ["demo"]
 
-        off = proc.request(5, "toggle_plugin", {"name": "demo", "enabled": False})
+        on = proc.request(5, "toggle_plugin", {"name": "demo", "enabled": True})
+        assert on["data"]["enabled"] is True
+
+        off = proc.request(6, "toggle_plugin", {"name": "demo", "enabled": False})
         assert off["ok"] is True
         assert off["data"] == {"name": "demo", "enabled": False, "ok": True}
-
-        on = proc.request(6, "toggle_plugin", {"name": "demo", "enabled": True})
-        assert on["data"]["enabled"] is True
 
         removed = proc.request(7, "remove_plugin", {"name": "demo"})
         assert removed["ok"] is True
@@ -457,28 +458,31 @@ def test_install_bundled_plugin_round_trip(tmp_path: Path) -> None:
         listed = proc.request(2, "list_plugins")
         rows = {row["name"]: row for row in listed["data"]}
         assert "calculator" in rows
-        assert rows["calculator"]["enabled"] is True
+        # Bundled install is not consent either: disabled until toggled on.
+        assert rows["calculator"]["enabled"] is False
         assert "calculate" in rows["calculator"]["tools"]
 
-        # The real tool of the bundled plugin is registered and callable.
-        tools = proc.request(3, "tools")
+        # Enable it; the real tool of the bundled plugin becomes callable.
+        enabled = proc.request(3, "toggle_plugin", {"name": "calculator", "enabled": True})
+        assert enabled["data"]["enabled"] is True
+        tools = proc.request(4, "tools")
         tool_names = [item["name"] for item in tools["data"]]
         assert "calculate" in tool_names
 
         # While installed, the catalogue no longer offers it.
-        bundled = proc.request(4, "bundled_plugins")
+        bundled = proc.request(5, "bundled_plugins")
         assert "calculator" not in {row["name"] for row in bundled["data"]}
 
         # Toggle off, then on again.
-        off = proc.request(5, "toggle_plugin", {"name": "calculator", "enabled": False})
+        off = proc.request(6, "toggle_plugin", {"name": "calculator", "enabled": False})
         assert off["data"]["enabled"] is False
-        on = proc.request(6, "toggle_plugin", {"name": "calculator", "enabled": True})
+        on = proc.request(7, "toggle_plugin", {"name": "calculator", "enabled": True})
         assert on["data"]["enabled"] is True
 
         # Removal puts it back into the available catalogue.
-        removed = proc.request(7, "remove_plugin", {"name": "calculator"})
+        removed = proc.request(8, "remove_plugin", {"name": "calculator"})
         assert removed["data"]["removed"] is True
-        bundled_again = proc.request(8, "bundled_plugins")
+        bundled_again = proc.request(9, "bundled_plugins")
         assert "calculator" in {row["name"] for row in bundled_again["data"]}
     finally:
         proc.close()

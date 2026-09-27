@@ -60,6 +60,8 @@ class TerminalTool:
         self.root = (root or default_workspace_root()).resolve()
         self.enabled = enabled
         self.on_process = None
+        #: Called with (stream, line) for each line of real process output (W4.7).
+        self.on_output = None
 
     def set_root(self, root: Path) -> None:
         self.root = root.resolve()
@@ -93,6 +95,7 @@ class TerminalTool:
             risk=RISK_DANGEROUS,
             timeout=DEFAULT_TIMEOUT,
             max_output=MAX_OUTPUT_CHARS,
+            streaming=True,
             cancellable=True,
             workspace_scoped=True,
         )
@@ -127,8 +130,28 @@ class TerminalTool:
             started = time.time()
             if self.on_process:
                 self.on_process({"pid": proc.pid, "command": command[:2000], "state": "running", "started_at": started})
+            async def _drain(stream, name: str, sink: list[str]) -> None:
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    text = line.decode("utf-8", errors="replace")
+                    sink.append(text)
+                    if self.on_output:
+                        try:
+                            self.on_output(name, text)
+                        except Exception:
+                            pass
+
             try:
-                out, err = await asyncio.wait_for(proc.communicate(), timeout=limit)
+                out_parts: list[str] = []
+                err_parts: list[str] = []
+                await asyncio.wait_for(asyncio.gather(
+                    _drain(proc.stdout, "stdout", out_parts),
+                    _drain(proc.stderr, "stderr", err_parts),
+                ), timeout=limit)
+                await proc.wait()
+                out, err = "".join(out_parts).encode(), "".join(err_parts).encode()
             except TimeoutError:
                 await terminate_process_tree(proc)
                 if self.on_process:

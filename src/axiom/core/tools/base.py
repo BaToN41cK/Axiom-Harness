@@ -95,6 +95,12 @@ class ToolResult:
     error: str | None = None
     duration_ms: int = 0
     data: Any = None
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    def as_contract(self) -> dict[str, Any]:
+        """Stable tool envelope; ``data`` remains available to existing callers."""
+        return {"tool": self.name, "ok": self.ok, "content": self.content,
+                "error": self.error, "duration_ms": self.duration_ms, "meta": self.meta}
 
 
 ToolHandler = Callable[..., Awaitable[ToolResult]]

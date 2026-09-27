@@ -93,6 +93,40 @@ def _failures(output: str, limit: int = 15) -> list[str]:
     return found[:limit]
 
 
+def _diagnostics(output: str, limit: int = 30) -> list[dict]:
+    """Extract real file/line/message evidence without inventing coordinates."""
+    found: list[dict] = []
+    seen: set[tuple[str, int, str]] = set()
+    patterns = (
+        # pytest: tests/test_x.py:17: AssertionError: ...
+        re.compile(r"^([^:\s]+\.py):(\d+):\s*(.+)$"),
+        # Ruff: --> src/file.py:17:8
+        re.compile(r"^\s*-->\s+([^:\s]+\.py):(\d+):\d+\s*$"),
+        # tsc: src/file.ts(17,8): error TS...
+        re.compile(r"^([^()\s]+\.[jt]sx?)\((\d+),\d+\):\s*(.+)$"),
+        # Rust: --> src/lib.rs:17:8
+        re.compile(r"^\s*-->\s+([^:\s]+\.rs):(\d+):\d+\s*$"),
+    )
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        for pattern in patterns:
+            match = pattern.match(line.strip())
+            if match is None:
+                continue
+            path, line_no = match.group(1), int(match.group(2))
+            message = match.group(3).strip() if match.lastindex == 3 else ""
+            if not message:
+                message = next((s.strip() for s in lines[index + 1:index + 4] if s.strip()), "Diagnostic")
+            key = (path, line_no, message)
+            if key not in seen:
+                seen.add(key)
+                found.append({"file": path, "line": line_no, "message": message[:400]})
+            break
+        if len(found) >= limit:
+            break
+    return found
+
+
 def _counts(output: str, kind: str) -> dict:
     """Test counts — pytest/vitest/jest wording plus cargo's ``test result:``."""
     if kind == "rust":
@@ -361,6 +395,7 @@ class VerificationTools:
             "duration_ms": res["duration_ms"],
             **counts,
             "failures": _failures(res["output"]),
+            "diagnostics": _diagnostics(res["output"]),
         }
         parts = []
         if counts["passed"] is not None:
@@ -409,6 +444,7 @@ class VerificationTools:
             "exit_code": res["exit_code"],
             "duration_ms": res["duration_ms"],
             "problems": problems,
+            "diagnostics": _diagnostics(res["output"]),
         }
         body = f"Lint {'PASSED' if ok else 'FAILED'} in {res['duration_ms'] / 1000:.1f}s — {cmd}"
         if problems:
@@ -444,6 +480,7 @@ class VerificationTools:
             "exit_code": res["exit_code"],
             "duration_ms": res["duration_ms"],
             "problems": problems,
+            "diagnostics": _diagnostics(res["output"]),
         }
         body = f"Build {'PASSED' if ok else 'FAILED'} in {res['duration_ms'] / 1000:.1f}s — {cmd}"
         if not ok:
@@ -526,16 +563,18 @@ class VerificationTools:
         async def runner(*, command: str, step: str) -> dict:
             res = await self._exec(command, timeout=STEP_TIMEOUTS.get(step, 300.0))
             if res.get("error"):
-                return {"ok": False, "output": res["error"]}
-            return {"ok": res.get("ok", False), "output": res.get("output", "")}
+                return {"ok": False, "output": res["error"], "exit_code": res.get("exit_code")}
+            return {"ok": res.get("ok") is True and res.get("exit_code") == 0,
+                    "output": res.get("output", ""), "exit_code": res.get("exit_code")}
 
         report = await VerificationLoop(runner).run(
             [VerifyStep(name, command) for name, command in plan],
             kind=info["kind"],
         )
         steps_data = [
-            {"name": s.name, "command": s.command, "ok": s.ok,
+            {"name": s.name, "command": s.command, "ok": s.ok, "exit_code": s.exit_code,
              "failures": _failures(s.output, limit=10),
+             "diagnostics": _diagnostics(s.output, limit=10),
              "tail": _tail(s.output, 15)[:2000]}
             for s in report.steps
         ]

@@ -2163,6 +2163,10 @@ export function useAxiom() {
   }
 
   async function switchWorkspace(path: string) {
+    if (generatingRef.current) {
+      notify("Сначала остановите генерацию", "error");
+      return;
+    }
     if (taskActiveRef.current) {
       notify("Сначала остановите задачу", "error");
       return;
@@ -2252,6 +2256,10 @@ export function useAxiom() {
 
   /** Global Chat: drop the active project — no file/terminal tools, global history. */
   async function clearWorkspace() {
+    if (generatingRef.current) {
+      notify("Сначала остановите генерацию", "error");
+      return;
+    }
     if (taskActiveRef.current) {
       notify("Сначала остановите задачу", "error");
       return;

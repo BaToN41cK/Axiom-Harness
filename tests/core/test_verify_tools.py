@@ -63,6 +63,48 @@ def test_detect_empty_dir(tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------- runs
+def test_diagnostics_extract_real_file_line_message():
+    from axiom.core.tools.verify_tools import _diagnostics
+
+    output = ("tests/test_calc.py:17: AssertionError: wrong value\n"
+              "src/ui.ts(9,3): error TS2322: wrong type\n"
+              "--> src/main.rs:21:7\nerror: mismatched types\n"
+              "random line without a source\n")
+    found = _diagnostics(output)
+    assert found[0] == {"file": "tests/test_calc.py", "line": 17, "message": "AssertionError: wrong value"}
+    assert found[1] == {"file": "src/ui.ts", "line": 9, "message": "error TS2322: wrong type"}
+    assert found[2]["file"] == "src/main.rs" and found[2]["line"] == 21
+    assert len(found) == 3
+
+
+async def test_verification_loop_rejects_nonzero_exit_even_if_runner_claims_ok():
+    from axiom.core.verify import VerificationLoop, VerifyStep
+
+    async def runner(**kwargs):
+        return {"ok": True, "exit_code": 1, "output": "failed assertion"}
+
+    report = await VerificationLoop(runner).run([VerifyStep("test", "pytest -q")])
+    assert report.ok is False
+    assert "exit code 1" in report.errors[0]
+
+
+async def test_verify_changes_requires_real_zero_exit(project: VerificationTools, tmp_path: Path, monkeypatch):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.com",
+                    "commit", "-m", "baseline"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "app" / "__init__.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    async def contradictory(command, timeout):
+        return {"ok": True, "exit_code": 1, "output": "failed", "duration_ms": 1}
+
+    monkeypatch.setattr(project, "_exec", contradictory)
+    result = await project._verify_changes()
+    assert result.ok is False
+    assert result.data["status"] == "failed"
+    assert result.data["failed_step"] == "test"
+
+
 async def test_run_tests_pass(project: VerificationTools) -> None:
     res = await project._run_tests()
     assert res.ok, res.error

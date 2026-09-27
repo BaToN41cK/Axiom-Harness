@@ -396,4 +396,3 @@ class HistoryStore:
         removed = self._remove(conversation_id)
         self._conn.commit()
         return removed > 0
-

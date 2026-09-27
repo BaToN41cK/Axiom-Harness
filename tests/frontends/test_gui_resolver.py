@@ -125,6 +125,67 @@ def test_existing_rust_skips_installer(monkeypatch: pytest.MonkeyPatch) -> None:
     assert gui._ensure_rust_toolchain() is True
 
 
+def test_dev_launcher_waits_for_tauri_and_frontend(tmp_path: Path, monkeypatch, capsys) -> None:
+    class RunningProcess:
+        def poll(self) -> None:
+            return None
+
+    log = tmp_path / "tauri_dev.log"
+    log.write_text(
+        "\x1b[1m\x1b[92m Running\x1b[0m `target\\debug\\axiom-desktop.exe`\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gui, "_frontend_dev_server_ready", lambda: True)
+
+    started, error = gui._wait_for_dev_start(RunningProcess(), log, 0, timeout=1)
+
+    assert started
+    assert error == ""
+    assert "axiom-desktop.exe" in capsys.readouterr().err
+
+
+def test_dev_launcher_reports_rust_compile_error(tmp_path: Path, capsys) -> None:
+    class RunningProcess:
+        def poll(self) -> None:
+            return None
+
+    log = tmp_path / "tauri_dev.log"
+    log.write_text(
+        "error[E0658]: unstable feature\nerror: could not compile `axiom-desktop`\n",
+        encoding="utf-8",
+    )
+
+    started, error = gui._wait_for_dev_start(RunningProcess(), log, 0, timeout=1)
+
+    assert not started
+    assert "с ошибкой" in error
+    assert "error[E0658]" in capsys.readouterr().err
+
+
+def test_frontend_probe_connects_directly_even_when_proxy_is_configured(monkeypatch) -> None:
+    class FakeResponse:
+        status = 200
+
+    class FakeConnection:
+        def __init__(self, host: str, port: int, timeout: float) -> None:
+            assert (host, port) == ("127.0.0.1", 1420)
+            assert timeout == 0.3
+
+        def request(self, method: str, path: str) -> None:
+            assert (method, path) == ("GET", "/")
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setattr(gui.http.client, "HTTPConnection", FakeConnection)
+
+    assert gui._frontend_dev_server_ready()
+
+
 def test_missing_rust_installs_and_continues(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     class FakeWindow:
         def __init__(self) -> None:

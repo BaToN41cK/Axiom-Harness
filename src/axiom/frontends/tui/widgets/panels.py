@@ -1835,4 +1835,3 @@ class KnowledgePanel(PanelScreen):
             )
             lines.append("  " + " ".join(str(item.get("text") or "").split())[:160])
         target.update("\n".join(lines))
-

@@ -138,6 +138,20 @@ class PermissionManager:
         # NEVER permission is always blocked regardless of mode.
         if tool_permission == ToolPermission.NEVER:
             return False
+        # Git staging changes the index. Auto modes and cached approvals must
+        # never stand in for explicit consent to the current set of paths.
+        if tool_name == "git_add":
+            return await self._ask_user(tool_name, tool_args or {}, once_only=True)
+        # Commit is approved per call as well, and the dialog receives the real
+        # staged diff (truncated) plus its hash for review.
+        if tool_name == "git_commit":
+            args = dict(tool_args or {})
+            git_tools = getattr(self, "git_tools", None)
+            if git_tools is not None:
+                staged = git_tools._staged_diff()
+                args.setdefault("staged_diff", staged[:8000])
+                args.setdefault("staged_diff_sha256", git_tools._staged_diff_hash())
+            return await self._ask_user(tool_name, args, once_only=True)
 
         if self.mode == PermissionMode.AUTO_APPROVE_ALL:
             return True
@@ -151,9 +165,9 @@ class PermissionManager:
         # ASK mode — everything needs approval.
         return await self._ask_user(tool_name, tool_args or {})
 
-    async def _ask_user(self, tool_name: str, tool_args: dict[str, Any]) -> bool:
+    async def _ask_user(self, tool_name: str, tool_args: dict[str, Any], *, once_only: bool = False) -> bool:
         """Show a permission request to the user, or reuse an "always" answer."""
-        if tool_name in self._always_allowed:
+        if not once_only and tool_name in self._always_allowed:
             _LOG.debug("Permission reused ('always'): %s", tool_name)
             return True
 
@@ -163,6 +177,9 @@ class PermissionManager:
                 answer = await answer
             outcome = normalize_permission_outcome(answer)
             if outcome == PermissionOutcome.ALLOW_ALWAYS:
+                if once_only:
+                    _LOG.info("Persistent approval refused for %s %s", tool_name, tool_args)
+                    return False
                 self._always_allowed.add(tool_name)
                 _LOG.info("Permission granted (always): %s %s", tool_name, tool_args)
                 return True

@@ -10,7 +10,7 @@ from axiom.core.agents import AgentProfile, AgentRegistry
 from axiom.core.bus import EventBus
 from axiom.core.chat import ChatSession
 from axiom.core.config import Config
-from axiom.core.context_engine import ContextEngine
+from axiom.core.context_engine import CompactionState, ContextEngine, StructuredCompaction
 from axiom.core.errors import (
     AxiomError,
     GenerationCancelledError,
@@ -111,7 +111,9 @@ __all__ = [
     "TaskPlan",
     "TaskState",
     "TaskStore",
+    "CompactionState",
     "ContextEngine",
+    "StructuredCompaction",
     "VerificationLoop",
     "Sandbox",
     "Skill",

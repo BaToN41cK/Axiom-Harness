@@ -418,7 +418,3 @@ async def test_orchestration_panel_mounts_and_updates(monkeypatch) -> None:
         panel._poll()
         assert any(event["kind"] == "agent.start" for event in panel._events)
         assert panel._running is False
-
-
-
-

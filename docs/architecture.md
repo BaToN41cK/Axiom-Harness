@@ -206,6 +206,55 @@ Desktop-слой — тонкий адаптер над core, но два мод
 Проверки: `tsc --noEmit`, сборка Vite и весь E2E-прогон (47/47, включая
 реальную потоковую генерацию через мост).
 
+## Task context and compaction (W4.3/W4.4)
+
+`ContextEngine.build_task_context()` selects only explicit/changed/mentioned files
+and one level of local Python imports, deduplicates them, and clips system,
+project, task, files, tool/trajectory evidence and conversation separately.
+`BuiltContext.report` contains the actual included category sizes and budgets;
+source history and trajectory are not trimmed. File excerpts are bounded and
+files outside the workspace are excluded. `TaskRunner` invokes this builder for
+each workspace step, using changed task paths as seeds and recording the
+selected files as `context.files` trajectory events.
+
+For long coding tasks `TaskRunner` accumulates step prompts and results and
+calls `ContextEngine.compact_structured()` only if `ChatSession._context_budget()`
+knows the model's actual context window. The validated `CompactionState` holds
+goal, plan, decisions, changed files, errors, checks and important context; it
+is persisted in `Task.context_snapshot` before continuation. A
+`context.compacted` event is appended to the trajectory. On restart/resume a
+new runner restores that snapshot without replaying completed steps. The older
+`ContextEngine.compress()` contract remains available for its existing callers.
+
+## Verification truthfulness (W4.8)
+
+`VerificationTools` preserves subprocess `exit_code` through the verification
+pipeline. It also extracts only real file/line/message diagnostics from pytest,
+Ruff, TypeScript and Rust output and passes them into the bounded repair
+prompt. `VerificationLoop` accepts a step as passed only when the real result
+has `ok=True` and either no exit-code field (legacy injected runners) or
+`exit_code == 0`; a contradictory `ok=True, exit_code != 0` is failed. The
+Task Runtime keeps the bounded repair/retest loop (`Config.max_retries`, default
+3) and stops at `waiting_for_user` when checks are unavailable or the repair
+budget is exhausted. A deterministic acceptance test runs real pytest before
+and after a focused file repair and confirms exit codes 1 → 0.
+
+## Tool routing and Git safety (W4.7)
+
+`ToolRegistry.execute()` is the single validation/permission/audit boundary:
+static and classified `ASK` tools fail closed without approval, classified
+`NEVER` tools remain blocked even with `approved=True`, and every successful
+result carries operational metadata plus the stable `ToolResult.as_contract()`
+envelope. `max_output` is enforced at this boundary without changing the
+existing `data` field.
+
+The agent-facing `git_add` tool stages only explicitly named individual files,
+requires fresh `allow_once` consent through the central permission dialog even
+in auto mode (no cached/"always" approval), and rejects empty/all/directory/
+escaping paths. `git_commit` and `git_push` remain absent from the agent registry;
+the existing GUI user workflow stays available while reviewed-diff consent is
+not yet enforceable.
+
 ## TUI package (W2.8)
 
 TUI остаётся тонким Textual-адаптером: `/memory`, `/knowledge` и `/plugins`

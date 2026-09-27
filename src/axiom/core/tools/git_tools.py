@@ -1,26 +1,27 @@
-"""Git tools — read-only inspection of the workspace repository.
+"""Git inspection plus approval-gated staging inside the workspace.
 
-All operations are real ``git`` subprocess calls inside the workspace root.
-Only safe read-only subcommands are exposed (``status``, ``diff``, ``log``,
-``branch``); commit/push are intentionally NOT agent tools — the user runs
-them manually (optionally drafted by the agent) so every history rewrite
-stays confirmed (§17).
+Commit and push remain user-only until the agent permission flow can prove
+that the actual staged diff was reviewed and explicitly approved.
 """
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 
-from axiom.core.tools.base import RISK_SAFE, ToolDefinition, ToolPermission, ToolResult
+from axiom.core.tools.base import RISK_MEDIUM, RISK_SAFE, ToolDefinition, ToolPermission, ToolResult
 from axiom.core.tools.filesystem import default_workspace_root
 
 GIT_STATUS_TOOL = "git_status"
 GIT_DIFF_TOOL = "git_diff"
 GIT_LOG_TOOL = "git_log"
 GIT_BRANCH_TOOL = "git_branch"
+GIT_ADD_TOOL = "git_add"
+GIT_COMMIT_TOOL = "git_commit"
 
-GIT_TOOLS = (GIT_STATUS_TOOL, GIT_DIFF_TOOL, GIT_LOG_TOOL, GIT_BRANCH_TOOL)
+GIT_TOOLS = (GIT_STATUS_TOOL, GIT_DIFF_TOOL, GIT_LOG_TOOL, GIT_BRANCH_TOOL,
+             GIT_ADD_TOOL, GIT_COMMIT_TOOL)
 
 _TIMEOUT = 15.0
 _MAX_CHARS = 12_000
@@ -92,6 +93,33 @@ class GitTools:
             self._def(GIT_BRANCH_TOOL, "Show current branch and all local branches."),
             self._branch,
         )
+        registry.register(
+            ToolDefinition(
+                name=GIT_ADD_TOOL,
+                description="Stage explicitly named workspace files for a user-reviewed diff; never stages all files.",
+                parameters={"type": "object", "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                }, "required": ["paths"]},
+                permission=ToolPermission.ASK, risk=RISK_MEDIUM, timeout=_TIMEOUT,
+                max_output=1000, workspace_scoped=True,
+            ),
+            self._add,
+        )
+        registry.register(
+            ToolDefinition(
+                name=GIT_COMMIT_TOOL,
+                description=("Commit the currently staged changes. Requires a reviewed_diff SHA-256 "
+                             "of the real staged diff, shown to the user in the permission dialog; "
+                             "fails if the staged diff changed after review."),
+                parameters={"type": "object", "properties": {
+                    "message": {"type": "string"},
+                    "reviewed_diff": {"type": "string"},
+                }, "required": ["message", "reviewed_diff"]},
+                permission=ToolPermission.ASK, risk=RISK_MEDIUM, timeout=_TIMEOUT,
+                max_output=2000, workspace_scoped=True,
+            ),
+            self._commit,
+        )
 
     # -------------------------------------------------------------- handlers
 
@@ -124,13 +152,53 @@ class GitTools:
         body = f"Current: {current or '(detached)'}\n{all_branches.content}".strip()
         return ToolResult(name=GIT_BRANCH_TOOL, ok=True, content=body)
 
+    async def _add(self, paths: list[str]) -> ToolResult:
+        """Stage only explicit files, after the central approval boundary."""
+        if not isinstance(paths, list) or not paths or any(not isinstance(path, str) or not path.strip()
+                                                       for path in paths):
+            return ToolResult(name=GIT_ADD_TOOL, ok=False, error="Explicit paths are required")
+        try:
+            for path in paths:
+                target = _resolve_in_root(self.root, path)
+                if target == self.root or target.is_dir() or path.strip() in {".", "-A", "--all"}:
+                    return ToolResult(name=GIT_ADD_TOOL, ok=False, error="Only individual files may be staged")
+            git_stage(self.root, paths)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return ToolResult(name=GIT_ADD_TOOL, ok=False, error=str(exc))
+        return ToolResult(name=GIT_ADD_TOOL, ok=True, content=f"Staged {len(paths)} explicit path(s)")
+
+    def _staged_diff(self) -> str:
+        res = self._run_git(["diff", "--cached", "--no-color"])
+        return res.content if res.ok else ""
+
+    def _staged_diff_hash(self) -> str:
+        return hashlib.sha256(self._staged_diff().encode("utf-8")).hexdigest()
+
+    async def _commit(self, message: str, reviewed_diff: str) -> ToolResult:
+        """Commit staged changes only when the reviewed diff is still current."""
+        staged = self._staged_diff()
+        if not staged.strip():
+            return ToolResult(name=GIT_COMMIT_TOOL, ok=False, error="Nothing staged to commit")
+        actual = hashlib.sha256(staged.encode("utf-8")).hexdigest()
+        if str(reviewed_diff or "").strip() != actual:
+            return ToolResult(
+                name=GIT_COMMIT_TOOL, ok=False,
+                error="Reviewed diff is stale: the staged changes differ from what was approved. "
+                      "Review the current diff and provide its new hash.",
+                data={"expected": actual},
+            )
+        try:
+            output = git_commit(self.root, message)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return ToolResult(name=GIT_COMMIT_TOOL, ok=False, error=str(exc))
+        return ToolResult(name=GIT_COMMIT_TOOL, ok=True, content=output)
+
 
 # ---------------------------------------------------------------- user git ops
 #
-# Write operations (stage / unstage / commit) are intentionally NOT registered
-# as agent tools (§17: the model never rewrites history on its own). The GUI
-# calls these helpers directly from the user's own button clicks, sandboxed to
-# the workspace root like every other path handling here.
+# GUI write operations keep their existing user-initiated helpers. The agent
+# can only use the explicit-path, approval-gated git_add wrapper above. Commit
+# and push remain user-only until reviewed-diff consent is enforceable.
 
 
 def _resolve_in_root(root: Path, rel: str) -> Path:

@@ -9,6 +9,31 @@
 
 ## [Unreleased]
 
+### Completed — W4.7 Tool Router and Robust Tools
+
+- `ToolRegistry.execute()` routes validation → permission → timeout → normalized result → audit. Static/classified `ASK` fail closed without approval, classified `NEVER` blocks even with `approved=True`, and denials are audited.
+- Registry-level timeout cancels handlers; cancellable process tools reap their process trees. `max_output` enforced at the registry; `ToolResult.as_contract()` exposes the stable envelope.
+- Terminal output streams line-by-line via `on_output` (metadata `streaming=True`).
+- Agent `git_add` stages only explicit workspace files and requires fresh `allow_once` consent even in auto mode. Agent `git_commit` requires a SHA-256 of the real staged diff shown in the permission dialog and fresh per-call consent; a changed-after-review diff is rejected. `git_push` stays manual HIGH risk and is not an agent tool.
+
+### Completed — W4.8 Verification and Self-Correction
+
+- Verification results preserve subprocess `exit_code`; `VerificationLoop` refuses a false pass when a real command exits non-zero, even if an adapter incorrectly reports `ok=True`.
+- Structured `{file, line, message}` diagnostics are extracted from pytest/Ruff/TypeScript/Rust output and prioritized by the task's changed files in the repair prompt. `Config.max_retries` (default 3) bounds the repair loop; exhaustion ends in `waiting_for_user` with an honest report. The ChatSession boundary refuses a reviewer when any check fails. A deterministic acceptance runs real pytest: failing exit 1 → focused repair → passing exit 0.
+
+### Added — W4.7 tool safety slice
+
+- `ToolRegistry.execute()` now enforces the effective static/classified permission fail-closed, including `NEVER` even when a caller passes `approved=True`; denied calls are audited.
+- `ToolResult.as_contract()` exposes `{tool, ok, content, error, duration_ms, meta}` while preserving `data`; registry enforcement applies `max_output` and records truncation/risk/cancellation metadata.
+- Added agent `git_add` for explicit individual workspace files. It requires fresh `allow_once` consent even in auto mode, rejects cached/"always" approval and empty/all/directory/escaping paths; `git_commit` and `git_push` remain user-only until reviewed-diff approval is enforceable.
+- Verified with the Git/tool/security slice (`32 passed`) and Ruff.
+
+### Completed — W4.3/W4.4 context budgeting and structured compaction
+
+- `ContextEngine.build_task_context()` ranks explicit/changed/mentioned files and local Python imports, limits each context category, and reports the actual included sizes. `TaskRunner` now uses this same builder for every workspace task step and records `context.files` in trajectory; oversized files cannot overflow the file budget and long task/history input is clipped without changing stored history.
+- `CompactionState` keeps goal, plan, decisions, changed files, errors, checks and important context. The Task Runtime compacts accumulated step evidence only when the model's context window is known, persists the snapshot in `Task`, records `context.compacted` in the trajectory, and restores it on resume without replaying completed steps. The previous `compress()` API remains unchanged.
+- Deterministic tests cover ranking, budgets, schema, threshold, trajectory, three-step continuation and restart. Desktop build, Ruff and the full Python suite were run; see `docs/roadmap.md` for status.
+
 ### Changed — Windows desktop launch
 
 - Tauri now uses the Windows GUI subsystem in debug and release builds; Python 3.11 and command helpers use hidden process creation, with the configured Python 3.11 path preferred by default;

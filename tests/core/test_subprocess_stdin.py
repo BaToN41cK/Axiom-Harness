@@ -13,14 +13,26 @@ from axiom.core.tools.terminal import TerminalTool
 from axiom.core.workspace import detect_project
 
 
+class _FakeStream:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def readline(self) -> bytes:
+        await asyncio.sleep(0)
+        return self._chunks.pop(0) if self._chunks else b""
+
+
 class _FakeAsyncProcess:
     def __init__(self, *, returncode: int = 0, stdout: bytes = b"ok\n", stderr: bytes = b"") -> None:
         self.returncode = returncode
-        self._stdout = stdout
-        self._stderr = stderr
+        self.stdout = _FakeStream([stdout] if stdout else [])
+        self.stderr = _FakeStream([stderr] if stderr else [])
 
     async def communicate(self) -> tuple[bytes, bytes]:
-        return self._stdout, self._stderr
+        return b"", b""
+
+    async def wait(self) -> int:
+        return self.returncode
 
     def kill(self) -> None:
         self.returncode = -9
@@ -47,6 +59,21 @@ async def test_terminal_tool_uses_devnull_for_child_stdin(tmp_path: Path, monkey
     if os.name == "nt":
         assert isinstance(captured["command"], tuple)
         assert captured["command"][0] == "python"
+
+
+async def test_terminal_tool_streams_output_before_process_exit(tmp_path: Path) -> None:
+    import sys
+
+    tool = TerminalTool(root=tmp_path)
+    seen: list[tuple[str, str]] = []
+    tool.on_output = lambda stream, line: seen.append((stream, line))
+    cmd = (f"\"{sys.executable}\" -c \"import time,sys;print('first',flush=True);"
+           "time.sleep(0.3);print('second',flush=True)\"")
+    result = await tool._run(cmd)
+    assert result.ok, result.error
+    stdout_lines = [line for stream, line in seen if stream == "stdout"]
+    assert any("first" in line for line in stdout_lines)
+    assert any("second" in line for line in stdout_lines)
 
 
 def test_detect_project_uses_devnull_for_git_probe(tmp_path: Path, monkeypatch) -> None:
