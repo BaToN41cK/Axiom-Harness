@@ -81,6 +81,7 @@ workspace и tools находятся в соседних разделах.
 | `save_history` | bool | `true` | сохранять разговоры между запусками |
 | `temperature` | float \| null 0–2 | `null` | температура; `null` — параметр не отправляется |
 | `system_prompt` | str \| null | `null` | системный промпт; `null` — встроенный |
+| `knowledge_embed_model` | str \| null | `null` | модель Ollama-эмбеддингов для базы знаний (напр. `nomic-embed-text`); `null` — только офлайн-BM25 |
 
 ## Как и когда применяются настройки
 

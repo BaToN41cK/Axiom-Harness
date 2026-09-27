@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from pathlib import Path
 
 from axiom.core.tools.base import (
@@ -19,7 +20,7 @@ from axiom.core.tools.base import (
     ToolResult,
 )
 from axiom.core.tools.filesystem import default_workspace_root
-from axiom.core.tools.processes import process_group_options, terminate_process_tree
+from axiom.core.tools.processes import command_argv, process_group_options, terminate_process_tree
 
 RUN_COMMAND_TOOL = "run_command"
 
@@ -58,6 +59,7 @@ class TerminalTool:
     def __init__(self, root: Path | None = None, enabled: bool = True) -> None:
         self.root = (root or default_workspace_root()).resolve()
         self.enabled = enabled
+        self.on_process = None
 
     def set_root(self, root: Path) -> None:
         self.root = root.resolve()
@@ -110,19 +112,27 @@ class TerminalTool:
             )
         limit = min(max(timeout or DEFAULT_TIMEOUT, 1.0), 600.0)
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                cwd=self.root,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            common = {
+                "cwd": self.root,
+                "stdin": asyncio.subprocess.DEVNULL,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
                 **process_group_options(),
-            )
+            }
+            if os.name == "nt":
+                proc = await asyncio.create_subprocess_exec(*command_argv(command), **common)
+            else:
+                proc = await asyncio.create_subprocess_shell(command, **common)
+            started = time.time()
+            if self.on_process:
+                self.on_process({"pid": proc.pid, "command": command[:2000], "state": "running", "started_at": started})
             try:
                 out, err = await asyncio.wait_for(proc.communicate(), timeout=limit)
             except TimeoutError:
                 await terminate_process_tree(proc)
+                if self.on_process:
+                    self.on_process({"pid": proc.pid, "state": "timeout", "returncode": proc.returncode})
                 return ToolResult(
                     name=RUN_COMMAND_TOOL,
                     ok=False,
@@ -130,8 +140,12 @@ class TerminalTool:
                 )
             except asyncio.CancelledError:
                 await terminate_process_tree(proc)
+                if self.on_process:
+                    self.on_process({"pid": proc.pid, "state": "cancelled", "returncode": proc.returncode})
                 raise
-        except OSError as exc:
+            if self.on_process:
+                self.on_process({"pid": proc.pid, "state": "exited", "returncode": proc.returncode})
+        except (OSError, ValueError) as exc:
             return ToolResult(name=RUN_COMMAND_TOOL, ok=False, error=f"Cannot execute: {exc}")
 
         def _clip(raw: bytes) -> str:

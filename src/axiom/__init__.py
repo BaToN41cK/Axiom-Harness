@@ -31,14 +31,23 @@ from axiom.core.events import (
     ToolCallEvent,
     ToolResultEvent,
 )
+from axiom.core.knowledge import KnowledgeHit, KnowledgeManager, KnowledgeStore, KnowledgeTools
 from axiom.core.mcp import MCPClient, MCPManager, MCPServer
+from axiom.core.memory import MemoryCategory, MemoryItem, MemoryScope, MemoryStore, MemoryTools
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.orchestrator import Orchestrator
 from axiom.core.parallel import ParallelResult, run_parallel
 from axiom.core.planner import Planner, PlanStep, TaskPlan
-from axiom.core.plugins import PluginManifest, PluginRegistry
+from axiom.core.plugins import PluginManifest, PluginRegistry, UIExtension, UIExtensionBlock
 from axiom.core.presets import AgentPreset, PresetStore, detect_mode
 from axiom.core.project_index import ProjectIndex, ProjectMemory, index_project
+from axiom.core.prompt_builder import (
+    FULL_BUDGET_CHARS,
+    MINI_BUDGET_CHARS,
+    PromptLayers,
+    build_system_prompt,
+    select_variant,
+)
 from axiom.core.providers import (
     KNOWN_PROVIDERS,
     AnthropicProvider,
@@ -113,8 +122,24 @@ __all__ = [
     "MCPClient",
     "MCPManager",
     "MCPServer",
+    "MemoryCategory",
+    "MemoryItem",
+    "MemoryScope",
+    "MemoryStore",
+    "MemoryTools",
+    "KnowledgeHit",
+    "KnowledgeManager",
+    "KnowledgeStore",
+    "KnowledgeTools",
     "PluginManifest",
     "PluginRegistry",
+    "PromptLayers",
+    "FULL_BUDGET_CHARS",
+    "MINI_BUDGET_CHARS",
+    "build_system_prompt",
+    "select_variant",
+    "UIExtension",
+    "UIExtensionBlock",
     "AgentPreset",
     "PresetStore",
     "detect_mode",

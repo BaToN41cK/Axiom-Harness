@@ -15,7 +15,18 @@ import Explorer from "./components/Explorer";
 import GitPanel from "./components/GitPanel";
 import TerminalPanel from "./components/TerminalPanel";
 import TaskPanel from "./components/TaskPanel";
+import ConfirmDialog from "./components/ConfirmDialog";
 import type { AxiomStore } from "./hooks/useAxiom";
+import type { ThemePreset } from "./types";
+
+const THEME_ORDER: ThemePreset[] = ["obsidian", "light", "midnight", "terminal", "solarized"];
+const THEME_LABELS: Record<ThemePreset, string> = {
+  obsidian: "AXIOM Dark",
+  light: "AXIOM Light",
+  midnight: "Midnight Blue",
+  terminal: "Terminal Green",
+  solarized: "Solarized Dark",
+};
 
 function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks">("files");
@@ -70,9 +81,22 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
           <ListChecks size={13} strokeWidth={1.8} /><span>Задачи</span>
         </button>
       </div>
-      {tab === "tasks" && <TaskPanel tasks={s.tasks} busy={s.generating || s.taskRequestPending}
-        activeId={s.activeTaskId} onStart={s.startTask} onResume={s.resumeTask}
-        onCancel={s.cancelTask} onRefresh={s.refreshTasks} />}
+      {tab === "tasks" && (
+        <TaskPanel
+          tasks={s.tasks}
+          busy={s.generating || s.taskRequestPending}
+          activeId={s.activeTaskId}
+          onStart={s.startTask}
+          onResume={s.resumeTask}
+          onCancel={s.cancelTask}
+          onRefresh={s.refreshTasks}
+          onPlan={s.planTask}
+          onCreate={s.createTask}
+          onSave={s.saveTask}
+          onDelete={s.deleteTask}
+          onReview={s.reviewTask}
+        />
+      )}
       {tab === "files" && (
         <Explorer
           root={s.workspace?.current?.path ?? null}
@@ -119,9 +143,14 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
 export default function App() {
   const s = useAxiom();
 
-  // Reflect the configured theme on <html> (light/dark palettes in styles.css).
+  // Reflect the configured theme on <html>; styles.css owns the complete palette.
   // The coordinated fade is enabled only for the duration of a theme switch.
-  const theme = s.config?.theme === "light" ? "light" : "dark";
+  const configuredTheme = s.config?.theme;
+  const theme: ThemePreset = configuredTheme && THEME_ORDER.includes(configuredTheme)
+    ? configuredTheme
+    : "obsidian";
+  const themeIndex = THEME_ORDER.indexOf(theme);
+  const nextTheme = THEME_ORDER[(themeIndex + 1) % THEME_ORDER.length];
   useEffect(() => {
     const root = document.documentElement;
     root.classList.add("theme-anim");
@@ -178,6 +207,22 @@ export default function App() {
            onRemovePlugin={s.removePlugin}
            bundledPlugins={s.bundledPlugins}
            onInstallBundledPlugin={s.installBundledPlugin}
+
+           memoryRows={s.memoryRows}
+           memoryLoading={s.memoryLoading}
+           onLoadMemory={s.loadMemory}
+           onAddMemory={s.addMemory}
+           onEditMemory={s.editMemory}
+           onDeleteMemory={s.deleteMemory}
+
+           knowledgeRows={s.knowledgeRows}
+           knowledgeLoading={s.knowledgeLoading}
+           knowledgeHits={s.knowledgeHits}
+           onLoadKnowledge={s.loadKnowledge}
+           onAddKnowledge={s.addKnowledgeCollection}
+           onReindexKnowledge={s.reindexKnowledge}
+           onRemoveKnowledge={s.removeKnowledgeCollection}
+           onSearchKnowledge={s.searchKnowledge}
 
            searchProviders={s.searchProviders}
            onLoadSearchProviders={s.loadSearchProviders}
@@ -245,11 +290,9 @@ export default function App() {
           <div className="access-dot" title={s.accessTitle}>{s.accessLabel}</div>
           <button
             className="icon-btn"
-            title={theme === "light" ? "Тёмная тема" : "Светлая тема"}
-            aria-label={theme === "light" ? "Включить тёмную тему" : "Включить светлую тему"}
-            onClick={() =>
-              s.config && void s.saveConfig({ theme: theme === "light" ? "obsidian" : "light" })
-            }
+            title={`Тема: ${THEME_LABELS[theme]} · Переключить на ${THEME_LABELS[nextTheme]}`}
+            aria-label={`Тема ${THEME_LABELS[theme]}. Переключить на ${THEME_LABELS[nextTheme]}`}
+            onClick={() => s.config && void s.saveConfig({ theme: nextTheme })}
           >
             {theme === "light" ? (
               <Moon size={17} strokeWidth={1.8} />
@@ -298,6 +341,7 @@ export default function App() {
             <Composer
               generating={s.generating}
               disabled={!s.connected && !s.activeModel}
+              chatId={s.activeChatId}
               draft={s.draft}
               onDraftChange={s.setDraft}
               onSend={s.send}
@@ -333,6 +377,8 @@ export default function App() {
         </div>
       </div>
 
+      <ConfirmDialog pending={s.pendingPermission} onDecision={s.respondPermission} />
+
       {s.settingsOpen && s.config && (
                  <SettingsModal
            config={s.config}
@@ -354,6 +400,22 @@ export default function App() {
            onRemovePlugin={s.removePlugin}
            bundledPlugins={s.bundledPlugins}
            onInstallBundledPlugin={s.installBundledPlugin}
+
+           memoryRows={s.memoryRows}
+           memoryLoading={s.memoryLoading}
+           onLoadMemory={s.loadMemory}
+           onAddMemory={s.addMemory}
+           onEditMemory={s.editMemory}
+           onDeleteMemory={s.deleteMemory}
+
+           knowledgeRows={s.knowledgeRows}
+           knowledgeLoading={s.knowledgeLoading}
+           knowledgeHits={s.knowledgeHits}
+           onLoadKnowledge={s.loadKnowledge}
+           onAddKnowledge={s.addKnowledgeCollection}
+           onReindexKnowledge={s.reindexKnowledge}
+           onRemoveKnowledge={s.removeKnowledgeCollection}
+           onSearchKnowledge={s.searchKnowledge}
 
            onLoadProviders={s.loadProviders}
            searchProviders={s.searchProviders}

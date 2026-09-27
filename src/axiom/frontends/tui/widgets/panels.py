@@ -12,6 +12,7 @@ result delivered back to :mod:`axiom.frontends.tui.app` through ``dismiss``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 from textual.app import ComposeResult
@@ -558,6 +559,69 @@ class StatusPanel(PanelScreen):
                     yield Static(value, classes="status-value", markup=False)
 
 
+class BenchmarkPanel(PanelScreen):
+    """``/benchmark`` — real cold/warm performance report (W2.8)."""
+
+    title_text = "BENCHMARK"
+    BINDINGS = [
+        *PanelScreen.BINDINGS,
+        Binding("r", "rerun", "Run", show=False),
+    ]
+
+    def __init__(self, report: dict | None = None, *, running: bool = False) -> None:
+        super().__init__()
+        self._report = dict(report or {})
+        self._running = running
+
+    def keys_hint(self) -> str:
+        return "r run again   ·   esc close"
+
+    def subtitle_lines(self) -> list[str]:
+        if self._running:
+            return ["Running real scenarios — waiting for measured model events…"]
+        runs = self._report.get("runs") or []
+        return [f"{len(runs)} measured run(s)   ·   no fabricated values"]
+
+    def body(self) -> ComposeResult:
+        if self._running:
+            yield Static("Benchmark is running…", markup=False)
+            return
+        runs = self._report.get("runs") or []
+        if not runs:
+            yield Static("No benchmark report yet. Press r to run.", markup=False)
+            return
+        for run in runs:
+            status = "OK" if run.get("ok") else "FAILED"
+            line = (
+                f"{run.get('scenario', '?')}  ·  {run.get('phase', '?')}  ·  "
+                f"#{run.get('repetition', 0)}  ·  {status}  ·  "
+                f"{run.get('duration_ms', '—')} ms"
+            )
+            if run.get("error"):
+                line += f"\n    {run['error']}"
+            metrics = run.get("metrics") or {}
+            if metrics:
+                line += (
+                    f"\n    ttft={metrics.get('ttft_ms', '—')} ms"
+                    f"  gen={metrics.get('generation_ms', '—')} ms"
+                    f"  tok/s={metrics.get('tokens_per_second', '—')}"
+                )
+            yield Static(line, classes="benchmark-row", markup=False)
+        overall = (self._report.get("summary") or {}).get("overall") or {}
+        if overall:
+            yield Static("\nOverall", classes="settings-label", markup=False)
+            for field in ("ttft_ms", "generation_ms", "tokens_per_second"):
+                value = overall.get(field) or {}
+                yield Static(
+                    f"{field}: median={value.get('median', '—')}"
+                    f"  mean={value.get('mean', '—')}  count={overall.get('count', 0)}",
+                    markup=False,
+                )
+
+    async def action_rerun(self) -> None:
+        self.dismiss("rerun")
+
+
 class SearchTestPanel(PanelScreen):
     """``/searchtest`` — a real search connectivity probe (W1.2).
 
@@ -609,6 +673,106 @@ class SearchTestPanel(PanelScreen):
                 title = str(item.get("title") or "(no title)")
                 url = str(item.get("url") or "")
                 yield Static(f"{index}. {title}\n   {url}", markup=False)
+
+
+class OrchestrationPanel(PanelScreen):
+    """Live ``/orchestrate`` projection of the real trajectory (W2.8)."""
+
+    title_text = "ORCHESTRATION"
+    BINDINGS = [
+        *PanelScreen.BINDINGS,
+        Binding("r", "refresh_run", "Refresh", show=False),
+        Binding("s", "stop_run", "Stop", show=True),
+    ]
+
+    def __init__(self, trajectory, *, baseline: int = 0, on_stop: Callable[[], bool] | None = None) -> None:
+        super().__init__()
+        self._trajectory = trajectory
+        self._on_stop = on_stop
+        self._baseline = max(0, baseline)
+        self._poll_task: asyncio.Task | None = None
+        self._events: list[dict] = []
+        self._running = True
+
+    def keys_hint(self) -> str:
+        return "r refresh   ·   s stop   ·   esc close"
+
+    def body(self) -> ComposeResult:
+        yield Static("", id="orchestration-summary", classes="panel-subtitle", markup=False)
+        yield Static("", id="orchestration-timeline", markup=False)
+
+    def on_mount(self) -> None:
+        self._poll()
+        self._poll_task = asyncio.create_task(self._poll_loop())
+
+    def on_unmount(self) -> None:
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
+
+    def action_refresh_run(self) -> None:
+        self._poll()
+
+    def action_stop_run(self) -> None:
+        if self._running and self._on_stop is not None:
+            self._on_stop()
+
+    async def _poll_loop(self) -> None:
+        while self._running and self.is_attached:
+            await asyncio.sleep(0.6)
+            if self._running and self.is_attached:
+                self._poll()
+
+    def _poll(self) -> None:
+        try:
+            timeline = self._trajectory.timeline()
+        except Exception as exc:
+            self._set_text(f"Unable to read trajectory: {exc}", "")
+            return
+        self._events = list(timeline)[self._baseline:]
+        self._render()
+
+    def _render(self) -> None:
+        actors: dict[str, str] = {}
+        for event in self._events:
+            kind = str(event.get("kind") or "")
+            actor = str(event.get("actor") or "")
+            if actor:
+                actors[actor] = kind
+        if self._events:
+            last = self._events[-1]
+            state = str(last.get("kind") or "step")
+            summary = str(last.get("summary") or "")
+            status = "live" if self._running else "finished"
+            header = f"{status}   ·   {len(self._events)} event(s)   ·   last: {state}"
+            if summary:
+                header += f" — {summary[:100]}"
+            actor_line = "workers: " + ", ".join(
+                f"{actor} ({kind})" for actor, kind in sorted(actors.items())
+            )
+            body = "\n".join(
+                f"{event.get('seq', '?'):>4}  {event.get('actor', '')!s:<14.14} "
+                f"{event.get('kind', '')!s:<24.24} {str(event.get('summary', ''))[:90]}"
+                for event in self._events[-80:]
+            )
+            self._set_text(header, f"{actor_line}\n\n{body}")
+        else:
+            self._set_text("waiting for real trajectory events…", "No orchestration events recorded yet.")
+
+    def _set_text(self, header: str, body: str) -> None:
+        try:
+            self.query_one("#orchestration-summary", Static).update(header)
+            self.query_one("#orchestration-timeline", Static).update(body)
+        except Exception:
+            return
+
+    def finish(self) -> None:
+        """Stop the live label after the core returns, retaining final events."""
+        self._running = False
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
+        self._poll()
 
 
 class TrajectoryPanel(PanelScreen):
@@ -1027,6 +1191,10 @@ class PluginsPanel(PanelScreen):
                 )
             return
         target = not bool(row.get("enabled"))
+        if target and self.app is not None and not await self.app.push_screen_wait(
+            PluginTrustDialog(row, action="run")
+        ):
+            return
         try:
             result = await self._on_toggle(name, target)
         except Exception as exc:
@@ -1053,6 +1221,10 @@ class PluginsPanel(PanelScreen):
         if selected is not None and selected.get("installed") is False:
             if self._on_install_bundled is None:
                 return
+            if self.app is not None and not await self.app.push_screen_wait(
+                PluginTrustDialog(selected, action="install")
+            ):
+                return
             try:
                 result = await self._on_install_bundled(highlighted)
             except Exception as exc:
@@ -1078,6 +1250,10 @@ class PluginsPanel(PanelScreen):
                     severity="warning",
                     timeout=4,
                 )
+            return
+        if self.app is not None and not await self.app.push_screen_wait(
+            PluginTrustDialog({"name": path}, action="install")
+        ):
             return
         try:
             result = await self._on_install(path)
@@ -1152,6 +1328,59 @@ class PluginsPanel(PanelScreen):
             return
         if self.app is not None:
             self.app.push_screen(PluginInfoPanel(dict(row)))
+
+
+class PluginTrustDialog(ModalScreen[bool]):
+    """Explicit consent before installing or importing plugin Python code."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
+
+    def __init__(self, row: dict, *, action: str) -> None:
+        super().__init__()
+        self._row = dict(row)
+        self._action = action
+
+    def compose(self) -> ComposeResult:
+        name = str(self._row.get("name") or "Плагин")
+        version = str(self._row.get("version") or "")
+        summary = str(self._row.get("description") or "").strip()
+        tools = ", ".join(self._row.get("tools") or []) or "не перечислены"
+        capabilities = ", ".join(self._row.get("capabilities") or []) or "не указаны"
+        ui_block = self._row.get("ui_block") or {}
+        scopes = ", ".join(ui_block.get("scopes") or []) or "не указаны"
+        yield Static("PLUGIN TRUST", classes="panel-title")
+        yield Static(f"{name} {('v' + version) if version else ''}", markup=False)
+        if summary:
+            yield Static(summary, markup=False)
+        yield Static(
+            f"Инструменты: {tools}\nВозможности манифеста: {capabilities}\n"
+            f"Заявленные UI scopes: {scopes} (не ограничивают Python-код)",
+            markup=False,
+        )
+        yield Static(
+            "Python-код плагина запускается внутри AXIOM с правами пользователя: "
+            "он может читать и изменять доступные файлы, обращаться к сети, "
+            "переменным окружения и запускать процессы. AXIOM не изолирует его. "
+            "Заявленные ui.scopes не ограничивают доступ Python-кода.",
+            markup=False,
+        )
+        yield Static(
+            "Подтверждение установки только устанавливает файлы; плагин останется выключенным. "
+            "Для запуска потребуется отдельное подтверждение. Оно сохраняется, пока плагин включён.",
+            markup=False,
+        )
+        with Horizontal():
+            yield Button("Продолжить", id="plugin-trust-accept", variant="error")
+            yield Button("Отмена", id="plugin-trust-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "plugin-trust-accept":
+            self.dismiss(True)
+        elif event.button.id == "plugin-trust-cancel":
+            self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class PluginInfoPanel(PanelScreen):
@@ -1271,3 +1500,339 @@ def agent_rows(agents: list) -> list[dict]:
             "tools": list(getattr(agent, "tools", []) or []),
         })
     return rows
+
+
+class MemoryPanel(PanelScreen):
+    """``/memory`` — Curated Memory (W2.1): list, add, edit, delete.
+
+    Every row is a real persisted ``MemoryItem`` projection. ``a`` adds the
+    text from the input field, ``e`` edits the highlighted item's content
+    in place, ``d`` deletes it. Escape closes the panel.
+    """
+
+    title_text = "MEMORY"
+    BINDINGS = [
+        *PanelScreen.BINDINGS,
+        Binding("a", "add_item", "Add", show=False),
+        Binding("e", "edit_item", "Edit", show=False),
+        Binding("d", "delete_item", "Delete", show=False),
+    ]
+
+    def __init__(
+        self,
+        rows: list[dict],
+        *,
+        on_add: Callable[..., str | None] | None = None,
+        on_edit: Callable[[str, str], bool] | None = None,
+        on_delete: Callable[[str], bool] | None = None,
+        refresh: Callable[[], Awaitable[list[dict]]] | None = None,
+    ) -> None:
+        super().__init__()
+        self._rows = [dict(row) for row in rows]
+        self._on_add = on_add
+        self._on_edit = on_edit
+        self._on_delete = on_delete
+        self._refresh = refresh
+
+    def keys_hint(self) -> str:
+        return "↑↓ select   ·   a add   ·   e edit   ·   d delete   ·   esc close"
+
+    def subtitle_lines(self) -> list[str]:
+        if not self._rows:
+            return ["No memory items yet — 'a' adds the first one."]
+        global_count = sum(1 for row in self._rows if row.get("scope") == "global")
+        project_count = len(self._rows) - global_count
+        sensitive = sum(1 for row in self._rows if row.get("category") == "sensitive")
+        line = (
+            f"{len(self._rows)} item(s)   ·   {global_count} global"
+            f"   ·   {project_count} project"
+        )
+        if sensitive:
+            line += f"   ·   {sensitive} sensitive"
+        return [line]
+
+    @staticmethod
+    def _row_text(row: dict) -> str:
+        content = str(row.get("content") or "")
+        if len(content) > 88:
+            content = content[:88] + "…"
+        tags = ", ".join(row.get("tags") or [])
+        meta = f"{row.get('scope')}/{row.get('category')}"
+        if tags:
+            meta += f"  #{tags}"
+        return f"{meta}\n    {content}"
+
+    def body(self) -> ComposeResult:
+        # Always render the list (even empty) so add/edit/delete can refresh
+        # it in place without re-mounting the panel.
+        rows = [
+            Option(self._row_text(row), id=str(row.get("id") or ""))
+            for row in self._rows
+        ]
+        yield OptionList(*rows, id="memory-list")
+        yield Static(
+            "Content (used by 'a' to add, or by 'e' to replace the selection):",
+            markup=False,
+        )
+        yield Input(placeholder="memory content…", id="memory-content")
+
+    def on_mount(self) -> None:
+        if self._rows:
+            self.query_one("#memory-list", OptionList).focus()
+
+
+    # ------------------------------------------------------------------ utils
+
+    def _highlighted_id(self) -> str:
+        option_list = self.query_one("#memory-list", OptionList)
+        index = option_list.highlighted
+        if index is not None and 0 <= index < len(self._rows):
+            return str(self._rows[index].get("id") or "")
+        return ""
+
+    def _refresh_rows(self) -> None:
+        option_list = self.query_one("#memory-list", OptionList)
+        option_list.clear_options()
+        for row in self._rows:
+            option_list.add_option(
+                Option(self._row_text(row), id=str(row.get("id") or ""))
+            )
+
+    def _notify(self, message: str, severity: str = "information") -> None:
+        if self.app is not None:
+            self.app.notify(message, title="Memory", severity=severity, timeout=4)
+
+    async def _reload(self) -> None:
+        """Re-read the authoritative projection from the session.
+
+        ``refresh`` may be a plain function (``memory_rows``) or a coroutine
+        function — both are supported so the panel stays a thin adapter.
+        """
+        if self._refresh is None:
+            return
+        try:
+            result = self._refresh()
+            if hasattr(result, "__await__"):
+                result = await result
+            self._rows = [dict(row) for row in result]
+        except Exception:
+            return
+        self._refresh_rows()
+
+    # ---------------------------------------------------------------- actions
+
+    async def action_add_item(self) -> None:
+        if self._on_add is None:
+            return
+        content = self.query_one("#memory-content", Input).value.strip()
+        if not content:
+            self._notify("Enter the text to remember first.", severity="warning")
+            return
+        item_id = self._on_add(content)
+        if item_id is None:
+            self._notify("Memory item was rejected.", severity="error")
+            return
+        self.query_one("#memory-content", Input).value = ""
+        await self._reload()
+        self._notify(f"Stored: {content[:40]}")
+
+    async def action_edit_item(self) -> None:
+        if self._on_edit is None:
+            return
+        item_id = self._highlighted_id()
+        if not item_id:
+            self._notify("Select an item to edit.", severity="warning")
+            return
+        content = self.query_one("#memory-content", Input).value.strip()
+        if not content:
+            self._notify("Type the new content first.", severity="warning")
+            return
+        if not self._on_edit(item_id, content):
+            self._notify("Edit rejected.", severity="error")
+            return
+        self.query_one("#memory-content", Input).value = ""
+        await self._reload()
+        self._notify("Memory item updated.")
+
+    async def action_delete_item(self) -> None:
+        if self._on_delete is None:
+            return
+        item_id = self._highlighted_id()
+        if not item_id:
+            self._notify("Select an item to delete.", severity="warning")
+            return
+        if not self._on_delete(item_id):
+            self._notify("Item not found.", severity="error")
+            return
+        await self._reload()
+        self._notify("Memory item deleted.")
+
+
+
+class KnowledgePanel(PanelScreen):
+    """``/knowledge`` — Knowledge Base (W2.2): collections, index, search.
+
+    ``a`` indexes the path in the input as a collection, ``r`` re-indexes the
+    highlighted collection (incremental), ``d`` removes it, ``/`` searches
+    every collection with the query from the input. Escape closes.
+    """
+
+    title_text = "KNOWLEDGE"
+    BINDINGS = [
+        *PanelScreen.BINDINGS,
+        Binding("a", "add_collection", "Add", show=False),
+        Binding("r", "reindex_collection", "Reindex", show=False),
+        Binding("d", "delete_collection", "Delete", show=False),
+        Binding("/", "search_kb", "Search", show=False),
+    ]
+
+    def __init__(
+        self,
+        rows: list[dict],
+        *,
+        on_add: Callable[[str, str], Awaitable[dict]] | None = None,
+        on_reindex: Callable[[str], Awaitable[dict]] | None = None,
+        on_delete: Callable[[str], bool] | None = None,
+        on_search: Callable[[str], Awaitable[list[dict]]] | None = None,
+        refresh: Callable[[], Awaitable[list[dict]]] | None = None,
+    ) -> None:
+        super().__init__()
+        self._rows = [dict(row) for row in rows]
+        self._on_add = on_add
+        self._on_reindex = on_reindex
+        self._on_delete = on_delete
+        self._on_search = on_search
+        self._refresh = refresh
+        self._results: list[dict] = []
+
+    def keys_hint(self) -> str:
+        return "a index path · r reindex · d remove · / search · esc close"
+
+    def subtitle_lines(self) -> list[str]:
+        if not self._rows:
+            return ["No knowledge collections — type a path below and press 'a'."]
+        files = sum(int(row.get("files") or 0) for row in self._rows)
+        chunks = sum(int(row.get("chunks") or 0) for row in self._rows)
+        return [f"{len(self._rows)} collection(s) · {files} files · {chunks} chunks"]
+
+    @staticmethod
+    def _row_text(row: dict) -> str:
+        embeddings = str(row.get("embeddings") or "disabled")
+        return (
+            f"{row.get('name')} — {row.get('files')} files, {row.get('chunks')} chunks"
+            f" · embeddings: {embeddings}\n    {row.get('path')}"
+        )
+
+    def body(self) -> ComposeResult:
+        rows = [
+            Option(self._row_text(row), id=str(row.get("name") or ""))
+            for row in self._rows
+        ]
+        yield OptionList(*rows, id="knowledge-list")
+        yield Static("Path for 'a' (folder/file) or query for '/':", markup=False)
+        yield Input(placeholder="folder path or search query…", id="knowledge-input")
+        yield Static("", id="knowledge-results", markup=False)
+
+    def on_mount(self) -> None:
+        self.query_one("#knowledge-input", Input).focus()
+
+    def _highlighted_name(self) -> str:
+        option_list = self.query_one("#knowledge-list", OptionList)
+        index = option_list.highlighted
+        if index is not None and 0 <= index < len(self._rows):
+            return str(self._rows[index].get("name") or "")
+        return ""
+
+    def _refresh_rows(self) -> None:
+        option_list = self.query_one("#knowledge-list", OptionList)
+        option_list.clear_options()
+        for row in self._rows:
+            option_list.add_option(
+                Option(self._row_text(row), id=str(row.get("name") or ""))
+            )
+
+    def _notify(self, message: str, severity: str = "information") -> None:
+        if self.app is not None:
+            self.app.notify(message, title="Knowledge", severity=severity, timeout=4)
+
+    async def _reload(self) -> None:
+        if self._refresh is None:
+            return
+        try:
+            result = self._refresh()
+            if hasattr(result, "__await__"):
+                result = await result
+            self._rows = [dict(row) for row in result]
+        except Exception:
+            return
+        self._refresh_rows()
+
+
+    async def action_add_collection(self) -> None:
+        if self._on_add is None:
+            return
+        path = self.query_one("#knowledge-input", Input).value.strip()
+        if not path:
+            self._notify("Enter a folder or file path first.", severity="warning")
+            return
+        name = path.rstrip("/\\").replace("\\", "/").split("/")[-1] or "collection"
+        result = await self._on_add(name, path)
+        if not result.get("ok"):
+            self._notify(str(result.get("error") or "Index failed."), severity="error")
+            return
+        stats = result.get("stats") or {}
+        self.query_one("#knowledge-input", Input).value = ""
+        await self._reload()
+        self._notify(f"Indexed {name}: {stats.get('indexed', 0)} new/changed files.")
+
+    async def action_reindex_collection(self) -> None:
+        if self._on_reindex is None:
+            return
+        name = self._highlighted_name()
+        if not name:
+            self._notify("Select a collection first.", severity="warning")
+            return
+        result = await self._on_reindex(name)
+        if not result.get("ok"):
+            self._notify(str(result.get("error") or "Reindex failed."), severity="error")
+            return
+        stats = result.get("stats") or {}
+        await self._reload()
+        self._notify(
+            f"{name}: {stats.get('indexed', 0)} changed, {stats.get('unchanged', 0)} unchanged."
+        )
+
+    async def action_delete_collection(self) -> None:
+        if self._on_delete is None:
+            return
+        name = self._highlighted_name()
+        if not name:
+            self._notify("Select a collection first.", severity="warning")
+            return
+        if not self._on_delete(name):
+            self._notify("Collection not found.", severity="error")
+            return
+        await self._reload()
+        self._notify(f"Collection '{name}' removed.")
+
+    async def action_search_kb(self) -> None:
+        if self._on_search is None:
+            return
+        query = self.query_one("#knowledge-input", Input).value.strip()
+        if not query:
+            self._notify("Type a search query first.", severity="warning")
+            return
+        self._results = await self._on_search(query)
+        target = self.query_one("#knowledge-results", Static)
+        if not self._results:
+            target.update(f"(no fragments match '{query}')")
+            return
+        lines = [f"Fragments for '{query}':"]
+        for item in self._results[:5]:
+            lines.append(
+                f"[{item.get('collection')}/{item.get('source')}"
+                f":{item.get('start_line')}-{item.get('end_line')}]"
+            )
+            lines.append("  " + " ".join(str(item.get("text") or "").split())[:160])
+        target.update("\n".join(lines))
+

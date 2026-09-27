@@ -2,7 +2,8 @@
 
 This is the TUI's implementation of the ``request_callback`` that
 :class:`~axiom.core.permissions.PermissionManager` calls when the current
-mode requires user confirmation.
+mode requires user confirmation (W2.4). The tool call is really suspended
+until the dialog returns a :class:`PermissionOutcome`.
 """
 
 from __future__ import annotations
@@ -15,19 +16,21 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
+from axiom.core.permissions import PermissionOutcome
 from axiom.shared import theme
 
 
-class PermissionDialog(ModalScreen[bool]):
-    """Modal dialog showing tool details and asking Approve / Deny.
+class PermissionDialog(ModalScreen[PermissionOutcome]):
+    """Modal dialog showing tool details and asking once / always / deny.
 
-    Returns ``True`` when the user approves, ``False`` when denied.
+    Returns the answer chosen by the user; only ``ALLOW_ALWAYS`` is cached by
+    the manager, so "Allow once" really asks again next time.
     """
 
     BINDINGS = [
         Binding("escape", "deny", "Deny", show=True),
-        Binding("f1", "approve", "Approve", show=True),
-        Binding("enter", "approve", "Approve", show=False),
+        Binding("enter", "allow_once", "Allow once", show=True),
+        Binding("f2", "allow_always", "Always allow", show=True),
     ]
 
     def __init__(
@@ -51,22 +54,29 @@ class PermissionDialog(ModalScreen[bool]):
                 )
                 yield Static(f"Arguments:\n{args_text}", id="perm-args", markup=False)
             yield Static(
-                "Allow this tool to execute?",
+                "Allow this tool to execute?\n"
+                "Once approves this call only; Always remembers this tool for the session.",
                 id="perm-prompt",
                 markup=False,
             )
             with Horizontal(id="perm-buttons"):
-                yield Button("Approve", id="perm-approve", variant="primary")
+                yield Button("Allow once", id="perm-once", variant="primary")
+                yield Button("Always allow", id="perm-always")
                 yield Button("Deny", id="perm-deny", variant="error")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "perm-approve":
-            self.dismiss(True)
+        if event.button.id == "perm-once":
+            self.dismiss(PermissionOutcome.ALLOW_ONCE)
+        elif event.button.id == "perm-always":
+            self.dismiss(PermissionOutcome.ALLOW_ALWAYS)
         elif event.button.id == "perm-deny":
-            self.dismiss(False)
+            self.dismiss(PermissionOutcome.DENY)
 
-    def action_approve(self) -> None:
-        self.dismiss(True)
+    def action_allow_once(self) -> None:
+        self.dismiss(PermissionOutcome.ALLOW_ONCE)
+
+    def action_allow_always(self) -> None:
+        self.dismiss(PermissionOutcome.ALLOW_ALWAYS)
 
     def action_deny(self) -> None:
-        self.dismiss(False)
+        self.dismiss(PermissionOutcome.DENY)

@@ -1,0 +1,191 @@
+/* =================================================================
+   W2.7 CSS split — Boot sequence domain.
+   Extracted verbatim from styles.css; imported right after styles.css
+   in main.tsx so the cascade order is unchanged.
+   ================================================================= */
+
+
+/* -------------------------------------------------- boot sequence */
+.boot {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  overflow: hidden;
+  animation: fade-in 0.25s ease both;
+}
+
+.boot-glow {
+  position: absolute;
+  width: 620px;
+  height: 620px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  opacity: 0.22;
+  animation: boot-breathe 5s ease-in-out infinite;
+}
+
+@keyframes boot-breathe {
+  0%, 100% { opacity: 0.18; transform: scale(0.98); }
+  50% { opacity: 0.28; transform: scale(1.01); }
+}
+
+.boot-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(420px, 86vw);
+  animation: fade-rise 0.45s ease both;
+}
+
+.boot-mark {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: 0.24em;
+  color: var(--text);
+}
+
+.boot-tagline {
+  margin-top: 5px;
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  color: var(--text-faint);
+}
+
+.boot-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  margin-top: 30px;
+}
+
+.boot-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  animation: fade-slide 0.24s ease both;
+  transition: color 0.24s ease;
+}
+
+.boot-step.ok { color: var(--text-dim); }
+.boot-step.running { color: var(--text); }
+.boot-step.failed { color: var(--bad); }
+
+.boot-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: inherit;
+}
+
+.boot-step.ok .boot-step-icon { color: var(--ok); }
+.boot-step.running .boot-step-icon { color: var(--accent); }
+
+.boot-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.boot-step-label { flex: none; }
+
+.boot-step-detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.boot-progress {
+  width: 100%;
+  margin-top: 26px;
+}
+
+.boot-progress-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.boot-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.boot-progress-text {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.boot-error {
+  width: 100%;
+  margin-top: 26px;
+  padding: 16px 18px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  animation: fade-rise 0.3s ease both;
+}
+
+.boot-error-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--text);
+}
+
+.boot-error-title svg { color: var(--bad); flex: none; }
+
+.boot-error-hint {
+  margin-top: 7px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+
+.boot-error-causes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  line-height: 1.7;
+}
+
+.boot-error-causes code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.boot-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}

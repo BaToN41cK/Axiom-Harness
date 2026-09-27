@@ -47,7 +47,10 @@ COMMANDS: tuple[Command, ...] = (
     Command("/providers", "Provider manager: statuses, test connection"),
     Command("/agents", "Agent registry: roles and assigned models"),
     Command("/plugins", "Plugin manager: install, enable, disable, remove"),
+    Command("/memory", "Curated memory: list, add (a), delete (d), edit (e)"),
+    Command("/knowledge", "Knowledge base: collections, index, search"),
     Command("/orchestrate", "Run a task through analyst, coder, debugger, tester and reviewer", "task"),
+    Command("/benchmark", "Run real cold/warm performance scenarios", "[repetitions]"),
     Command("/exit", "Exit Axiom"),
 )
 

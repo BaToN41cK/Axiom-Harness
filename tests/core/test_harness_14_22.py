@@ -70,6 +70,44 @@ def test_project_index_detects_repo(tmp_path):
     assert mem.load_index() is not None
 
 
+def test_project_index_prunes_heavy_dirs_and_stays_fast(tmp_path):
+    """Regression: the walker must prune .git/node_modules/.venv.
+
+    The old ``rglob("*") + is_file()`` descended into those directories and
+    issued an extra ``stat()`` per entry, which made every project switch take
+    seconds (23k+ syscalls on a mid-size repo) and froze the whole bridge.
+    """
+    import time
+
+    from axiom.core.project_index import _collect_files, index_project
+
+    root = tmp_path / "proj"
+    (root / "src").mkdir(parents=True)
+    (root / "main.py").write_text("print(1)\n", encoding="utf-8")
+    (root / "package.json").write_text('{"name":"x"}\n', encoding="utf-8")
+    # Noise that must never be indexed.
+    for noisy in (".git", "node_modules/pkg", ".venv/lib"):
+        deep = root / noisy
+        deep.mkdir(parents=True)
+        (deep / "junk.py").write_text("x = 1\n", encoding="utf-8")
+
+    files = _collect_files(root)
+    names = {p.name for p in files}
+    assert "main.py" in names and "package.json" in names
+    assert "junk.py" not in names, "heavy directories leaked into the index"
+
+    # A 4000-file cap keeps the walk bounded on huge repositories.
+    assert len(_collect_files(root, limit=2)) == 2
+
+    start = time.perf_counter()
+    index = index_project(root)
+    elapsed = time.perf_counter() - start
+    assert "Python" in index.languages
+    assert index.build_system == "package.json"
+    assert "main.py" in index.entry_points
+    assert elapsed < 2.0, f"index_project took {elapsed:.2f}s — walker regressed"
+
+
 async def test_mcp_manager_registers_tools_without_server():
     from axiom.core.mcp import MCPManager
     from axiom.core.tools.registry import ToolRegistry

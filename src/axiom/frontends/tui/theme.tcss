@@ -19,14 +19,16 @@ Screen {
 .no-panel-hover #search-sources > ListItem:hover { background: transparent; }
 .no-panel-hover #stop-button:hover { background: $secondary; }
 .no-panel-hover .code-action:hover { color: #777777; background: #0A0A0A; }
-.no-panel-hover #perm-approve:hover { background: $secondary; }
+.no-panel-hover #perm-once:hover { background: $secondary; }
+.no-panel-hover #perm-always:hover { background: $secondary; }
 .no-panel-hover #perm-deny:hover { border: round #3A3A3A; }
 .no-panel-hover .profile-row:hover { background: transparent; }
 
 /* The class is kept explicit so the configured behavior is easy to audit. */
 .panel-hover #stop-button:hover,
 .panel-hover .code-action:hover,
-.panel-hover #perm-approve:hover,
+.panel-hover #perm-once:hover,
+.panel-hover #perm-always:hover,
 .panel-hover .profile-row:hover {
     background: $secondary;
 }
@@ -149,6 +151,47 @@ HeaderBar {
     color: #777777;
     background: #161616;
     padding: 0 1;
+}
+
+#find-bar {
+    dock: bottom;
+    height: 3;
+    width: 1fr;
+    background: #080808;
+    border-top: solid $secondary;
+    padding: 0 2;
+}
+
+#find-label {
+    width: auto;
+    color: $accent;
+    padding: 1 1 0 0;
+}
+
+#find-input {
+    width: 1fr;
+    height: 3;
+    border: none;
+    background: #080808;
+    color: #FFFFFF;
+}
+
+#find-count {
+    width: 14;
+    color: #777777;
+    content-align: right middle;
+    padding-top: 1;
+}
+
+#orchestration-timeline,
+.benchmark-row {
+    color: #B9B9B9;
+    margin: 0 1;
+    padding: 0 1;
+}
+
+#orchestration-timeline {
+    color: #D0D0D0;
 }
 
 .message {
@@ -570,15 +613,27 @@ PanelScreen {
     align: center middle;
 }
 
-#perm-approve {
-    width: 12;
+#perm-once {
+    width: 14;
     margin-right: 2;
     background: $secondary;
     border: round $accent;
     color: #FFFFFF;
 }
 
-#perm-approve:hover {
+#perm-once:hover {
+    background: $secondary;
+}
+
+#perm-always {
+    width: 16;
+    margin-right: 2;
+    background: #161616;
+    border: round $accent;
+    color: #FFFFFF;
+}
+
+#perm-always:hover {
     background: $secondary;
 }
 

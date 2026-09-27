@@ -10,6 +10,11 @@ import json
 from dataclasses import dataclass, field
 
 from axiom.core.tools.base import ToolDefinition, ToolPermission, ToolResult
+from axiom.core.tools.processes import (
+    direct_executable_argv,
+    process_group_options,
+    terminate_process_tree,
+)
 
 
 @dataclass
@@ -35,8 +40,9 @@ class MCPClient:
         if not self.server.command:
             raise RuntimeError(f"MCP server '{self.server.name}' has no command")
         proc = await asyncio.create_subprocess_exec(
-            *self.server.command, stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            *direct_executable_argv(self.server.command), stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            **process_group_options())
         request = {"jsonrpc": "2.0", "id": self._next_id(), "method": method,
                    "params": params or {}}
         try:
@@ -50,10 +56,8 @@ class MCPClient:
             except Exception:
                 return {}
         finally:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            if proc.returncode is None:
+                await terminate_process_tree(proc)
 
     async def list_tools(self) -> list[ToolDefinition]:
         try:

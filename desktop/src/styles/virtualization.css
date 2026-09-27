@@ -1,0 +1,18 @@
+
+/* =================================================================
+   W2.7 — list virtualization via native content-visibility.
+   Off-screen chat messages and Explorer rows skip layout + paint until
+   they scroll near the viewport. `contain-intrinsic-size` reserves an
+   estimated height so the scrollbar and scroll position stay correct.
+   Purely a rendering optimisation: no DOM, behavior or visual change.
+   ================================================================= */
+.chat-inner > .msg {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
+}
+
+.ex-tree .ex-node {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 26px;
+}
+

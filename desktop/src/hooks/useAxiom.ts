@@ -21,7 +21,21 @@ import {
 } from "../bridge";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { commandByName, matchingCommands, parseCommand } from "../lib/commands";
+import { clearComposerData, readComposerDraft, writeComposerDraft } from "../lib/composerStorage";
 import { stripDataUrl } from "../lib/format";
+import {
+  activeProviderLabel,
+  errorText,
+  liveAssistant,
+  nextUserId,
+  orchestrationProgress,
+  resolveModel,
+  toolStatusText,
+  toolTarget,
+  updateLive,
+} from "./useAxiom.helpers";
+// Re-exported so existing consumers keep importing these from `useAxiom`.
+export { orchestrationProgress, resolveModel, toolLabel, toolTarget } from "./useAxiom.helpers";
 import {
   applyOrchestrationEvent,
   applyOrchestrationResult,
@@ -45,18 +59,25 @@ import type {
   StartupReport,
   StatusReport,
   Task,
+  TaskPlan,
   TerminalResult,
   ToolInfo,
   ProviderRow,
   ProviderModelRow,
   PluginRow,
   PluginInstallResult,
+  MemoryRow,
+  KnowledgeRow,
+  KnowledgeHit,
+  KnowledgeIndexResult,
   AgentRow,
   TrajectoryViewer,
   TreeNode,
   WorkspaceState,
   SearchProviderChoice,
   SearchTestResult,
+  PermissionDecision,
+  PermissionRequest,
 } from "../types";
 
 export type Phase = "booting" | "ready" | "unavailable" | "error";
@@ -66,6 +87,8 @@ export type SettingsSection =
   | "models"
   | "providers"
   | "plugins"
+  | "memory"
+  | "knowledge"
   | "chat"
   | "tools"
   | "appearance"
@@ -95,155 +118,10 @@ const BOOT_SEQUENCE: { id: string; label: string }[] = [
   { id: "workspace", label: "Подготовка рабочего пространства" },
 ];
 
-let liveId = 0;
 let toastId = 0;
 
 function freshSteps(): BootStep[] {
   return BOOT_SEQUENCE.map((step) => ({ ...step, state: "pending", detail: null }));
-}
-
-function liveAssistant(content = "", thinking = ""): LiveMessage {
-  return {
-    id: `live-${++liveId}`,
-    role: "assistant",
-    content,
-    thinking,
-    streaming: true,
-    toolCalls: [],
-    sources: [],
-    createdAt: Date.now(),
-  };
-}
-
-/** Mutate the trailing streaming assistant message, immutably. */
-function updateLive(messages: LiveMessage[], mutate: (m: LiveMessage) => void): LiveMessage[] {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.role === "assistant" && message.streaming) {
-      const copy: LiveMessage = {
-        ...message,
-        toolCalls: message.toolCalls.map((tool) => ({ ...tool })),
-      };
-      mutate(copy);
-      const next = [...messages];
-      next[i] = copy;
-      return next;
-    }
-  }
-  return messages;
-}
-
-function errorText(err: unknown): string {
-  const text = err instanceof Error ? err.message : String(err);
-  return text.replace(/^Error:\s*/, "");
-}
-
-function activeProviderLabel(name: string, providerId: string): string {
-  return providerId === "ollama" ? name : `${providerId}/${name}`;
-}
-
-/** Match a model by exact name, then by display label, then by substring. */
-export function resolveModel(models: ModelInfo[], needle: string): ModelInfo | null {
-  const query = needle.trim().toLowerCase();
-  if (!query) return null;
-  return (
-    models.find((m) => m.name.toLowerCase() === query) ??
-    models.find((m) => m.displayName.toLowerCase() === query) ??
-    models.find((m) => m.name.toLowerCase().includes(query)) ??
-    models.find((m) => m.displayName.toLowerCase().includes(query)) ??
-    null
-  );
-}
-
-/** Human label of a tool as shown in the UI. */
-export function toolLabel(name: string): string {
-  if (name === "web_search") return "Веб-поиск";
-  if (name === "fetch_url") return "Чтение страницы";
-  if (name === "list_files") return "Просмотр папки";
-  if (name === "read_file") return "Чтение файла";
-  if (name === "write_file") return "Запись файла";
-  if (name === "edit_file") return "Редактирование";
-  if (name === "search_text") return "Поиск по коду";
-  if (name === "search_files") return "Поиск файлов";
-  if (name === "run_command") return "Терминал";
-  if (name === "inspect_project") return "Осмотр проекта";
-  if (name.startsWith("git_")) return "Git";
-  return name;
-}
-
-/** What a tool is actually working on (query, URL, ...). */
-export function toolTarget(_name: string, args: Record<string, unknown>): string {
-  const pick = (...keys: string[]): string => {
-    for (const key of keys) {
-      const value = args?.[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-    return "";
-  };
-  const query = args?.query;
-  const url = args?.url;
-  if (typeof query === "string" && query.trim()) return query.trim();
-  if (typeof url === "string" && url.trim()) return url.trim();
-  return pick("command", "path", "pattern", "glob", "source", "destination");
-}
-
-function toolStatusText(name: string, args: Record<string, unknown>): string {
-  const target = toolTarget(name, args);
-  if (name === "web_search") return target ? `Ищет: «${target}»` : "Ищет в интернете…";
-  if (name === "fetch_url") return target ? `Читает: ${target}` : "Читает страницу…";
-  if (name === "list_files") return target ? `Смотрит папку: ${target}` : "Смотрит файлы…";
-  if (name === "read_file") return target ? `Читает: ${target}` : "Читает файл…";
-  if (name === "write_file") return target ? `Пишет: ${target}` : "Пишет файл…";
-  if (name === "edit_file") return target ? `Правит: ${target}` : "Редактирует…";
-  if (name === "search_text" || name === "search_files") return target ? `Ищет: «${target}»` : "Ищет по проекту…";
-  if (name === "run_command") return target ? `Выполняет: ${target}` : "Выполняет команду…";
-  if (name.startsWith("git_")) return "Git…";
-  return toolLabel(name);
-}
-
-/**
- * Live `/orchestrate` progress (real trajectory steps streamed by the core) →
- * the text of the status pill. The structured board renders every step, so only
- * the one-line status is derived here. Returns null for kinds without a status.
- */
-export function orchestrationProgress(event: {
-  kind: string;
-  actor: string;
-  summary: string;
-}): string | null {
-  const actor = event.actor || "orchestrator";
-  switch (event.kind) {
-    case "orchestration.command":
-    case "orchestrator.plan":
-      return "Оркестрация: план…";
-    case "agent.start":
-      return `Оркестрация: ${actor} выполняет задачу…`;
-    case "agent.done":
-      return `Оркестрация: ${actor} готов`;
-    case "agent.failed":
-      return `Оркестрация: ${actor} — ошибка`;
-    case "subagent.model":
-      return `Оркестрация: ${actor} → ${event.summary}`;
-    case "subagent.reasoning":
-      return `Оркестрация: ${actor} — думает…`;
-    case "subagent.answer":
-      return `Оркестрация: ${actor} — пишет…`;
-    case "subagent.tool.call":
-    case "subagent.tool.result":
-      return `Оркестрация: ${actor} — ${event.summary}`;
-    case "orchestrator.review":
-      return "Оркестрация: review…";
-    case "verification.completed":
-      return "Оркестрация: verification…";
-    case "orchestrator.done":
-      return "Оркестрация: завершена";
-    case "orchestration.cancelled":
-      return "Оркестрация остановлена";
-    case "orchestration.failed":
-      return "Оркестрация: сбой";
-    default:
-      return null;
-  }
 }
 
 export function useAxiom() {
@@ -278,6 +156,8 @@ export function useAxiom() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskRequestPending, setTaskRequestPending] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  // W2.4: an ASK tool call that is really blocked until the user answers.
+  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [liveState, setLiveState] = useState("idle");
   const [statusText, setStatusText] = useState<string | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -291,6 +171,13 @@ export function useAxiom() {
   const [pluginRows, setPluginRows] = useState<PluginRow[]>([]);
   const [bundledPlugins, setBundledPlugins] = useState<PluginRow[]>([]);
   const [pluginLoading, setPluginLoading] = useState(false);
+  // W2.1 Curated Memory: rows + add/edit/delete driven by the bridge.
+  const [memoryRows, setMemoryRows] = useState<MemoryRow[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  // W2.2 Knowledge Base: collections + cited search driven by the bridge.
+  const [knowledgeRows, setKnowledgeRows] = useState<KnowledgeRow[]>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeHits, setKnowledgeHits] = useState<KnowledgeHit[]>([]);
   const [searchProviders, setSearchProviders] = useState<SearchProviderChoice[]>([]);
   const [searchTestResult, setSearchTestResult] = useState<SearchTestResult | null>(null);
   const [searchTesting, setSearchTesting] = useState(false);
@@ -357,8 +244,25 @@ export function useAxiom() {
   const [status, setStatus] = useState<StatusReport | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [debugLog, setDebugLog] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState(() => readComposerDraft(null));
+  const draftRef = useRef(draft);
+  const draftChatIdRef = useRef<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  function setDraft(value: string) {
+    draftRef.current = value;
+    setDraftState(value);
+  }
+
+  useEffect(() => {
+    writeComposerDraft(draftChatIdRef.current, draft);
+  }, [draft]);
+
+  function switchComposerDraft(chatId: string | null) {
+    writeComposerDraft(draftChatIdRef.current, draftRef.current);
+    draftChatIdRef.current = chatId;
+    setDraft(readComposerDraft(chatId));
+  }
 
   function onOpenModels() {
     setModelMenuSignal((n) => n + 1);
@@ -372,7 +276,8 @@ export function useAxiom() {
   const taskScopeRef = useRef<string | null>(null);
   /** Throttles silent explorer refreshes while workers write files. */
   const lastTreeSyncRef = useRef(0);
-  const rafRef = useRef<number | null>(null);
+  /** Pending flush handle for the ~30 ms streaming-text batch window. */
+  const flushTimerRef = useRef<number | null>(null);
   const bootedRef = useRef(false);
   /** Tokens that cancel superseded background tasks (warm-up, chat search). */
   const warmupTokenRef = useRef(0);
@@ -415,10 +320,16 @@ export function useAxiom() {
   }
 
   // ------------------------------------------------- streaming text batching
-  // Chunks arrive far faster than a frame; accumulate and flush once per frame
-  // so long answers stay smooth instead of re-rendering per token.
+  // Chunks arrive far faster than the eye can follow; accumulate deltas and
+  // flush them on a fixed ~30 ms cadence (about one paint interval at 30 fps)
+  // so long answers stay smooth with a bounded re-render rate instead of one
+  // state update per token.
+  const STREAM_FLUSH_MS = 30;
   const flushText = useCallback(() => {
-    rafRef.current = null;
+    if (flushTimerRef.current != null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
     const { content, thinking } = pendingTextRef.current;
     if (!content && !thinking) return;
     pendingTextRef.current = { content: "", thinking: "" };
@@ -434,8 +345,17 @@ export function useAxiom() {
     const pending = pendingTextRef.current;
     pendingTextRef.current =
       kind === "content" ? { ...pending, content: pending.content + text } : { ...pending, thinking: pending.thinking + text };
-    if (rafRef.current == null) rafRef.current = window.requestAnimationFrame(flushText);
+    if (flushTimerRef.current == null) {
+      flushTimerRef.current = window.setTimeout(flushText, STREAM_FLUSH_MS);
+    }
   }
+
+  // Clear any pending streaming flush when the store unmounts.
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current != null) window.clearTimeout(flushTimerRef.current);
+    };
+  }, []);
 
   // --------------------------------------------------------------- elapsed
   useEffect(() => {
@@ -934,10 +854,39 @@ export function useAxiom() {
           });
           if (taskActiveRef.current) {
             setActiveTaskId(event.task_id);
-            setStatusText(`Задача: ${event.task.state}`);
+            const labels: Record<Task["state"], string> = {
+              pending: "готова к запуску",
+              analyzing: "анализирует проект",
+              planning: "составляет план",
+              executing: "выполняет шаг",
+              waiting_for_permission: "ожидает разрешения",
+              verifying: "проверяет результат",
+              waiting_for_user: "требует решения",
+              completed: "завершена",
+              failed: "завершилась с ошибкой",
+              cancelled: "остановлена",
+            };
+            const detail = event.task.detail?.trim();
+            setStatusText(`Задача: ${labels[event.task.state] ?? event.task.state}${detail ? ` · ${detail.slice(0, 120)}` : ""}`);
+          }
+          if (["completed", "failed", "cancelled", "waiting_for_user"].includes(event.task.state) && taskActiveRef.current) {
+            taskActiveRef.current = false;
+            generatingRef.current = false;
+            setGenerating(false);
+            setTaskRequestPending(false);
+            setActiveTaskId(null);
+            setStatusText(null);
+            setLiveState("idle");
+            void loadTree();
+            void loadGit();
           }
           break;
         }
+        case "permission_request":
+          // W2.4: the blocked tool call waits for a real answer from this dialog.
+          setPendingPermission(event);
+          setStatusText(`Ожидает разрешения: ${event.tool}`);
+          break;
         case "error":
           setMessages((list) =>
             updateLive(list, (m) => {
@@ -980,6 +929,7 @@ export function useAxiom() {
     setGenerating(false);
     setStatusText(null);
     setLiveState("error");
+    setPendingPermission(null);
     const text = errorText(err);
     if (/ядро остановлено/i.test(text)) setCoreLost(true);
     notify(text, "error");
@@ -994,6 +944,7 @@ export function useAxiom() {
       const result = await request<SendResult>(cmd, args);
       if (result?.conversation) {
         const conversation = result.conversation;
+        if (activeChatId !== conversation.id) switchComposerDraft(conversation.id);
         setActiveChatId(conversation.id);
         setChats((list) => [conversation, ...list.filter((c) => c.id !== conversation.id)]);
       }
@@ -1109,7 +1060,7 @@ export function useAxiom() {
       return;
     }
     const userMessage: LiveMessage = {
-      id: `u-${++liveId}`,
+      id: nextUserId(),
       role: "user",
       content: clean,
       thinking: "",
@@ -1125,12 +1076,33 @@ export function useAxiom() {
   }
 
   async function cancel() {
+    if (pendingPermission) {
+      // Stop must not leave a tool call waiting forever — refuse it first.
+      void respondPermission("deny");
+    }
     if (!generatingRef.current) return;
     setStatusText("Останавливаю…");
     try {
       await request<{ cancelled: boolean }>("cancel");
     } catch {
       /* nothing was running on the backend side */
+    }
+  }
+
+  /** W2.4: deliver the user's real answer to a blocked tool call. */
+  async function respondPermission(decision: PermissionDecision) {
+    const pending = pendingPermission;
+    if (!pending) return;
+    setPendingPermission(null);
+    setStatusText(null);
+    try {
+      const res = await request<{ resolved: boolean }>("permission_respond", {
+        id: pending.id,
+        decision,
+      });
+      if (!res.resolved) notify("Запрос разрешения уже неактуален", "error");
+    } catch (err) {
+      notify(errorText(err), "error");
     }
   }
 
@@ -1217,8 +1189,10 @@ export function useAxiom() {
     if (generatingRef.current) void cancel();
     try {
       const conversation = await request<Conversation>("new_chat");
+      switchComposerDraft(conversation.id);
       setActiveChatId(conversation.id);
     } catch {
+      switchComposerDraft(null);
       setActiveChatId(null);
     }
     setMessages([]);
@@ -1237,6 +1211,7 @@ export function useAxiom() {
         void refreshChats();
         return;
       }
+      switchComposerDraft(id);
       setActiveChatId(id);
       setMessages(
         (conversation.messages ?? []).map((message, index) => ({
@@ -1263,8 +1238,12 @@ export function useAxiom() {
     try {
       await request("delete_chat", { id });
       if (id === activeChatId) {
+        switchComposerDraft(null);
+        clearComposerData(id);
         setActiveChatId(null);
         setMessages([]);
+      } else {
+        clearComposerData(id);
       }
       await refreshChats();
       notify("Разговор удалён");
@@ -1286,9 +1265,14 @@ export function useAxiom() {
       }
     }
     if (activeChatId && !failed.includes(activeChatId)) {
+      switchComposerDraft(null);
+      clearComposerData(activeChatId);
       setActiveChatId(null);
       setMessages([]);
       setLastMetrics(null);
+    }
+    for (const id of ids) {
+      if (!failed.includes(id) && id !== activeChatId) clearComposerData(id);
     }
     await refreshChats();
     if (failed.length > 0) {
@@ -1516,7 +1500,7 @@ export function useAxiom() {
     }
   }
 
-  async function runTaskRequest(cmd: "task_start" | "task_resume", args: Record<string, unknown>): Promise<Task | null> {
+  async function runTaskRequest(cmd: "task_launch" | "task_continue", args: Record<string, unknown>): Promise<Task | null> {
     if (generatingRef.current) {
       notify("Генерация уже идёт — сначала остановите её", "error");
       return null;
@@ -1524,32 +1508,108 @@ export function useAxiom() {
     taskActiveRef.current = true;
     setTaskRequestPending(true);
     beginGeneration();
+    let launched = false;
     try {
       const task = await request<Task>(cmd, args);
       setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
+      setActiveTaskId(task.id);
+      launched = !["completed", "failed", "cancelled", "waiting_for_user"].includes(task.state);
+      if (!launched) {
+        taskActiveRef.current = false;
+        generatingRef.current = false;
+        setGenerating(false);
+        setStatusText(null);
+        setLiveState("idle");
+        setActiveTaskId(null);
+      }
       return task;
     } catch (err) {
       notify(errorText(err), "error");
       return null;
     } finally {
-      taskActiveRef.current = false;
-      generatingRef.current = false;
       setTaskRequestPending(false);
-      setActiveTaskId(null);
-      setGenerating(false);
-      setStatusText(null);
-      setLiveState("idle");
+      if (!launched) {
+        taskActiveRef.current = false;
+        generatingRef.current = false;
+        setActiveTaskId(null);
+        setGenerating(false);
+        setStatusText(null);
+        setLiveState("idle");
+      }
       void loadTree();
       void loadGit();
     }
   }
 
-  function startTask(goal: string): Promise<Task | null> {
-    return runTaskRequest("task_start", { goal });
+  function startTask(goal: string, plan?: TaskPlan): Promise<Task | null> {
+    return runTaskRequest("task_launch", { goal, plan });
   }
 
   function resumeTask(id: string, acknowledge = false): Promise<Task | null> {
-    return runTaskRequest("task_resume", { id, acknowledge });
+    return runTaskRequest("task_continue", { id, acknowledge });
+  }
+
+  async function planTask(goal: string): Promise<TaskPlan | null> {
+    try {
+      const plan = await request<TaskPlan>("task_plan", { goal });
+      return plan;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    }
+  }
+
+  async function createTask(goal: string, plan?: TaskPlan): Promise<Task | null> {
+    try {
+      const task = await request<Task>("task_create", { goal, plan });
+      setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
+      return task;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    }
+  }
+
+  async function saveTask(
+    id: string,
+    updates: { goal?: string; plan?: TaskPlan; state?: string },
+  ): Promise<Task | null> {
+    try {
+      const task = await request<Task>("task_save", { id, ...updates });
+      if (task) {
+        setTasks((list) => list.map((item) => (item.id === task.id ? task : item)));
+      }
+      return task;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    }
+  }
+
+  async function deleteTask(id: string): Promise<boolean> {
+    try {
+      const result = await request<{ deleted: boolean }>("task_delete", { id });
+      if (result.deleted) {
+        setTasks((list) => list.filter((item) => item.id !== id));
+      }
+      return result.deleted;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return false;
+    }
+  }
+
+  async function reviewTask(id: string, decision: "accept" | "reject"): Promise<Task | null> {
+    try {
+      const task = await request<Task>("task_review", { id, decision });
+      setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
+      void loadTree();
+      void loadGit();
+      return task;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return null;
+    }
   }
 
   async function cancelTask(id: string): Promise<boolean> {
@@ -1689,6 +1749,99 @@ export function useAxiom() {
     } catch {
       // A transient bridge error must not spam the UI during background polling.
     }
+  }
+
+  // -------------------------------------------------------- curated memory (W2.1)
+
+  async function loadMemory() {
+    setMemoryLoading(true);
+    try {
+      setMemoryRows(await request<MemoryRow[]>("memory_list"));
+    } catch (err) { notify(errorText(err), "error"); }
+    finally { setMemoryLoading(false); }
+  }
+
+  async function addMemory(content: string, category: string, scope: string): Promise<boolean> {
+    try {
+      await request<{ id: string }>("memory_add", { content, category, scope });
+      await loadMemory();
+      notify("Запись сохранена в память", "ok");
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+  }
+
+  async function editMemory(id: string, content: string): Promise<boolean> {
+    try {
+      await request<{ id: string }>("memory_edit", { id, content });
+      await loadMemory();
+      notify("Запись обновлена", "ok");
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+  }
+
+  async function deleteMemory(id: string): Promise<boolean> {
+    try {
+      const result = await request<{ removed: boolean }>("memory_delete", { id });
+      if (!result.removed) { notify("Запись не найдена", "error"); return false; }
+      await loadMemory();
+      notify("Запись удалена из памяти", "ok");
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+  }
+
+  // ------------------------------------------------------ knowledge base (W2.2)
+
+  async function loadKnowledge() {
+    setKnowledgeLoading(true);
+    try {
+      setKnowledgeRows(await request<KnowledgeRow[]>("knowledge_list"));
+    } catch (err) { notify(errorText(err), "error"); }
+    finally { setKnowledgeLoading(false); }
+  }
+
+  async function addKnowledgeCollection(name: string, path: string): Promise<boolean> {
+    setKnowledgeLoading(true);
+    try {
+      const result = await request<KnowledgeIndexResult>("knowledge_add", { name, path });
+      await loadKnowledge();
+      const stats = result.stats;
+      notify(
+        `Проиндексировано «${name}»: ${stats?.indexed ?? 0} новых/изменённых, ` +
+        `${stats?.unchanged ?? 0} без изменений`,
+        "ok",
+      );
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+    finally { setKnowledgeLoading(false); }
+  }
+
+  async function reindexKnowledge(name: string): Promise<boolean> {
+    setKnowledgeLoading(true);
+    try {
+      await request<KnowledgeIndexResult>("knowledge_reindex", { name });
+      await loadKnowledge();
+      notify(`Коллекция «${name}» переиндексирована`, "ok");
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+    finally { setKnowledgeLoading(false); }
+  }
+
+  async function removeKnowledgeCollection(name: string): Promise<boolean> {
+    try {
+      const result = await request<{ removed: boolean }>("knowledge_remove", { name });
+      if (!result.removed) { notify("Коллекция не найдена", "error"); return false; }
+      await loadKnowledge();
+      notify(`Коллекция «${name}» удалена`, "ok");
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+  }
+
+  async function searchKnowledge(query: string): Promise<KnowledgeHit[]> {
+    try {
+      const hits = await request<KnowledgeHit[]>("knowledge_search", { query });
+      setKnowledgeHits(hits);
+      return hits;
+    } catch (err) { notify(errorText(err), "error"); return []; }
   }
 
   async function choosePluginFolder(): Promise<string | null> {
@@ -1860,6 +2013,14 @@ export function useAxiom() {
         openSettings("plugins");
         await loadPlugins();
         return true;
+      case "/memory":
+        openSettings("memory");
+        await loadMemory();
+        return true;
+      case "/knowledge":
+        openSettings("knowledge");
+        await loadKnowledge();
+        return true;
       case "/permissions":
         openSettings("tools");
         return true;
@@ -1881,7 +2042,7 @@ export function useAxiom() {
           return true;
         }
         const userMessage: LiveMessage = {
-          id: `u-${++liveId}`, role: "user", content: `/orchestrate ${args}`,
+          id: nextUserId(), role: "user", content: `/orchestrate ${args}`,
           thinking: "", streaming: false, toolCalls: [], sources: [], createdAt: Date.now(),
         };
         await beginOrchestration(userMessage, args);
@@ -2098,24 +2259,26 @@ export function useAxiom() {
     // Bump the generation first so any pending tree/git load from the project
     // being cleared can no longer overwrite the empty state we set locally.
     const seq = ++workspaceSeqRef.current;
+    // The user's own action is authoritative and is applied IMMEDIATELY.
+    // The generation guard exists to stop *stale background loads* from landing
+    // on top of the new workspace — it must never swallow the update the user
+    // just asked for. Applying it up front also means the UI drops the project
+    // instantly instead of after the backend round-trip.
+    setOpenFile(null);
+    setTermHistory([]);
+    setPendingTerm(null);
+    setTree([]);
+    setTreeLoading(false);
+    setGitStatus(null);
+    setGitLog(null);
+    setWorkspace((w) => ({
+      ...(w ?? { recent: [], pinned: [] }),
+      current: null,
+    }));
     try {
       await request("clear_workspace");
-      if (seq !== workspaceSeqRef.current) return;
-      setOpenFile(null);
-      setTermHistory([]);
-      setPendingTerm(null);
-      setTree([]);
-      setGitStatus(null);
-      setGitLog(null);
-      // One authoritative setState that drops `current` to null — avoids the
-      // double-update flicker the harness saw when an optimistic null was
-      // followed by a later workspace_info refresh.
-      setWorkspace((w) => ({
-        ...(w ?? { recent: [], pinned: [] }),
-        current: null,
-      }));
-      setConfig(await request<AxiomConfig>("get_config"));
-      if (seq !== workspaceSeqRef.current) return;
+      // Follow the backend as the single source of truth for the cleared scope.
+      if (seq === workspaceSeqRef.current) setConfig(await request<AxiomConfig>("get_config"));
       await Promise.all([loadWorkspace(seq), refreshChats(), loadProjectList(seq)]);
       if (seq !== workspaceSeqRef.current) return;
       await newChat();
@@ -2319,6 +2482,11 @@ export function useAxiom() {
     resumeTask,
     cancelTask,
     refreshTasks,
+    planTask,
+    createTask,
+    saveTask,
+    deleteTask,
+    reviewTask,
     phase,
     bootSteps,
     bootError,
@@ -2349,6 +2517,9 @@ export function useAxiom() {
     chatSearch,
     setChatSearch,
     chatHits,
+    // W2.4 tool permissions
+    pendingPermission,
+    respondPermission,
     pinChat,
     setChatFolder,
     applyPatch,
@@ -2474,6 +2645,20 @@ export function useAxiom() {
     removePlugin,
     bundledPlugins,
     installBundledPlugin,
+    memoryRows,
+    memoryLoading,
+    loadMemory,
+    addMemory,
+    editMemory,
+    deleteMemory,
+    knowledgeRows,
+    knowledgeLoading,
+    knowledgeHits,
+    loadKnowledge,
+    addKnowledgeCollection,
+    reindexKnowledge,
+    removeKnowledgeCollection,
+    searchKnowledge,
     loadStatus,
     debugLog,
     composerRef,

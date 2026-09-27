@@ -23,6 +23,8 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/models", description: "Модели, возможности, состояние", group: "models" },
   { name: "/permissions", description: "Режим разрешений: ask, auto_approve_safe, auto_approve_all", group: "harness" },
   { name: "/profiles", description: "Системные prompt-профили", group: "harness" },
+  { name: "/memory", description: "Память: факты и предпочтения (добавить/удалить)", group: "harness" },
+  { name: "/knowledge", description: "База знаний: коллекции, индексация, поиск с цитатами", group: "harness" },
   { name: "/trajectory", description: "Timeline запуска, tools, tokens и timing", group: "harness" },
   { name: "/providers", description: "Провайдеры, API-ключ, Test и выбор модели", group: "harness" },
   { name: "/agents", description: "Агенты, оркестратор и назначенные модели", group: "harness" },

@@ -7,6 +7,7 @@ git status, build system, tests, architecture. Персист проекта:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -45,13 +46,35 @@ class ProjectIndex:
         return asdict(self)
 
 
+SKIP_DIRS = frozenset({".git", "node_modules", ".venv"})
+
+
+def _collect_files(base: Path, limit: int = 4000) -> list[Path]:
+    """Walk *base* collecting at most *limit* files, pruning heavy directories.
+
+    ``Path.rglob("*") + is_file()`` was the bottleneck of every workspace
+    switch: it descended into ``.git``/``node_modules``/``.venv`` and issued an
+    extra ``stat()`` per entry (23k+ syscalls on a mid-size repo, ~3s). This
+    prunes the noisy directories in-place — ``os.walk`` already knows which
+    entries are directories, so no extra ``stat()`` is needed — and stops as
+    soon as the cap is reached.
+    """
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        here = Path(dirpath)
+        for name in filenames:
+            files.append(here / name)
+            if len(files) >= limit:
+                return files
+    return files
+
+
 def index_project(root: Path | str) -> ProjectIndex:
     base = Path(root).resolve()
     index = ProjectIndex(path=str(base))
     try:
-        files = [p for p in base.rglob("*") if p.is_file()
-                 and ".git" not in p.parts and "node_modules" not in p.parts
-                 and ".venv" not in p.parts][:4000]
+        files = _collect_files(base)
     except Exception:
         files = []
     langs: dict[str, int] = {}

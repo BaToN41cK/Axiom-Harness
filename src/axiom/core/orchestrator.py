@@ -43,6 +43,7 @@ class OrchestratorPlan:
     context: dict = field(default_factory=dict)
     definition_of_done: list[str] = field(default_factory=list)
     max_iterations: int = 3
+    dependencies: dict[str, list[str]] = field(default_factory=dict)
 
 
 class Orchestrator:
@@ -92,9 +93,15 @@ class Orchestrator:
             "Не утверждать непроверенные факты",
         ]
         subs = [Subagent(id=f"{a}-1", agent=a, task=text) for a in agents]
+        dependencies = {
+            agent: (["analyst"] if agent not in {"analyst", "reviewer"} else [])
+            for agent in agents
+        }
+        if "reviewer" in agents:
+            dependencies["reviewer"] = [agent for agent in agents if agent != "reviewer"]
         return OrchestratorPlan(mode=mode, agents=agents, subagents=subs, tools=tools,
                                 task=text, context={"project": "", "files": []},
-                                definition_of_done=done)
+                                definition_of_done=done, dependencies=dependencies)
 
     def tools_for(self, agent_id: str, task: str = "") -> list[str]:
         base = list(tools_for_agent(agent_id)) or resolve_tools_for_task(task)
@@ -219,7 +226,8 @@ class Orchestrator:
         self.bus.emit("orchestration.started", {"run_id": traj.run_id, "task": text[:500]})
         traj.append("orchestrator.plan", f"mode={plan.mode} agents={','.join(plan.agents)}",
                     actor="orchestrator", data={"mode": plan.mode, "agents": plan.agents,
-                                                 "definition_of_done": plan.definition_of_done})
+                                                 "definition_of_done": plan.definition_of_done,
+                                                 "dependencies": plan.dependencies})
         self.bus.emit("orchestration.planned", {"run_id": traj.run_id, "mode": plan.mode,
                                                 "agents": plan.agents,
                                                 "definition_of_done": plan.definition_of_done})
@@ -227,7 +235,15 @@ class Orchestrator:
         if parallel and runner is not None:
             from axiom.core.parallel import run_parallel
 
-            workers = [sub for sub in plan.subagents if sub.agent != "reviewer"]
+            completed = {
+                event.actor: dict(event.data)
+                for event in traj.events
+                if event.kind == "agent.done" and event.actor
+            }
+            workers = [sub for sub in plan.subagents
+                       if sub.agent != "reviewer" and sub.agent not in completed]
+            resumed_results = [dict(data, agent=agent, status="done", resumed=True)
+                               for agent, data in completed.items() if agent in plan.agents]
             tasks = [{"agent": sub.agent, "task": sub.task,
                       "tools": self.tools_for(sub.agent, sub.task),
                       "trajectory": traj} for sub in workers]
@@ -281,7 +297,7 @@ class Orchestrator:
                                       {"run_id": traj.run_id, "iteration": iteration, **result})
                     duration_ms += pres.duration_ms
             worker_results = [dict(item, iteration=iterations, review=dict(review_data))
-                              for item in pres.results]
+                              for item in resumed_results + pres.results]
             traj.append("orchestrator.done", f"mode={plan.mode} workers={len(worker_results)} approved={approved}",
                         actor="orchestrator", data={"duration_ms": duration_ms, "approved": approved})
             verification = None
@@ -307,6 +323,7 @@ class Orchestrator:
                     "approved": approved, "completed": completed,
                     "review_details": dict(review_data), "iterations": iterations,
                     "definition_of_done": plan.definition_of_done,
+                    "dependencies": plan.dependencies,
                     "verification": verification,
                     "duration_ms": duration_ms, "trajectory": traj}
         results: list[dict] = []
@@ -363,4 +380,5 @@ class Orchestrator:
                 "completed": bool(approved), "review_details": dict(review_data_seq),
                 "iterations": iterations,
                 "definition_of_done": plan.definition_of_done,
+                "dependencies": plan.dependencies,
                 "duration_ms": duration_ms, "trajectory": traj}

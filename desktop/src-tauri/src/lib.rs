@@ -7,16 +7,211 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(debug_assertions)]
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+#[cfg(debug_assertions)]
+use std::time::{Duration, Instant};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 struct Bridge {
-    child: Mutex<Option<Child>>,
+    child: Mutex<Option<BridgeProcess>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
+}
+
+struct BridgeProcess {
+    child: Child,
+    #[cfg(windows)]
+    job: Option<windows_process::Job>,
+}
+
+impl BridgeProcess {
+    fn terminate(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = self.job.as_ref() {
+            job.terminate();
+        } else {
+            windows_process::kill_tree(self.child.id());
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for BridgeProcess {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+#[cfg(windows)]
+pub mod windows_process {
+    use std::ffi::c_void;
+    use std::io;
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr::{null, null_mut};
+
+    type Handle = *mut c_void;
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: u32 = 9;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x00002000;
+    const ERROR_ALREADY_EXISTS: u32 = 183;
+
+    #[repr(C)]
+    struct BasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    struct ExtendedLimitInformation {
+        basic_limit_information: BasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(
+            job: Handle,
+            information_class: u32,
+            information: *const c_void,
+            information_length: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn TerminateJobObject(job: Handle, exit_code: u32) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+        fn CreateMutexW(attributes: *const c_void, initial_owner: i32, name: *const u16) -> Handle;
+        fn SetLastError(error: u32);
+        fn GetLastError() -> u32;
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(window: Handle, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    }
+
+    pub fn show_error(message: &str) {
+        let text: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
+        let caption: Vec<u16> = "AXIOM".encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe { MessageBoxW(null_mut(), text.as_ptr(), caption.as_ptr(), 0x10) };
+    }
+
+    pub struct Job(Handle);
+
+    // The handle is owned and closed by Job; moving that ownership between
+    // threads is safe, and Bridge protects access through a Mutex.
+    unsafe impl Send for Job {}
+
+    impl Job {
+        pub fn new() -> io::Result<Self> {
+            let handle = unsafe { CreateJobObjectW(null(), null()) };
+            if handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let mut limits: ExtendedLimitInformation = unsafe { std::mem::zeroed() };
+            limits.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    handle,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                    &limits as *const _ as *const c_void,
+                    size_of::<ExtendedLimitInformation>() as u32,
+                )
+            };
+            if configured == 0 {
+                let error = io::Error::last_os_error();
+                unsafe { CloseHandle(handle) };
+                return Err(error);
+            }
+            Ok(Self(handle))
+        }
+
+        pub fn assign(&self, child: &std::process::Child) -> io::Result<()> {
+            let assigned = unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) };
+            if assigned == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        }
+
+        pub fn terminate(&self) {
+            unsafe { TerminateJobObject(self.0, 1) };
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    pub fn kill_tree(pid: u32) {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new(r"C:\Windows\System32\taskkill.exe");
+        command
+            .arg("/PID")
+            .arg(pid.to_string())
+            .args(["/T", "/F"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = command.status();
+    }
+
+    pub struct SingleInstance(Handle);
+
+    impl SingleInstance {
+        pub fn acquire() -> io::Result<Option<Self>> {
+            let name: Vec<u16> = "Local\\AXIOM.Desktop.1.0\0".encode_utf16().collect();
+            unsafe { SetLastError(0) };
+            let handle = unsafe { CreateMutexW(null(), 0, name.as_ptr()) };
+            if handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+                unsafe { CloseHandle(handle) };
+                Ok(None)
+            } else {
+                Ok(Some(Self(handle)))
+            }
+        }
+    }
+
+    impl Drop for SingleInstance {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
 }
 
 fn find_root() -> PathBuf {
@@ -46,14 +241,117 @@ fn find_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// A debug build gets Vite from its own GUI process. Starting its JS entrypoint
+/// directly avoids npm's `cmd.exe /c` script launcher on Windows.
+#[cfg(debug_assertions)]
+fn start_dev_server() -> Result<Option<BridgeProcess>, String> {
+    let dev_addr = SocketAddr::from(([127, 0, 0, 1], 1420));
+    if dev_server_answers(&dev_addr) {
+        // A developer may already have a Vite server running. Do not claim or
+        // terminate a process this GUI did not start.
+        return Ok(None);
+    }
+
+    let desktop = find_root().join("desktop");
+    let vite = desktop.join("node_modules/vite/bin/vite.js");
+    if !vite.is_file() {
+        return Err(format!("Vite entrypoint is missing: {}", vite.display()));
+    }
+    let log_path = desktop.join("vite_dev.log");
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|err| format!("could not open {}: {err}", log_path.display()))?;
+    let stderr = log
+        .try_clone()
+        .map_err(|err| format!("could not duplicate Vite log handle: {err}"))?;
+
+    let mut command = Command::new(if cfg!(windows) { "node.exe" } else { "node" });
+    command
+        .arg(&vite)
+        .current_dir(&desktop)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr));
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    #[cfg(not(windows))]
+    command.env("NODE_NO_WARNINGS", "1");
+
+    let child = command
+        .spawn()
+        .map_err(|err| format!("could not start Vite directly with node.exe: {err}"))?;
+    #[cfg(windows)]
+    let mut job = windows_process::Job::new().ok();
+    #[cfg(windows)]
+    if job.as_ref().is_some_and(|group| group.assign(&child).is_err()) {
+        job = None;
+    }
+    let mut server = BridgeProcess {
+        child,
+        #[cfg(windows)]
+        job,
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if dev_server_answers(&dev_addr) {
+            return Ok(Some(server));
+        }
+        if let Some(status) = server.child.try_wait().map_err(|err| {
+            format!("could not check Vite process status: {err}")
+        })? {
+            return Err(format!(
+                "Vite exited before its dev server became ready ({status}); see {}",
+                log_path.display()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!(
+        "Vite did not open 127.0.0.1:1420 within 30 seconds; see {}",
+        log_path.display()
+    ))
+}
+
+#[cfg(debug_assertions)]
+fn dev_server_answers(address: &SocketAddr) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(address, Duration::from_millis(200)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = [0u8; 128];
+    let Ok(size) = stream.read(&mut response) else {
+        return false;
+    };
+    String::from_utf8_lossy(&response[..size])
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .is_some_and(|status| status == 200)
+}
+
 fn find_python() -> String {
     if let Ok(py) = std::env::var("AXIOM_PYTHON") {
         if !py.trim().is_empty() {
             return py;
         }
     }
-    // A repository virtualenv already has the `axiom` package installed
-    // (`pip install -e .`), so prefer it over whatever is first on PATH.
+    // Prefer the user's production Python 3.11 installation. The repository
+    // virtualenv remains a fallback for development machines without it.
+    let configured = r"C:\Users\user\AppData\Local\Programs\Python\Python311\python.exe";
+    if PathBuf::from(configured).is_file() {
+        return configured.to_string();
+    }
     let root = find_root();
     for rel in [
         ".venv/Scripts/python.exe",
@@ -67,13 +365,18 @@ fn find_python() -> String {
         }
     }
     for candidate in ["python.exe", "python", "py"] {
-        if Command::new(candidate)
+        let mut probe = Command::new(candidate);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            probe.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        if probe
             .arg("--version")
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .is_ok()
-        {
+            .status().is_ok() {
             return candidate.to_string();
         }
     }
@@ -107,6 +410,10 @@ fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "bridge script not found (repo layout and bundled resources)".to_string())?;
 
     let mut cmd = Command::new(&python);
+    // AXIOM is a GUI app: console subsystem children (Python/core tools) must not
+    // flash a terminal window on Windows.
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     cmd.arg("-u").arg(&bridge_py);
     if let Some(src) = src_dir {
         // Repository layout: import the working-tree package. An installed
@@ -136,9 +443,17 @@ fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    #[cfg(windows)]
+    let mut job = windows_process::Job::new().ok();
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to start Python core ({}): {}", python, e))?;
+    #[cfg(windows)]
+    {
+        if job.as_ref().is_some_and(|group| group.assign(&child).is_err()) {
+            job = None;
+        }
+    }
     let stdin = child
         .stdin
         .take()
@@ -190,7 +505,11 @@ fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
     });
 
     let state: State<Bridge> = app.state();
-    *state.child.lock().unwrap() = Some(child);
+    *state.child.lock().unwrap() = Some(BridgeProcess {
+        child,
+        #[cfg(windows)]
+        job,
+    });
     *state.stdin.lock().unwrap() = Some(stdin);
     Ok(())
 }
@@ -214,13 +533,9 @@ fn bridge_request(state: State<'_, Bridge>, payload: Value) -> Result<Value, Str
 fn bridge_restart(app: AppHandle) -> Result<(), String> {
     {
         let state: State<Bridge> = app.state();
-        if let Some(child) = state.child.lock().unwrap().as_mut() {
-            let _ = child.kill();
-        }
-        *state.child.lock().unwrap() = None;
+        state.child.lock().unwrap().take();
         *state.stdin.lock().unwrap() = None;
     }
-    std::thread::sleep(std::time::Duration::from_millis(300));
     spawn_bridge(&app)
 }
 
@@ -236,14 +551,39 @@ fn open_url(url: String) -> Result<(), String> {
     }
     let target = url.trim().to_string();
     #[cfg(target_os = "windows")]
-    let spawn = Command::new("cmd")
-        .args(["/C", "start", "", &target])
-        .spawn();
+    let spawn = {
+        use std::ffi::c_void;
+        type Hwnd = *mut c_void;
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn ShellExecuteW(
+                hwnd: Hwnd,
+                operation: *const u16,
+                file: *const u16,
+                parameters: *const u16,
+                directory: *const u16,
+                show_command: i32,
+            ) -> Hwnd;
+        }
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        let target_wide: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(), operation.as_ptr(), target_wide.as_ptr(),
+                std::ptr::null(), std::ptr::null(), 1,
+            )
+        };
+        if result as isize > 32 {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("Windows could not open the link"))
+        }
+    };
     #[cfg(target_os = "macos")]
     let spawn = Command::new("open").arg(&target).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let spawn = Command::new("xdg-open").arg(&target).spawn();
-    spawn.map(|_| ()).map_err(|e| format!("could not open the link: {e}"))
+    spawn.map_err(|e| format!("could not open the link: {e}"))
 }
 
 /// Open a native folder picker and return the chosen directory (if any).
@@ -266,6 +606,20 @@ fn quit_app(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(debug_assertions)]
+    let _dev_server = match start_dev_server() {
+        Ok(server) => server,
+        Err(err) => {
+            let message = format!(
+                "Не удалось запустить frontend AXIOM.\n\n{err}\n\nПодробности: desktop/vite_dev.log"
+            );
+            #[cfg(windows)]
+            windows_process::show_error(&message);
+            #[cfg(not(windows))]
+            eprintln!("{message}");
+            return;
+        }
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -293,10 +647,8 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<Bridge>();
-                let mut guard = state.child.lock().unwrap();
-                if let Some(child) = guard.as_mut() {
-                    let _ = child.kill();
-                }
+                state.child.lock().unwrap().take();
+                state.stdin.lock().unwrap().take();
             }
         })
         .invoke_handler(tauri::generate_handler![

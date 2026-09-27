@@ -45,6 +45,23 @@ memory и performance metrics.
 | Community plugins и Code/PTC | Расширяемые core API; UI/CLI и live ecosystem в развитии |
 | Performance Benchmark Engine | Метрики, cold/warm runner, repetitions и JSON export реализованы; live сравнения зависят от среды |
 
+## Project memory
+
+`axiom.core.memory` даёт модели реальную память фактов о рабочем контексте:
+
+* `MemoryStore` — факты (`text`, `tags`, `origin`, `created`, `updated`) в
+  `axiom-project.json` рядом с `sessions.json` и `history.json`; повреждённый
+  файл не ломает запуск, запись атомарна;
+* `recall(query, limit)` — поиск по тексту и тегам с явным лимитом: в промпт
+  попадает ровно столько фактов, сколько разрешено;
+* `remember()` / `forget()` — факты добавляет и удаляет только сама модель через
+  memory tools (`memory_recall`, `memory_remember`, `memory_forget`); факт с
+  пустым текстом не сохраняется;
+* `origin` различает источник: `model`, `tool`, `user`;
+* `attach_project_memory(engine, store)` включает `ContextEngine` на этот store,
+  `load_project_memory(store, path)` перезагружает память при смене проекта.
+
+
 Подробности изменений находятся в [CHANGELOG.md](CHANGELOG.md).
 
 ## Возможности
@@ -149,7 +166,7 @@ Registry/Project  Manager      Store / Bus
 | Python | 3.11+ |
 | Ollama | актуальная версия; локально проверено с 0.34.x |
 | Node.js | 20+ для разработки Tauri desktop |
-| Rust | stable toolchain и Visual Studio C++ Build Tools для Windows Tauri |
+| Rust | Для `axiom --gui` на Windows stable MSVC toolchain ставится автоматически; при отсутствии Visual C++ Build Tools появится GUI-диалог |
 | Терминал | Windows Terminal или любой UTF-8 terminal |
 
 ## Установка
@@ -216,6 +233,12 @@ npm run tauri dev
 
 Desktop bridge использует тот же Python core, поэтому запуск GUI не создаёт отдельную
 модельную или tool-логику.
+
+В Windows Tauri запускается как GUI-приложение. Python 3.11 bridge и другие
+backend-процессы работают без консольных окон; повторный запуск активирует
+один экземпляр AXIOM, а закрытие главного окна завершает дерево процессов core.
+По умолчанию используется `C:\Users\user\AppData\Local\Programs\Python\Python311\python.exe`;
+путь можно явно переопределить через `AXIOM_PYTHON`.
 
 ## Slash-команды TUI
 

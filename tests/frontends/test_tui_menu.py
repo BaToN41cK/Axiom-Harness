@@ -12,8 +12,14 @@ from textual.widgets import Input, OptionList
 from axiom.core.chat import ChatSession
 from axiom.frontends.tui.app import WorkspaceScreen
 from axiom.frontends.tui.widgets.commands import COMMANDS, CommandMenu
+from axiom.frontends.tui.widgets.find import ChatFindBar
+from axiom.frontends.tui.widgets.messages import UserMessage
 from axiom.frontends.tui.widgets.panels import (
     AgentsPanel,
+    BenchmarkPanel,
+    KnowledgePanel,
+    MemoryPanel,
+    OrchestrationPanel,
     PermissionsPanel,
     ProvidersPanel,
     TrajectoryDetailPanel,
@@ -164,7 +170,10 @@ async def test_plain_text_never_opens_menu() -> None:
 
 def test_harness_commands_are_registered() -> None:
     names = {command.name for command in COMMANDS}
-    assert {"/trajectory", "/providers", "/agents", "/permissions", "/profiles", "/plugins"} <= names
+    assert {
+        "/trajectory", "/providers", "/agents", "/permissions", "/profiles",
+        "/plugins", "/memory",
+    } <= names
 
 
 async def test_trajectory_command_opens_viewer() -> None:
@@ -215,6 +224,78 @@ async def test_agents_command_opens_panel() -> None:
         panel = app.screen
         assert isinstance(panel, AgentsPanel)
         assert {row["id"] for row in panel._rows} >= {"coder", "orchestrator"}
+
+
+async def test_memory_command_opens_panel_and_persists(tmp_path, monkeypatch) -> None:
+    """/memory shows real persisted items; add and delete round-trip (W2.1)."""
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path / "home"))
+    async with workspace() as (app, pilot):
+        session = app.session
+        # Isolate this session's stores from any real home directory.
+        from axiom.core.memory import MemoryStore, MemoryTools
+
+        session.memory_store = MemoryStore()
+        session.memory_project_store = None
+        session.memory_tools = MemoryTools(session.memory_store, None)
+
+        screen = app.screen.query_one(WorkspaceScreen)
+        screen._execute_command("/memory")
+        await pilot.pause()
+        await pilot.pause()
+        panel = app.screen
+        assert isinstance(panel, MemoryPanel)
+        assert panel._rows == []
+
+        # 'a' adds the text typed into the content input.
+        item_id = session.memory_write_for_user("User prefers short answers")
+        assert item_id is not None
+        panel._rows = session.memory_rows()
+        panel._refresh_rows()
+        assert len(panel._rows) == 1
+        assert panel._rows[0]["content"] == "User prefers short answers"
+
+        # 'd' on the highlighted row deletes it from disk.
+        option_list = panel.query_one("#memory-list", OptionList)
+        option_list.highlighted = 0
+        await panel.action_delete_item()
+        await pilot.pause()
+        assert session.memory_rows() == []
+        assert session.memory_store.count() == 0
+
+
+async def test_knowledge_command_indexes_and_searches(tmp_path, monkeypatch) -> None:
+    """/knowledge indexes a real folder and cites fragments (W2.2)."""
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path / "home"))
+    docs = tmp_path / "kb"
+    docs.mkdir()
+    (docs / "runbook.md").write_text(
+        "# Runbook\n\nThe staging VPN gateway is gw-staging.internal.\n",
+        encoding="utf-8",
+    )
+    async with workspace() as (app, pilot):
+        session = app.session
+        screen = app.screen.query_one(WorkspaceScreen)
+        screen._execute_command("/knowledge")
+        await pilot.pause()
+        await pilot.pause()
+        panel = app.screen
+        assert isinstance(panel, KnowledgePanel)
+
+        added = await session.knowledge_add_collection("runbook", str(docs))
+        assert added["ok"] and added["stats"]["indexed"] == 1
+        panel._rows = session.knowledge_rows()
+        panel._refresh_rows()
+        assert len(panel._rows) == 1
+        assert panel._rows[0]["name"] == "runbook"
+        assert panel._rows[0]["files"] == 1
+
+        hits = await session.knowledge_search_rows("staging VPN")
+        assert hits and hits[0]["source"] == "runbook.md"
+        assert "gw-staging" in hits[0]["text"]
+
+        assert session.knowledge_remove_collection("runbook")
+        assert session.knowledge_rows() == []
+
 
 
 def test_agent_rows_mirror_the_registry() -> None:
@@ -276,3 +357,68 @@ async def test_provider_pick_model_sets_router_primary(tmp_path, monkeypatch) ->
             "model": "glm-4.6",
         }
         assert "zai/glm-4.6" in message
+
+
+async def test_ctrl_f_searches_mounted_transcript() -> None:
+    async with workspace() as (app, pilot):
+        screen = app.screen.query_one(WorkspaceScreen)
+        screen.chat_view.add(UserMessage("alpha deployment notes"))
+        screen.chat_view.add(UserMessage("unrelated"))
+        await pilot.press("ctrl+f")
+        await pilot.pause()
+        bar = app.screen.query_one(ChatFindBar)
+        assert bar.display is True
+        await pilot.press("a", "l", "p", "h", "a")
+        await pilot.pause()
+        assert bar._matches == 1
+        assert bar._index == 0
+        await pilot.press("escape")
+        await pilot.pause()
+        assert bar.display is False
+
+
+def test_benchmark_panel_keeps_real_report_shape() -> None:
+    panel = BenchmarkPanel({
+        "runs": [{"scenario": "smoke", "phase": "cold", "repetition": 0,
+                  "ok": False, "duration_ms": 12.0, "error": "No model"}],
+        "summary": {},
+    })
+    assert panel._report["runs"][0]["ok"] is False
+    assert panel.subtitle_lines() == ["1 measured run(s)   ·   no fabricated values"]
+
+
+def test_orchestration_panel_projects_real_trajectory() -> None:
+    from axiom.core.trajectory import Trajectory
+
+    trajectory = Trajectory()
+    trajectory.append("old", "before run", actor="system")
+    trajectory.append("agent.start", "coder: task", actor="coder")
+    panel = OrchestrationPanel(trajectory, baseline=1)
+    panel._render = lambda: None
+    panel._poll()
+    assert len(panel._events) == 1
+    assert panel._events[0]["kind"] == "agent.start"
+
+
+async def test_orchestration_panel_mounts_and_updates(monkeypatch) -> None:
+    import asyncio
+
+    async with workspace() as (app, _pilot):
+        screen = app.screen.query_one(WorkspaceScreen)
+
+        async def fake_run(task: str, **kwargs):
+            screen.session.trajectory.append("agent.start", f"coder: {task}", actor="coder")
+            return {"ok": False, "error": "test finished"}
+
+        monkeypatch.setattr(screen.session, "run_orchestrated", fake_run)
+        screen._execute_command("/orchestrate inspect")
+        await asyncio.sleep(0.1)
+        panel = app.screen
+        assert isinstance(panel, OrchestrationPanel)
+        panel._poll()
+        assert any(event["kind"] == "agent.start" for event in panel._events)
+        assert panel._running is False
+
+
+
+

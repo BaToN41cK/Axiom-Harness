@@ -3,6 +3,7 @@ import { useMemo, useEffect, useRef, useState } from "react";
 import { ArrowUp, CornerDownLeft, Globe, Image as ImageIcon, Loader2, Square, X } from "lucide-react";
 import type { AxiomConfig } from "../types";
 import { matchingCommands, type SlashCommand } from "../lib/commands";
+import { readPromptHistory, writePromptHistory } from "../lib/composerStorage";
 import { formatCount } from "../lib/format";
 
 interface Props {
@@ -22,6 +23,7 @@ interface Props {
   onOpenContext: () => void;
   composerRef: RefObject<HTMLTextAreaElement>;
   workspaceFiles: string[];
+  chatId: string | null;
   /** Compact model selector rendered inside the composer row. */
   modelSelector?: ReactNode;
 }
@@ -57,6 +59,7 @@ export default function Composer(props: Props) {
     onOpenContext,
     composerRef,
     workspaceFiles,
+    chatId,
   } = props;
 
   const MAX_IMAGES = 3;
@@ -68,7 +71,16 @@ export default function Composer(props: Props) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStart, setMentionStart] = useState<number | null>(null);
+  const [promptHistory, setPromptHistory] = useState<string[]>(() => readPromptHistory(chatId));
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
+  const historyDraftRef = useRef("");
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setPromptHistory(readPromptHistory(chatId));
+    setHistoryCursor(null);
+    historyDraftRef.current = "";
+  }, [chatId]);
 
   const mentionMatches = useMemo(() => {
     if (mentionStart === null || workspaceFiles.length === 0) return [];
@@ -169,6 +181,14 @@ export default function Composer(props: Props) {
       void onCommand(text);
       return;
     }
+    if (text) {
+      setPromptHistory((current) => {
+        const next = current[current.length - 1] === text ? current : [...current, text].slice(-100);
+        writePromptHistory(chatId, next);
+        return next;
+      });
+      setHistoryCursor(null);
+    }
     onSend(text, forceSearch, images);
     onDraftChange("");
     setImages([]);
@@ -252,6 +272,39 @@ export default function Composer(props: Props) {
       if (event.key === "Escape") {
         event.preventDefault();
         setPaletteOpen(false);
+        return;
+      }
+    }
+    if (!paletteOpen && mentionMatches.length === 0 && promptHistory.length > 0) {
+      const area = event.currentTarget;
+      const atStart = area.selectionStart === 0 && area.selectionEnd === 0;
+      const atEnd = area.selectionStart === draft.length && area.selectionEnd === draft.length;
+      if (event.key === "ArrowUp" && atStart && (historyCursor !== null || !draft.includes("\n"))) {
+        event.preventDefault();
+        if (historyCursor === null) historyDraftRef.current = draft;
+        const next = historyCursor === null ? promptHistory.length - 1 : Math.max(0, historyCursor - 1);
+        setHistoryCursor(next);
+        onDraftChange(promptHistory[next] ?? "");
+        window.setTimeout(() => {
+          const input = composerRef.current;
+          input?.setSelectionRange(input.value.length, input.value.length);
+        }, 0);
+        return;
+      }
+      if (event.key === "ArrowDown" && historyCursor !== null && atEnd) {
+        event.preventDefault();
+        const next = historyCursor + 1;
+        if (next >= promptHistory.length) {
+          setHistoryCursor(null);
+          onDraftChange(historyDraftRef.current);
+        } else {
+          setHistoryCursor(next);
+          onDraftChange(promptHistory[next] ?? "");
+        }
+        window.setTimeout(() => {
+          const input = composerRef.current;
+          input?.setSelectionRange(input.value.length, input.value.length);
+        }, 0);
         return;
       }
     }
@@ -339,10 +392,13 @@ export default function Composer(props: Props) {
           ref={composerRef}
           rows={1}
           placeholder={
-            disabled ? "Ollama недоступна — проверьте подключение" : "Спросите Axiom…  / — команды, Ctrl+V — изображение"
+            disabled ? "Ollama недоступна — проверьте подключение" : "Спросите Axiom…  / — команды, ↑↓ — история"
           }
           value={draft}
-          onChange={(event) => onDraftChange(event.target.value)}
+          onChange={(event) => {
+            setHistoryCursor(null);
+            onDraftChange(event.target.value);
+          }}
           onKeyDown={onKeyDown}
           onPaste={(event) => {
             const files = imageFiles(event.clipboardData?.files);

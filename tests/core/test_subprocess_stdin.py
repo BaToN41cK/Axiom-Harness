@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,12 +29,13 @@ class _FakeAsyncProcess:
 async def test_terminal_tool_uses_devnull_for_child_stdin(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_create_subprocess_shell(command: str, **kwargs):
-        captured["command"] = command
+    async def fake_create_subprocess(command: str, *args, **kwargs):
+        captured["command"] = (command, *args)
         captured.update(kwargs)
         return _FakeAsyncProcess(stdout=b"done\n")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create_subprocess_shell)
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create_subprocess)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess)
 
     tool = TerminalTool(root=tmp_path)
     result = await tool._run("python --version")
@@ -42,6 +44,9 @@ async def test_terminal_tool_uses_devnull_for_child_stdin(tmp_path: Path, monkey
     assert captured["stdin"] is asyncio.subprocess.DEVNULL
     assert captured["stdout"] is asyncio.subprocess.PIPE
     assert captured["stderr"] is asyncio.subprocess.PIPE
+    if os.name == "nt":
+        assert isinstance(captured["command"], tuple)
+        assert captured["command"][0] == "python"
 
 
 def test_detect_project_uses_devnull_for_git_probe(tmp_path: Path, monkeypatch) -> None:

@@ -1,10 +1,13 @@
 import { useState, useEffect } from "react";
 import {
+  BookOpen,
+  Brain,
   Globe,
   Info,
   Keyboard,
   MessageSquare,
   RefreshCw,
+  Search,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -20,6 +23,9 @@ import type {
   PluginInstallResult,
   SearchProviderChoice,
   SearchTestResult,
+  MemoryRow,
+  KnowledgeRow,
+  KnowledgeHit,
 } from "../types";
 import type { SettingsSection } from "../hooks/useAxiom";
 
@@ -49,6 +55,22 @@ interface Props {
   onRunSearchTest: (query: string) => Promise<SearchTestResult | null>;
   searchTestResult: SearchTestResult | null;
   searchTesting: boolean;
+  // W2.1 Curated Memory — the user edits every persisted item here.
+  memoryRows: MemoryRow[];
+  memoryLoading: boolean;
+  onLoadMemory: () => Promise<void>;
+  onAddMemory: (content: string, category: string, scope: string) => Promise<boolean>;
+  onEditMemory: (id: string, content: string) => Promise<boolean>;
+  onDeleteMemory: (id: string) => Promise<boolean>;
+  // W2.2 Knowledge Base — collections and cited search.
+  knowledgeRows: KnowledgeRow[];
+  knowledgeLoading: boolean;
+  knowledgeHits: KnowledgeHit[];
+  onLoadKnowledge: () => Promise<void>;
+  onAddKnowledge: (name: string, path: string) => Promise<boolean>;
+  onReindexKnowledge: (name: string) => Promise<boolean>;
+  onRemoveKnowledge: (name: string) => Promise<boolean>;
+  onSearchKnowledge: (query: string) => Promise<KnowledgeHit[]>;
 }
 
 const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
@@ -57,6 +79,8 @@ const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
   { key: "models", label: "Модели", icon: <SlidersHorizontal size={14} strokeWidth={1.8} /> },
   { key: "providers", label: "Провайдеры", icon: <Globe size={14} strokeWidth={1.8} /> },
   { key: "plugins", label: "Плагины", icon: <Wrench size={14} strokeWidth={1.8} /> },
+  { key: "memory", label: "Память", icon: <Brain size={14} strokeWidth={1.8} /> },
+  { key: "knowledge", label: "Знания", icon: <BookOpen size={14} strokeWidth={1.8} /> },
   { key: "chat", label: "Чат", icon: <MessageSquare size={14} strokeWidth={1.8} /> },
   { key: "tools", label: "Инструменты", icon: <Wrench size={14} strokeWidth={1.8} /> },
   { key: "shortcuts", label: "Горячие клавиши", icon: <Keyboard size={14} strokeWidth={1.8} /> },
@@ -102,6 +126,20 @@ export default function SettingsModal({
   onRunSearchTest,
   searchTestResult,
   searchTesting,
+  memoryRows,
+  memoryLoading,
+  onLoadMemory,
+  onAddMemory,
+  onEditMemory,
+  onDeleteMemory,
+  knowledgeRows,
+  knowledgeLoading,
+  knowledgeHits,
+  onLoadKnowledge,
+  onAddKnowledge,
+  onReindexKnowledge,
+  onRemoveKnowledge,
+  onSearchKnowledge,
 }: Props) {
   const [draft, setDraft] = useState<AxiomConfig>(config);
 
@@ -113,6 +151,8 @@ export default function SettingsModal({
     if (section === "providers") void onLoadProviders();
     if (section === "plugins") void onLoadPlugins();
     if (section === "tools") void onLoadSearchProviders();
+    if (section === "memory") void onLoadMemory();
+    if (section === "knowledge") void onLoadKnowledge();
   }, [section]);
 
   useEffect(() => {
@@ -200,6 +240,19 @@ export default function SettingsModal({
             {section === "models" && <ModelsSection draft={draft} set={set} config={config} onRestartCore={onRestartCore} />}
             {section === "providers" && <ProvidersSection rows={providerRows} models={providerModels} loading={providerLoading} onSave={onProviderSaveSettings} onPickModel={onProviderPickModel} />}
             {section === "plugins" && <PluginsSection rows={pluginRows} bundled={bundledPlugins} loading={pluginLoading} onInstall={onInstallPlugin} onInstallBundled={onInstallBundledPlugin} onToggle={onTogglePlugin} onRemove={onRemovePlugin} />}
+            {section === "memory" && <MemorySection rows={memoryRows} loading={memoryLoading} onLoad={onLoadMemory} onAdd={onAddMemory} onEdit={onEditMemory} onDelete={onDeleteMemory} />}
+            {section === "knowledge" && (
+              <KnowledgeSection
+                rows={knowledgeRows}
+                loading={knowledgeLoading}
+                hits={knowledgeHits}
+                onLoad={onLoadKnowledge}
+                onAdd={onAddKnowledge}
+                onReindex={onReindexKnowledge}
+                onRemove={onRemoveKnowledge}
+                onSearch={onSearchKnowledge}
+              />
+            )}
             {section === "chat" && <ChatSection draft={draft} set={set} />}
             {section === "tools" && <ToolsSection draft={draft} set={set} searchProviders={searchProviders} onRunSearchTest={onRunSearchTest} searchTestResult={searchTestResult} searchTesting={searchTesting} />}
             {section === "appearance" && <AppearanceSection draft={draft} set={set} />}
@@ -292,6 +345,17 @@ function PluginsSection({
   onRemove: (name: string) => Promise<boolean>;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [pendingTrust, setPendingTrust] = useState<{ plugin: PluginRow | null; action: "install" | "run"; run: () => Promise<unknown> } | null>(null);
+
+  const requestTrust = (plugin: PluginRow | null, action: "install" | "run", run: () => Promise<unknown>) => {
+    setPendingTrust({ plugin, action, run });
+  };
+
+  const acceptTrust = async () => {
+    const pending = pendingTrust;
+    setPendingTrust(null);
+    if (pending) await pending.run();
+  };
 
   const toggleExpand = (name: string) => {
     setExpanded((prev) => (prev === name ? null : name));
@@ -304,7 +368,7 @@ function PluginsSection({
           <h3>Плагины</h3>
           <p>Плагин — это папка с manifest.json и plugin.py. Код запускается в процессе AXIOM.</p>
         </div>
-        <button className="btn primary" disabled={loading} onClick={() => void onInstall()}>
+        <button className="btn primary" disabled={loading} onClick={() => requestTrust(null, "install", onInstall)}>
           {loading ? "Загрузка…" : "Установить из папки"}
         </button>
       </div>
@@ -354,7 +418,9 @@ function PluginsSection({
                   aria-label={`${plugin.enabled ? "Выключить" : "Включить"} ${plugin.name}`}
                   aria-checked={plugin.enabled}
                   disabled={loading}
-                  onClick={() => void onToggle(plugin.name, !plugin.enabled)}
+                  onClick={() => plugin.enabled
+                    ? void onToggle(plugin.name, false)
+                    : requestTrust(plugin, "run", async () => onToggle(plugin.name, true))}
                 >
                   <span className="switch-knob" />
                 </button>
@@ -408,7 +474,7 @@ function PluginsSection({
                   )}
                 </div>
                 <div className="plugin-card-actions">
-                  <button className="btn primary" disabled={loading} onClick={() => void onInstallBundled(plugin.name)}>
+                  <button className="btn primary" disabled={loading} onClick={() => requestTrust(plugin, "install", async () => onInstallBundled(plugin.name))}>
                     Установить
                   </button>
                 </div>
@@ -419,12 +485,324 @@ function PluginsSection({
       )}
 
       <div className="plugin-security-note">
-        Внимание: плагины получают те же права, что и AXIOM. Устанавливайте только код, которому доверяете.
+        Код плагина выполняется с правами процесса AXIOM. Манифест и `ui.scopes` не ограничивают Python-доступ.
+        Включение плагина означает согласие запускать его код в этой и следующих сессиях, пока плагин включён.
       </div>
+      {pendingTrust && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setPendingTrust(null)}>
+          <div className="modal confirm" role="dialog" aria-modal="true" aria-labelledby="plugin-trust-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head"><h2 id="plugin-trust-title">Подтвердить доверие к плагину</h2></div>
+            <div className="modal-body">
+              <strong>{pendingTrust.plugin ? `${pendingTrust.plugin.name} v${pendingTrust.plugin.version}` : "Плагин из выбранной папки"}</strong>
+              {pendingTrust.plugin?.description && <p className="about-text">{pendingTrust.plugin.description}</p>}
+              {pendingTrust.plugin?.tools.length ? <p className="about-text">Объявленные инструменты: {pendingTrust.plugin.tools.join(", ")}</p> : null}
+              {pendingTrust.plugin?.capabilities.length ? <p className="about-text">Возможности манифеста: {pendingTrust.plugin.capabilities.join(", ")}</p> : null}
+              {pendingTrust.plugin?.ui_block?.scopes?.length ? <p className="about-text">Заявленные UI scopes (не применяются как ограничения Python): {pendingTrust.plugin.ui_block.scopes.join(", ")}</p> : null}
+              <p className="about-text">После импорта Python-код может действовать с правами пользователя и процесса AXIOM: читать и изменять доступные файлы, обращаться к сети, переменным окружения и запускать процессы. AXIOM не изолирует код плагина.</p>
+              <p className="about-text">{pendingTrust.action === "run" ? "Подтвердите запуск этого кода. Разрешение сохраняется, пока плагин включён." : "Подтверждение разрешает только установку. Плагин останется выключенным; запуск потребует отдельного подтверждения."}</p>
+            </div>
+            <div className="modal-foot">
+              <button className="btn ghost" onClick={() => setPendingTrust(null)}>Отмена</button>
+              <div className="modal-foot-spacer" />
+              <button className="btn danger" onClick={() => void acceptTrust()}>{pendingTrust.action === "run" ? "Доверять и запустить" : "Подтвердить установку"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+
+function MemorySection({
+  rows,
+  loading,
+  onLoad,
+  onAdd,
+  onEdit,
+  onDelete,
+}: {
+  rows: MemoryRow[];
+  loading: boolean;
+  onLoad: () => Promise<void>;
+  onAdd: (content: string, category: string, scope: string) => Promise<boolean>;
+  onEdit: (id: string, content: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<boolean>;
+}) {
+  const [content, setContent] = useState("");
+  const [category, setCategory] = useState("normal");
+  const [scope, setScope] = useState("global");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+
+  const submit = async () => {
+    if (!content.trim()) return;
+    if (await onAdd(content.trim(), category, scope)) setContent("");
+  };
+
+  const startEdit = (row: MemoryRow) => {
+    setEditing(row.id);
+    setEditText(row.content);
+  };
+
+  const saveEdit = async (id: string) => {
+    if (await onEdit(id, editText.trim())) setEditing(null);
+  };
+
+  return (
+    <div className="memory-settings">
+      <div className="settings-section-head">
+        <div>
+          <h3>Память</h3>
+          <p>
+            Факты и предпочтения, которые AXIOM помнит между запусками. Модель читает и пишет память
+            только через инструменты, а всё, что здесь сохранено, можно изменить или удалить вручную.
+          </p>
+        </div>
+        <button className="btn ghost" disabled={loading} onClick={() => void onLoad()}>
+          <RefreshCw size={13} strokeWidth={1.8} />
+          {loading ? "Обновление…" : "Обновить"}
+        </button>
+      </div>
+
+      <div className="memory-form">
+        <textarea
+          className="memory-input"
+          rows={2}
+          placeholder="Например: в этом проекте тесты запускаются через pytest"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+        />
+        <div className="memory-form-controls">
+          <select className="memory-select" value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="normal">обычный факт</option>
+            <option value="sensitive">личное предпочтение</option>
+          </select>
+          <select className="memory-select" value={scope} onChange={(e) => setScope(e.target.value)}>
+            <option value="global">глобально</option>
+            <option value="project">в проекте</option>
+          </select>
+          <button className="btn primary" disabled={!content.trim()} onClick={() => void submit()}>
+            Запомнить
+          </button>
+        </div>
+        <div className="settings-row-hint">
+          Категория «запрещённая» недоступна для записи: такие записи никогда не попадают на диск.
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="settings-empty">
+          Память пуста. Добавьте факт вручную или попросите модель запомнить что-то в диалоге.
+        </div>
+      ) : (
+        <div className="memory-list">
+          {rows.map((row) => (
+            <div className="memory-card" key={row.id}>
+              <div className="memory-card-main">
+                {editing === row.id ? (
+                  <textarea
+                    className="memory-input"
+                    rows={2}
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                  />
+                ) : (
+                  <div className="memory-card-text">{row.content}</div>
+                )}
+                <div className="memory-card-meta">
+                  <span className="memory-badge">{row.scope === "project" ? "проект" : "глобально"}</span>
+                  <span className="memory-badge">
+                    {row.category === "sensitive" ? "предпочтение" : "факт"}
+                  </span>
+                  {row.tags.map((tag) => (
+                    <span className="memory-badge" key={tag}>
+                      #{tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="memory-card-actions">
+                {editing === row.id ? (
+                  <>
+                    <button className="btn primary small" onClick={() => void saveEdit(row.id)}>
+                      Сохранить
+                    </button>
+                    <button className="btn ghost small" onClick={() => setEditing(null)}>
+                      Отмена
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn ghost small" onClick={() => startEdit(row)}>
+                      Изменить
+                    </button>
+                    <button
+                      className="btn danger small"
+                      onClick={() => void onDelete(row.id)}
+                      aria-label={`Удалить запись памяти: ${row.content}`}
+                    >
+                      Удалить
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KnowledgeSection({
+  rows,
+  loading,
+  hits,
+  onLoad,
+  onAdd,
+  onReindex,
+  onRemove,
+  onSearch,
+}: {
+  rows: KnowledgeRow[];
+  loading: boolean;
+  hits: KnowledgeHit[];
+  onLoad: () => Promise<void>;
+  onAdd: (name: string, path: string) => Promise<boolean>;
+  onReindex: (name: string) => Promise<boolean>;
+  onRemove: (name: string) => Promise<boolean>;
+  onSearch: (query: string) => Promise<KnowledgeHit[]>;
+}) {
+  const [name, setName] = useState("");
+  const [path, setPath] = useState("");
+  const [query, setQuery] = useState("");
+  const [searched, setSearched] = useState(false);
+
+  const submitAdd = async () => {
+    const trimmedName = name.trim() || path.trim().split(/[\\/]/).filter(Boolean).pop() || "collection";
+    if (!path.trim()) return;
+    if (await onAdd(trimmedName, path.trim())) {
+      setName("");
+      setPath("");
+    }
+  };
+
+  const submitSearch = async () => {
+    if (!query.trim()) return;
+    setSearched(true);
+    await onSearch(query.trim());
+  };
+
+  return (
+    <div className="memory-settings">
+      <div className="settings-section-head">
+        <div>
+          <h3>База знаний</h3>
+          <p>
+            Локальные папки и документы индексируются в SQLite/FTS5 (BM25 работает полностью
+            офлайн). Эмбеддинги Ollama — необязательный слой переранжирования: когда они
+            недоступны, статус честно показывает это. Модель получает только цитируемые фрагменты.
+          </p>
+        </div>
+        <button className="btn ghost" disabled={loading} onClick={() => void onLoad()}>
+          <RefreshCw size={13} strokeWidth={1.8} />
+          {loading ? "Обновление…" : "Обновить"}
+        </button>
+      </div>
+
+      <div className="memory-form">
+        <div className="memory-form-controls">
+          <input
+            className="memory-input"
+            placeholder="Имя коллекции (напр. docs)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <input
+            className="memory-input"
+            placeholder="Путь к папке или файлу…"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+          />
+          <button className="btn primary" disabled={!path.trim() || loading} onClick={() => void submitAdd()}>
+            Индексировать
+          </button>
+        </div>
+        <div className="settings-row-hint">
+          Повторная индексация читает только изменённые файлы; секреты (.env, ключи) никогда
+          не попадают в индекс.
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="settings-empty">
+          Коллекций пока нет. Укажите папку выше — после индексации модель сможет искать
+          по ней через инструмент knowledge_search.
+        </div>
+      ) : (
+        <div className="memory-list">
+          {rows.map((row) => (
+            <div className="memory-card" key={row.name}>
+              <div className="memory-card-main">
+                <div className="memory-card-text">{row.name}</div>
+                <div className="memory-card-meta">
+                  <span className="memory-badge">{row.files} файлов</span>
+                  <span className="memory-badge">{row.chunks} фрагментов</span>
+                  <span className="memory-badge">эмбеддинги: {row.embeddings}</span>
+                </div>
+                <div className="settings-row-hint">{row.path}</div>
+              </div>
+              <div className="memory-card-actions">
+                <button className="btn ghost small" disabled={loading} onClick={() => void onReindex(row.name)}>
+                  Переиндексировать
+                </button>
+                <button className="btn danger small" onClick={() => void onRemove(row.name)}>
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="memory-form">
+        <div className="memory-form-controls">
+          <input
+            className="memory-input"
+            placeholder="Поисковый запрос по базе знаний…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void submitSearch(); }}
+          />
+          <button className="btn ghost" disabled={!query.trim() || rows.length === 0} onClick={() => void submitSearch()}>
+            <Search size={13} strokeWidth={1.8} />
+            Найти
+          </button>
+        </div>
+      </div>
+      {searched && hits.length === 0 && (
+        <div className="settings-empty">Фрагментов по запросу не найдено.</div>
+      )}
+      {hits.length > 0 && (
+        <div className="memory-list">
+          {hits.map((hit, index) => (
+            <div className="memory-card" key={`${hit.collection}/${hit.source}:${index}`}>
+              <div className="memory-card-main">
+                <div className="memory-card-text">{hit.text}</div>
+                <div className="memory-card-meta">
+                  <span className="memory-badge">
+                    [{index + 1}] {hit.collection}/{hit.source}:{hit.start_line}-{hit.end_line}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -766,8 +1144,11 @@ function AppearanceSection({ draft, set }: SectionProps) {
           value={draft.theme}
           onChange={(e) => set("theme", e.target.value as AxiomConfig["theme"])}
         >
-          <option value="obsidian">Obsidian (тёмная)</option>
-          <option value="light">Светлая</option>
+          <option value="obsidian">AXIOM Dark</option>
+          <option value="light">AXIOM Light</option>
+          <option value="midnight">Midnight Blue</option>
+          <option value="terminal">Terminal Green</option>
+          <option value="solarized">Solarized Dark</option>
         </select>
       </Row>
       <Row label="Акцент" hint="Общий проверенный цвет для Desktop и TUI">

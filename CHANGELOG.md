@@ -9,6 +9,309 @@
 
 ## [Unreleased]
 
+### Changed — Windows desktop launch
+
+- Tauri now uses the Windows GUI subsystem in debug and release builds; Python 3.11 and command helpers use hidden process creation, with the configured Python 3.11 path preferred by default;
+- a per-session mutex prevents duplicate GUI instances, and a kill-on-close Job Object (with hidden `taskkill /T` fallback) terminates the core process tree on close or bridge restart;
+- MCP subprocesses suppress console windows and are terminated as process trees.
+- `axiom --gui` now checks for an MSVC Rust toolchain, installs official stable rustup quietly when missing, refreshes the current process PATH, and shows a GUI prompt if Visual C++ Build Tools or the Windows SDK are missing.
+
+### Completed — W2.3 Orchestrator v2 and W2.9 Security Package
+
+- W2.3: orchestration plans now carry dependency topology; persisted
+  trajectories resume through `ChatSession.resume_orchestrated()` and skip
+  workers that already have a recorded `agent.done`; `Trajectory.export_markdown()`
+  and bridge commands `trajectory_export` / `orchestrate_resume` expose only
+  recorded timeline and usage data;
+- W2.9: `ToolRegistry` writes redacted JSONL audit records with argument hashes;
+  workspace mutations create atomic per-file checkpoints and return checkpoint
+  ids; `NetGuard` blocks non-public/credential-bearing URLs before fetch;
+  fetched text is marked untrusted; `Config.local_only` blocks web search,
+  page fetch and Ollama embeddings;
+- tests added for SSRF, audit masking/round-trip, checkpoint restore, Local Only,
+  Markdown export, dependency topology, trajectory resume and completed-worker
+  skipping; targeted W2.3/W2.9/core harness slice: `72 passed`, Ruff clean.
+
+### Added — W3.10 Composer persistence
+
+- composer drafts persist per conversation (including an unsaved new-chat draft) across chat switches and restarts;
+- submitted prompts are stored per conversation and can be recalled with ↑/↓ from the composer; deleting a chat also clears its saved draft and prompt history;
+- updated the W3.10 roadmap to record the existing `@file` completion/insertion and this delivered slice. Desktop production build passes; tests were not run.
+
+### Added — TUI Package (W2.8)
+
+- `Ctrl+F` opens a current-transcript search bar. It searches only mounted
+  `UserMessage`/`AssistantMessage` widgets, reports real match counts, and
+  cycles through results with Enter / Shift+Enter without mixing in another
+  conversation's history;
+- `/orchestrate <task>` now opens a live `OrchestrationPanel`. It uses the
+  real `ChatSession.trajectory` with a per-run baseline, shows actual worker /
+  tool / review events, and `s` calls the existing session cancellation path;
+- `/benchmark [repetitions]` runs the existing core `BenchmarkRunner` through
+  isolated `ChatSession` instances, reports cold/warm timing and throughput,
+  and displays model-unavailable/network failures honestly as failed runs;
+- `/memory`, `/knowledge`, `/plugins` and accent theme support were already
+  present and are now covered together by the completed W2.8 scope;
+- added matching deep-dark TUI styles and regression coverage; verified with
+  `42 passed` in the TUI/benchmark/permission slice and Ruff.
+
+### Changed — Task Progress Observability (W4.12)
+
+- Added a persisted `waiting_for_permission` task state. The bridge associates
+  permission requests with the active task and returns it to its prior state
+  after the user's decision; the Desktop status follows the task event and shows
+  a localized state and active step detail.
+- The task card now shows the pending tool and its safe argument summary,
+  changed paths, structured execution errors, and concise verification outcome
+  and failure reason. Copy reports only its destination; moves report both paths.
+- Updated the W4.12 roadmap with this delivered slice. Tests were not run.
+
+### Added — Frontend Decomposition and Virtualization (W2.7)
+
+- **CSS split by domain without touching the visuals**: `desktop/src/styles.css`
+  shrank from 3941 to 3242 lines; the boot-sequence and orchestration-board
+  blocks are extracted verbatim into `desktop/src/styles/boot.css` and
+  `desktop/src/styles/orchestration.css`, and the new virtualization rules live
+  in `desktop/src/styles/virtualization.css` — all imported from `main.tsx` in
+  the exact original cascade order, so the deep-dark theme renders identically;
+- **`useAxiom.ts` decomposition**: pure, stateless helpers moved to
+  `desktop/src/hooks/useAxiom.helpers.ts` (`liveAssistant`/`nextUserId`/
+  `updateLive`, `toolLabel`/`toolTarget`/`toolStatusText`, `resolveModel`,
+  `activeProviderLabel`, `errorText`, `orchestrationProgress`); the hook keeps
+  only state and effects, and re-exports the helpers so existing imports keep
+  working;
+- **memoised message rows**: chat `UserMessage`/`AssistantMessage` are
+  `React.memo` components fed by ref-stabilised callbacks (no stale closures)
+  and live props (`liveState`/`statusText`/`elapsedMs`) gated to the streaming
+  row only, so a long conversation no longer re-renders every settled message
+  on each streamed flush;
+- **native list virtualization**: chat messages and Explorer rows get
+  `content-visibility: auto` with `contain-intrinsic-size`, skipping layout and
+  paint for off-screen rows while preserving DOM structure, scroll position,
+  and appearance — no virtual-list library, no behavior change;
+- **~30 ms stream batching**: token deltas accumulate and flush on a fixed
+  30 ms timer (cleared on finish/fail/unmount) instead of one render per
+  animation frame, bounding the re-render rate during long generations;
+- **bundle split**: Rollup `manualChunks` carve `vendor-react`,
+  `vendor-markdown` and `vendor-highlight` out of the app chunk — the largest
+  chunk drops from 822.72 kB (245.22 kB gzip, above the 500 kB warning) to
+  342.86 kB (105.71 kB gzip) and the aggregate minified size shrinks slightly
+  (822.72 → 818.87 kB); build emits no size warnings;
+- verified with `tsc --noEmit`, the Vite build and the full E2E harness
+  (47/47 checks, incl. real streaming generation through the bridge);
+- documented in `docs/roadmap.md` (W2.7 TODO → DONE, W2 wave summary
+  `6 done, 3 partial, 0 TODO`).
+
+### Added — SQLite/FTS5 History (W2.6)
+
+- `core/history.py`: `HistoryStore` now persists conversations to a single
+  `history.db` (SQLite) per scope (global or per-project) instead of one JSON
+  file per conversation. A `conversations` table holds the full indented JSON
+  in a `data` column plus queryable `updated_at`/`pinned`/`folder`, and an
+  `history_fts` FTS5 virtual table backs full-text search;
+- the public API is unchanged (`save`/`list`/`show`/`load`/`delete`/`search`/
+  `rename`/`set_meta`/`set_limit`/`use_workspace`/`directory`) so `ChatSession`
+  and the bridge need no changes; `show` still returns the same
+  `model_dump_json(indent=2)` string callers relied on;
+- honest degradation: when the SQLite build lacks FTS5 the store logs a warning
+  and search falls back to an in-Python scan (identical results, just slower),
+  so search never silently breaks;
+- idempotent migration: the first open of a directory imports any legacy
+  `<id>.json` files into the DB, then moves the originals into a
+  `migrated_json/` backup folder (kept readable, not deleted). A repeat open
+  finds no `*.json` and does nothing; unreadable legacy files are skipped but
+  still moved aside so they are not retried forever;
+- `use_workspace()` reopens the store against the project's own `history.db`,
+  keeping global and per-project histories separate as before;
+- benchmark (2000 conversations × 6 messages each): full listing
+  `14820 ms → 102 ms` (~145× faster), content search `209 ms → 0.8 ms`
+  (~265× faster);
+- tests: `tests/core/test_history_migration.py` (import + backup, repeat no-op,
+  corrupt-file handling, reopen persistence, search over imported content) and
+  an updated `tests/core/test_history_store.py` prune assertion; existing
+  `test_history_meta.py`, `test_chat.py`, `test_public_api.py` and the bridge
+  round-trip test pass unchanged;
+- documented in `docs/architecture.md` (Персистентность + module map) and
+  `docs/roadmap.md` (W2.6 PARTIAL → DONE, W2 wave summary `5 done, 3 partial,
+  1 TODO`).
+
+### Added — Prompt Layers Without Local-Model Overload (W2.5)
+
+- new `core/prompt_builder.py`: `PromptLayers` dataclass, `build_system_prompt()`
+  (fixed layer order `core` → `role` → `workspace` → `project` → `memory` →
+  `knowledge` → `skills` → response style → current task, hard character
+  budgets with must-survive floor for policy/workspace/project-rules/task)
+  and `select_variant()` (deterministic `mini`/`full` from request complexity
+  plus `thinking_mode`/`budget`, tracking reasoning depth — never an extra
+  model call);
+- `Agent.run` builds the default system prompt through the builder (workspace
+  block, budgeted memory slice and skill blocks as inputs) and exposes
+  `last_prompt_variant`/`last_prompt_chars`; a user's custom
+  `system_prompt` still wins outright and the old default policy text is
+  preserved as `FULL_POLICY`/`MINI_POLICY` inside the builder;
+- `mini` (4000 chars, hard rules only) keeps small local models fast, `full`
+  (12000 chars) carries the complete tool/decision policy; no unverified
+  requirements or hidden chain-of-thought instructions are injected — the
+  honesty rule and the no-guess rule are invariants of every assembly;
+- exported `PromptLayers`, `build_system_prompt`, `select_variant`,
+  `MINI_BUDGET_CHARS`, `FULL_BUDGET_CHARS` from the public API;
+- tests: 8 cases in `tests/core/test_prompt_builder.py` (mini/full budgets,
+  task+project survival under a 900-char budget, layer order, variant
+  selection incl. deep/fast/economy, CoT-instruction absence, shared
+  invariants, end-to-end memory injection through `Agent.run`);
+- documented in `docs/architecture.md` (Слои промпта section) and
+  `docs/roadmap.md` (W2.5 PARTIAL → DONE, W2 wave summary `4 done,
+  4 partial, 1 TODO`).
+
+### Added — Knowledge Base / RAG v1 (W2.2)
+
+- new package `core/knowledge/`: `chunking.py` (deterministic paragraph chunker
+  with overlap and real per-chunk line numbers; `.env`/keys and binary files
+  are never indexed), `store.py` (`KnowledgeStore` per collection on
+  SQLite/FTS5 under `~/.axiom/knowledge/<name>.db`), `manager.py` (atomic
+  `~/.axiom/knowledge.json` registry + shared embedder) and `tools.py`;
+- BM25 retrieval works fully offline; Ollama embeddings (`/api/embed`) are an
+  optional re-ranking layer blended 60% cosine / 40% normalised BM25 — the
+  store reports an honest `embeddings` status (`ok` /
+  `unavailable: <reason>` / `disabled`) and search keeps working without it;
+- indexing is incremental: a mtime+size fingerprint per file means a re-index
+  reads only changed files, new files are added and deleted files drop out;
+- three model-facing tools — `knowledge_search` (returns cited fragments as
+  `[n] <collection>/<source>:<lines>` with the real chunk text),
+  `knowledge_index`, `knowledge_status` (all `Permission.ALWAYS`);
+  `performance.tool_scope` advertises them when the request mentions
+  documents/notes/knowledge;
+- `ChatSession` owns the manager and exposes UI projections:
+  `knowledge_rows()`, `knowledge_add_collection()`, `knowledge_reindex()`,
+  `knowledge_remove_collection()`, `knowledge_search_rows()`; the embeddings
+  model is configured via `Config.knowledge_embed_model`;
+- Desktop: bridge commands `knowledge_list`, `knowledge_add`,
+  `knowledge_remove`, `knowledge_reindex`, `knowledge_search`,
+  `knowledge_embed_model`; a Settings → Знания section to index a folder,
+  re-index/remove collections and run a cited search, plus a `/knowledge`
+  palette entry and the `KnowledgeRow`/`KnowledgeHit` types;
+- TUI: `/knowledge` opens `KnowledgePanel` over the same core projections —
+  `a` indexes the typed path, `r` re-indexes the selection, `d` removes it,
+  `/` searches every collection and shows cited fragments;
+- exported `KnowledgeManager`, `KnowledgeStore`, `KnowledgeTools` and
+  `KnowledgeHit` from the public API;
+- tests: 10 deterministic cases in `tests/core/test_knowledge.py` (chunk line
+  numbers, secret/binary exclusion, cited BM25 search, incremental re-index
+  and deletion drop-out, honest embeddings status with a fake embedder,
+  vector re-rank, registry persistence, tool round-trip, session wiring,
+  tool_scope advertising), 3 bridge cases (add → list → search → remove,
+  missing path rejected, unknown reindex fails) and a TUI case in
+  `tests/frontends/test_tui_menu.py`;
+- documented in `docs/architecture.md` (База знаний section) and
+  `docs/roadmap.md` (W2.2 TODO → DONE, W2 wave summary `3 done, 5 partial,
+  1 TODO`).
+
+### Added — GUI Permission Dialog (W2.4)
+
+- `PermissionManager` now answers with a real three-way decision: added
+  `PermissionOutcome` (`allow_once` / `allow_always` / `deny`) and
+  `normalize_permission_outcome()`; legacy boolean callbacks still work
+  (`True` = allow and remember). The answer is honest: only `allow_always`
+  is cached (per tool, for the session), while `once` and `deny` ask again
+  next time; an unknown answer fails closed;
+- the tool call is really suspended until a human answers: the bridge emits
+  `permission_request` (`tool`, `arguments`, `cwd`, and the real `risk` from
+  registry metadata) and holds an `asyncio` future until the shell sends
+  `permission_respond {id, decision}`; stale or unknown ids return
+  `{"resolved": false}` instead of silently succeeding;
+- Desktop: `ConfirmDialog.tsx` became the real permission dialog ("Один раз" /
+  "Всегда для этого инструмента" / "Отклонить", Esc = отказ, аргументы в
+  `<pre>`), driven by the `permission_request` event in `useAxiom.ts`; Stop
+  refuses a pending request instead of leaving it hanging;
+- TUI: `PermissionDialog` now returns `PermissionOutcome` (Enter = once,
+  F2 = always, Esc = deny) and is really wired into `WorkspaceScreen.on_mount`
+  — model-initiated ASK calls (e.g. `memory_write`) finally ask the user in
+  both frontends instead of being denied by the no-callback fallback;
+- tests: 5 new core cases (`tests/core/test_permissions.py`), 3 bridge cases
+  (`permission_request` round-trip, fallback payload, real
+  `permission_respond` routing) and `tests/frontends/test_permission_dialog.py`
+  (the three dialog outcomes plus the real callback round-trip through a
+  worker, which caught `push_screen_wait` belonging to `App`, not `Screen`);
+- verified with `451 passed, 1 skipped`, Ruff, and `tsc --noEmit`;
+- docs: `docs/architecture.md` gained the "Диалог разрешений (W2.4)" section;
+  `docs/roadmap.md` restored the lost W1/W2 sections and marks W2.4 as DONE
+  (W2 wave summary `2 done, 5 partial, 2 TODO`).
+
+### Added — Curated Memory (W2.1)
+
+- added `core/memory.py`: `MemoryItem` (id, scope, category, content, tags,
+  timestamps) with `global`/`project`/`conversation` scopes and
+  `normal`/`sensitive`/`banned` categories, plus `MemoryStore` — global memory in
+  `~/.axiom/memory.json`, project memory in `<workspace>/.axiom/memory.json`,
+  written atomically (`*.json.tmp` → replace) and never crashing on a corrupt
+  file; a `banned` item is rejected in `add()` before anything reaches disk;
+- added budgeted retrieval `MemoryStore.retrieve_relevant(query, budget)`:
+  query terms are scored against content and tags, the result is hard-capped at
+  `budget` items, and an unmatched query falls back to the newest items — the
+  full store never enters the model context;
+- added `MemoryTools` (`memory_write` = `ASK`, `memory_read` = `ALWAYS`,
+  `memory_forget` = `ASK`, all `RISK_SAFE`): the model reaches memory only
+  through these three tools, reads merge the project store (most specific) with
+  the global one, and writes pick the target store from the requested scope;
+- `ChatSession` now owns a global store plus a project store whenever a
+  workspace root exists, registers the three tools, and exposes the user-facing
+  management surface — `memory_rows()` (single projection shared by Desktop and
+  TUI), `memory_write_for_user()`, `memory_edit()`, `memory_forget()`; a
+  workspace switch rebuilds the project store and leaving a project drops it, so
+  project facts never leak into another folder;
+- `Agent` injects only a budgeted slice (`relevant(query, budget=5)`) as
+  `[scope/category]` lines labelled "verify before relying on it"; a run without
+  attached memory injects nothing;
+- `performance.tool_scope` advertises the memory tools when the request asks the
+  agent to remember something, so small local models still see them in a scoped
+  tool list;
+- Desktop: bridge commands `memory_list`, `memory_add`, `memory_edit`,
+  `memory_delete`; a Settings → Память section to list, add (content + category
+  + scope), edit in place and delete every persisted item, a `/memory` command
+  palette entry that opens it, the `MemoryRow` projection type and its CSS;
+- TUI: `/memory` opens `MemoryPanel` over the same core projection — `a` adds,
+  `e` edits the selection, `d` deletes, `esc` closes, with a real
+  global/project/sensitive counter in the subtitle;
+- exported `MemoryItem`, `MemoryStore`, `MemoryTools`, `MemoryScope` and
+  `MemoryCategory` from the public API;
+- 17 deterministic tests in `tests/core/test_memory.py` (scoped paths, persist
+  and reload, banned content never on disk, filters, budget enforcement, tool
+  permissions, merged project + global reads, the memory block reaching the
+  system prompt through a fake Ollama client, corrupt-file tolerance), 3 bridge
+  cases in `tests/test_bridge.py` (add → list → edit → delete round-trip, empty
+  content rejected, unknown id not removed) and a TUI case in
+  `tests/frontends/test_tui_menu.py`;
+- verified with `438 passed, 1 skipped`, Ruff, and `tsc --noEmit`;
+- documented in `docs/architecture.md` (Curated Memory section + module map) and
+  `docs/roadmap.md` (W2.1 TODO → DONE, W2 wave summary, W4.11 note). Task and
+  session memory scopes remain in W4.11; a model-initiated `memory_write` in
+  Desktop stays denied until the W2.4 permission dialog is wired, while TUI
+  already prompts through the existing permission manager.
+
+### Added — UI Extension Point Contract (W1.5)
+
+- documented the versioned UI extension contract in `docs/plugins.md`
+  (section 11) and `docs/architecture.md`: the `ui` manifest block
+  (`api_version`, `scopes`, `extensions[]`), five extension points (`panel`,
+  `command`, `setting`, `renderer`, `theme`), the `fs`/`net`/`ui`/`clipboard`
+  scope model, host guarantees (typed request/response/events only, no host
+  DOM, isolated iframe/Worker host in W3.1, requested scopes shown at install)
+  and compatibility rules (exact `api_version` match, breaking changes bump
+  `UI_EXTENSION_API_VERSION`, opaque `meta` pass-through);
+- `PluginManifest` now parses a structured `ui` block into a validated
+  `UIExtensionBlock` (a `UIExtension` per declared point) and rejects — before
+  any code import — an incompatible `ui.api_version`, unknown extension points
+  or scopes, unsafe extension ids, and a UI block without the `ui` capability;
+  legacy `ui: string[]` declarations keep working unchanged;
+- `UIExtension`/`UIExtensionBlock` exported from `axiom.core.plugins` and the
+  public API; `manifest.row()` exposes `ui_block` for frontends;
+- 12 deterministic tests in `tests/core/test_ui_extensions.py`: a full
+  five-point example manifest validates, the incompatible-version case is
+  rejected at both block and install level, unknown point/scope/id and missing
+  capability are rejected, and round-trips preserve the block;
+- updated `docs/roadmap.md`: W1.5 status changed from TODO to DONE, W1 wave
+  summary is now `5 done`.
+
 ### Added — Bundled system plugins (5 built-ins, W1.4)
 
 - new bundled catalogue at `src/axiom/plugins/bundled/` with 5 ready-to-use

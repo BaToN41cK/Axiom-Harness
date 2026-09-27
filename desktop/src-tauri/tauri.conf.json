@@ -4,7 +4,6 @@
   "version": "1.0.0",
   "identifier": "app.axiom.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"

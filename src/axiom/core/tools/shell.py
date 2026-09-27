@@ -68,6 +68,8 @@ class ShellSession:
             errors="replace",
             bufsize=1,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if os.name == "nt" else 0,
         )
         self._reader = threading.Thread(target=self._pump, daemon=True)
         self._reader.start()

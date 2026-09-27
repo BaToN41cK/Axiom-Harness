@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import re
 import time
@@ -26,6 +27,7 @@ class TaskState(str, Enum):
     ANALYZING = "analyzing"
     PLANNING = "planning"
     EXECUTING = "executing"
+    WAITING_FOR_PERMISSION = "waiting_for_permission"
     VERIFYING = "verifying"
     WAITING_FOR_USER = "waiting_for_user"
     COMPLETED = "completed"
@@ -55,6 +57,12 @@ class Task(BaseModel):
     errors: list[TaskError] = Field(default_factory=list)
     tests: list[dict] = Field(default_factory=list)
     pending_tool: dict | None = None
+    active_processes: list[dict] = Field(default_factory=list)
+    commands: list[dict] = Field(default_factory=list)
+    file_baselines: dict[str, str | None] = Field(default_factory=dict)
+    unknown_baselines: list[str] = Field(default_factory=list)
+    diffs: dict[str, str] = Field(default_factory=dict)
+    review_status: Literal["pending", "accepted", "rejected"] = "pending"
     detail: str = ""
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
@@ -68,6 +76,7 @@ class TaskEvent(BaseModel):
     kind: Literal[
         "task.started", "task.resumed", "task.state", "task.planned", "task.replanned",
         "task.step", "task.tool", "task.completed", "task.failed", "task.cancelled",
+        "task.permission", "task.process", "task.review",
     ]
     task_id: str
     timestamp: float
@@ -102,6 +111,13 @@ class TaskStore:
             raise ValueError("Stored task id does not match its filename")
         return task
 
+    def delete(self, task_id: str) -> bool:
+        path = self._path(task_id)
+        if path.exists():
+            path.unlink(missing_ok=True)
+            return True
+        return False
+
     def list(self) -> list[Task]:
         tasks = []
         for path in self.directory.glob("*.json"):
@@ -123,7 +139,8 @@ class TaskRunner:
 
     def __init__(self, *, store: TaskStore, planner: Planner, execute: Callable[..., Awaitable[dict]],
                  verify: Callable[[], Awaitable[dict]], tools: list[str], bus: EventBus,
-                 trajectory: Trajectory, max_replans: int = 1) -> None:
+                 trajectory: Trajectory, max_replans: int = 1, max_verification_repairs: int = 2,
+                 workspace_root: Path | None = None) -> None:
         self.store = store
         self.planner = planner
         self.execute = execute
@@ -132,6 +149,116 @@ class TaskRunner:
         self.bus = bus
         self.trajectory = trajectory
         self.max_replans = max_replans
+        self.max_verification_repairs = max(0, max_verification_repairs)
+        self.workspace_root = workspace_root.resolve() if workspace_root is not None else None
+        self._permission_previous_state: TaskState | None = None
+        self._permission_tool_name: str | None = None
+
+    def _snapshot_paths(self, task: Task, name: str, arguments: dict) -> None:
+        if self.workspace_root is None:
+            return
+        keys = {
+            "write_file": ("path",), "edit_file": ("path",), "apply_patch": ("path",),
+            "delete_file": ("path",), "create_directory": ("path",),
+            "move_file": ("source", "destination"), "copy_file": ("destination",),
+        }.get(name, ())
+        for key in keys:
+            raw = arguments.get(key)
+            if not raw:
+                continue
+            try:
+                path = Path(str(raw))
+                path = (path if path.is_absolute() else self.workspace_root / path).resolve()
+                relative = path.relative_to(self.workspace_root).as_posix()
+            except (OSError, ValueError):
+                continue
+            if relative in task.file_baselines:
+                continue
+            try:
+                task.file_baselines[relative] = path.read_text(encoding="utf-8") if path.is_file() else None
+            except (OSError, UnicodeError):
+                task.file_baselines[relative] = None
+                task.unknown_baselines.append(relative)
+
+    def _record_file_diffs(self, task: Task, name: str, arguments: dict) -> None:
+        if self.workspace_root is None:
+            return
+        keys = {
+            "write_file": ("path",), "edit_file": ("path",), "apply_patch": ("path",),
+            "delete_file": ("path",), "create_directory": ("path",),
+            "move_file": ("source", "destination"), "copy_file": ("destination",),
+        }.get(name, ())
+        for key in keys:
+            raw = arguments.get(key)
+            if not raw:
+                continue
+            try:
+                path = Path(str(raw))
+                path = (path if path.is_absolute() else self.workspace_root / path).resolve()
+                relative = path.relative_to(self.workspace_root).as_posix()
+            except (OSError, ValueError):
+                continue
+            before = task.file_baselines.get(relative)
+            try:
+                after = path.read_text(encoding="utf-8") if path.is_file() else None
+            except (OSError, UnicodeError):
+                after = None
+            if before == after:
+                continue
+            if before is None and after is None:
+                task.diffs[relative] = "(File created, deleted or changed as a non-text file.)"
+                continue
+            old_lines = (before or "").splitlines(keepends=True)
+            new_lines = (after or "").splitlines(keepends=True)
+            diff = "".join(difflib.unified_diff(old_lines, new_lines,
+                                                fromfile=f"a/{relative}" if before is not None else "/dev/null",
+                                                tofile=f"b/{relative}" if after is not None else "/dev/null"))
+            task.diffs[relative] = diff[:100_000] + ("\n… diff truncated" if len(diff) > 100_000 else "")
+
+    def process_event(self, task: Task, event: dict) -> None:
+        """Persist subprocess lifecycle metadata as it changes."""
+        pid = int(event.get("pid") or 0)
+        if not pid:
+            return
+        if event.get("state") == "running":
+            task.active_processes = [p for p in task.active_processes if int(p.get("pid") or 0) != pid]
+            task.active_processes.append(dict(event))
+        else:
+            for process in task.active_processes:
+                if int(process.get("pid") or 0) == pid:
+                    process.update(event)
+        self.publish(task, "task.process")
+
+    def permission_requested(self, task: Task, tool: str, arguments: dict) -> None:
+        """Persist the task's real wait-for-approval state before forwarding UI events."""
+        if task.state == TaskState.WAITING_FOR_PERMISSION:
+            return
+        self._permission_previous_state = task.state
+        self._permission_tool_name = tool
+        safe_arguments = {
+            key: str(value)[:2000]
+            for key, value in arguments.items()
+            if key in {"path", "source", "destination", "command"}
+        }
+        pending = dict(task.pending_tool or {})
+        pending.update({"name": tool, "arguments": safe_arguments, "awaiting_permission": True})
+        task.pending_tool = pending
+        task.state = TaskState.WAITING_FOR_PERMISSION
+        self.publish(task, "task.permission")
+
+    def permission_resolved(self, task: Task) -> None:
+        """Return to the state that was active before the permission dialog."""
+        if task.state != TaskState.WAITING_FOR_PERMISSION:
+            return
+        pending = dict(task.pending_tool or {})
+        pending["awaiting_permission"] = False
+        task.pending_tool = pending
+        if self._permission_tool_name == "verify_changes":
+            task.pending_tool = None
+        task.state = self._permission_previous_state or TaskState.EXECUTING
+        self._permission_previous_state = None
+        self._permission_tool_name = None
+        self.publish(task, "task.state")
 
     def publish(self, task: Task, kind: str = "task.state") -> None:
         task.updated_at = time.time()
@@ -157,15 +284,30 @@ class TaskRunner:
             arguments = {key: str(value)[:2000] for key, value in event.arguments.items()
                          if key in {"path", "source", "destination", "command"}}
             task.pending_tool = {"name": event.name, "arguments": arguments}
+            self._snapshot_paths(task, event.name, event.arguments)
+            if event.name in {"run_command", "run_tests", "run_linter", "build_project", "verify_changes"}:
+                task.commands.append({"tool": event.name, "command": arguments.get("command"),
+                                     "state": "running", "started_at": time.time(), "step_id": step.id})
         elif isinstance(event, ToolResultEvent):
             args = (task.pending_tool or {}).get("arguments", {})
-            if event.ok and event.name in {
-                "write_file", "edit_file", "apply_patch", "delete_file", "move_file", "copy_file",
-            }:
-                for key in ("path", "source", "destination"):
+            if event.ok:
+                changed_args = {
+                    "write_file": ("path",), "edit_file": ("path",),
+                    "apply_patch": ("path",), "delete_file": ("path",),
+                    "create_directory": ("path",), "move_file": ("source", "destination"),
+                    "copy_file": ("destination",),
+                }.get(event.name, ())
+                for key in changed_args:
                     path = args.get(key)
                     if path and path not in task.changed_files:
                         task.changed_files.append(path)
+                self._record_file_diffs(task, event.name, args)
+            for command in reversed(task.commands):
+                if command.get("state") == "running" and command.get("tool") == event.name:
+                    command.update({"state": "passed" if event.ok else "failed",
+                                    "duration_ms": event.duration_ms,
+                                    "output": event.content[:12000], "error": event.error})
+                    break
             if not event.ok:
                 task.errors.append(TaskError(type="tool", message=event.error or "Tool failed",
                                              tool=event.name, command=args.get("command"),
@@ -233,14 +375,40 @@ class TaskRunner:
                 step.state = "completed"
                 self.publish(task, "task.step")
             self.transition(task, TaskState.VERIFYING)
-            report = await self.verify()
-            task.tests.append(report)
-            # A no-checks/no-git result is NOT a passing test.
-            if report.get("ok") is True and report.get("executed") is True:
-                self.transition(task, TaskState.COMPLETED, str(report.get("summary") or "Verification passed"))
-            else:
-                self.transition(task, TaskState.WAITING_FOR_USER,
-                                str(report.get("error") or report.get("summary") or "Verification unavailable"))
+            for attempt in range(self.max_verification_repairs + 1):
+                detail = "Проверка изменений" if attempt == 0 else f"Повторная проверка после исправления {attempt}"
+                self.transition(task, TaskState.VERIFYING, detail)
+                report = await self.verify()
+                task.tests.append(report)
+                # A no-checks/no-git result is NOT a passing test.
+                if report.get("ok") is True and report.get("executed") is True:
+                    self.transition(task, TaskState.COMPLETED, str(report.get("summary") or "Verification passed"))
+                    break
+                message = str(report.get("error") or report.get("summary") or "Verification unavailable")
+                if not report.get("executed") or attempt >= self.max_verification_repairs:
+                    task.errors.append(TaskError(type="verification", message=message))
+                    self.transition(task, TaskState.WAITING_FOR_USER, message)
+                    break
+                repair = PlanStep(id=f"verification-repair-{attempt + 1}",
+                                  goal="Исправить ошибки проверки и сохранить вывод проверки",
+                                  tools=self.tools, done_when="Ошибки проверки устранены")
+                repair.state = "running"
+                self.transition(task, TaskState.EXECUTING, repair.goal)
+                prompt = (f"Task: {task.goal}\nVerification failed. Repair the cause using this exact report:\n"
+                          f"{json.dumps(report, ensure_ascii=False)[:16000]}\n"
+                          "Do not claim success. Make a focused fix; the verifier will run again.")
+                result = await self.execute(step=repair, prompt=prompt,
+                                            on_event=partial(self.observe, task, repair))
+                repair.result = str(result.get("content") or "")[:8000]
+                if result.get("error") or result.get("tools_failed"):
+                    task.errors.append(TaskError(type="verification_repair",
+                        message=str(result.get("error") or "Repair tool failed"), step_id=repair.id))
+                    self.transition(
+                        task,
+                        TaskState.WAITING_FOR_USER,
+                        "Исправление не удалось; требуется решение пользователя",
+                    )
+                    break
         except asyncio.CancelledError:
             self.transition(task, TaskState.CANCELLED, "Stopped; completed steps are preserved")
         except Exception as exc:

@@ -26,7 +26,7 @@ from axiom.core.tools.base import (
     ToolResult,
 )
 from axiom.core.tools.filesystem import default_workspace_root
-from axiom.core.tools.processes import process_group_options, terminate_process_tree
+from axiom.core.tools.processes import command_argv, process_group_options, terminate_process_tree
 
 RUN_TESTS_TOOL = "run_tests"
 RUN_LINTER_TOOL = "run_linter"
@@ -119,6 +119,7 @@ class VerificationTools:
     def __init__(self, root: Path | None = None, enabled: bool = True) -> None:
         self.root = (root or default_workspace_root()).resolve()
         self.enabled = enabled
+        self.on_process = None
 
     def set_root(self, root: Path) -> None:
         self.root = root.resolve()
@@ -280,8 +281,8 @@ class VerificationTools:
         base: dict = {"command": command, "output": "", "exit_code": None,
                       "duration_ms": 0, "timed_out": False}
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
+            proc = await asyncio.create_subprocess_exec(
+                *command_argv(command),
                 cwd=self.root,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
@@ -289,20 +290,28 @@ class VerificationTools:
                 env={**os.environ, "PYTHONIOENCODING": "utf-8", "CI": "1", "TERM": "dumb"},
                 **process_group_options(),
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             base["error"] = f"Cannot execute: {exc}"
             return base
+        if self.on_process:
+            self.on_process({"pid": proc.pid, "command": command[:2000], "state": "running", "started_at": time.time()})
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             await terminate_process_tree(proc)
+            if self.on_process:
+                self.on_process({"pid": proc.pid, "state": "timeout", "returncode": proc.returncode})
             base["error"] = f"Command timed out after {timeout:.0f}s"
             base["timed_out"] = True
             base["duration_ms"] = int((time.monotonic() - started) * 1000)
             return base
         except asyncio.CancelledError:
             await terminate_process_tree(proc)
+            if self.on_process:
+                self.on_process({"pid": proc.pid, "state": "cancelled", "returncode": proc.returncode})
             raise
+        if self.on_process:
+            self.on_process({"pid": proc.pid, "state": "exited", "returncode": proc.returncode})
         text = out.decode("utf-8", errors="replace")
         err_text = err.decode("utf-8", errors="replace")
         body = text
@@ -446,8 +455,8 @@ class VerificationTools:
     async def _git(self, *args: str) -> tuple[bool, str]:
         """Run a read-only git command; (False, '') when not a repository."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                f"git -C \"{self.root}\" {' '.join(args)}",
+            proc = await asyncio.create_subprocess_exec(
+                "git", "-C", str(self.root), *args,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

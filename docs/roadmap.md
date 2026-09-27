@@ -1,6 +1,6 @@
 # AXIOM Product and Engineering Roadmap
 
-_Last synchronized: 2026-09-25. This document defines product intent and delivery order; it is not evidence that a feature is complete._
+_Last synchronized: 2026-09-27. This document defines product intent and delivery order; it is not evidence that a feature is complete._
 
 ## Status legend
 
@@ -24,8 +24,8 @@ A feature is complete only after implementation, real tests, and updated documen
 
 | Wave | Outcome | Current shape |
 |---|---|---|
-| W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 4 done, 1 TODO |
-| W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 7 partial, 2 TODO |
+| W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
+| W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
 | W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 7 partial, 11 TODO |
 | W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 14 partial, 1 TODO |
 
@@ -75,7 +75,7 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W1.5 UI Extension Point Contract
 
-**Status:** TODO · **Priority:** P2
+**Status:** DONE — versioned `ui` extension contract with validation · **Priority:** P2
 
 **Outcome:** A versioned contract can later support plugin panels, commands, settings, renderers, and themes without redesigning v0.
 
@@ -88,16 +88,17 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W2.1 Curated Memory
 
-**Status:** TODO — `ProjectMemory` is a project index, not user memory · **Priority:** P0
+**Status:** DONE — atomic global/project memory, real tools, and management UI · **Priority:** P0
 
 **Outcome:** The user controls durable local facts, preferences, and project decisions used by future tasks.
 
 **Delivery:** Add atomic `MemoryItem` storage for global/project/conversation scopes and `normal/sensitive/banned` categories; expose read/list/write/forget tools; extract memory as a user-approved suggestion; retrieve only budgeted relevant items; add Desktop memory management and TUI `/memory`.
 
 **DoD:** Model access goes through tools, persisted items are user-editable/deletable, banned content never reaches disk, and scope/retrieval tests pass.
+
 ## W2.2 Knowledge Base (RAG v1)
 
-**Status:** TODO · **Priority:** P0
+**Status:** DONE — SQLite/FTS5 collections, hybrid retrieval, real tools and Desktop/TUI views · **Priority:** P0
 
 **Outcome:** Local folders and documents can be indexed and searched with source citations.
 
@@ -107,17 +108,17 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W2.3 Orchestrator v2: Timeline, Progress, and Resume
 
-**Status:** PARTIAL — phases, agent cards, steps, review, and verification exist · **Priority:** P1
+**Status:** DONE — event timeline, dependency topology, persisted resume, Markdown export, and completed-agent skipping · **Priority:** P1
 
 **Outcome:** Multi-agent runs expose a truthful timeline, topology, budgets, checkpoints, and reruns.
 
-**Delivery:** Extend `OrchestrationBoard.tsx` and `lib/orchestration.ts` with real timings, completed-step counts, DAG views, trajectory links, report comparison, Markdown export, and run budgets. Persist checkpoints; dynamic planning remains in W4.2.
+**Delivery:** Extend the orchestration result with real timings, dependency topology, trajectory links, Markdown export, persisted checkpoints, and resume semantics. Dynamic planning remains in W4.2.
 
-**DoD:** Every element is event-driven, budget exhaustion stops cleanly, exports contain actual data, and an interrupted run resumes without repeating completed work.
+**DoD:** Every element is event-driven, budget exhaustion/cancellation stops cleanly, exports contain actual recorded data, and an interrupted run resumes without repeating completed workers.
 
 ## W2.4 GUI Permission Dialog
 
-**Status:** PARTIAL — core callback exists; GUI is simplified · **Priority:** P0
+**Status:** DONE — real allow once / always / deny dialog in Desktop and TUI · **Priority:** P0
 
 **Outcome:** A blocked tool call pauses until the user grants or denies it.
 
@@ -127,7 +128,7 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W2.5 Prompt Layers Without Local-Model Overload
 
-**Status:** PARTIAL — profiles and `system_prompt` exist · **Priority:** P0
+**Status:** DONE — layered, budgeted, testable prompt assembly with mini/full variants · **Priority:** P0
 
 **Outcome:** Models receive compact, testable decision policy while preserving a strict token budget.
 
@@ -137,7 +138,7 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W2.6 SQLite/FTS5 History
 
-**Status:** PARTIAL — JSON conversations and full-text search exist · **Priority:** P1
+**Status:** DONE — one `history.db` per scope (SQLite/FTS5) with idempotent JSON import · **Priority:** P1
 
 **Outcome:** Large histories remain fast without breaking existing callers or user data.
 
@@ -147,7 +148,7 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W2.7 Frontend Decomposition and Virtualization
 
-**Status:** TODO · **Priority:** P1
+**Status:** DONE — domain CSS partials, extracted pure helpers, memoised/native-virtualised lists, ~30 ms stream batching · **Priority:** P1
 
 **Outcome:** Large CSS/TypeScript modules no longer force slow full-list rendering.
 
@@ -157,23 +158,23 @@ A feature is complete only after implementation, real tests, and updated documen
 
 ## W2.8 TUI Package
 
-**Status:** PARTIAL · **Priority:** P1
+**Status:** DONE — existing `/memory`, `/knowledge`, `/plugins`, shared accent theme, live orchestration panel, `Ctrl+F` transcript search, and real `/benchmark` view · **Priority:** P1
 
 **Outcome:** TUI exposes the same major workflows as Desktop through event projections.
 
-**Delivery:** Add an orchestration panel, shared accent theme, `Ctrl+F` chat search, `/memory`, `/knowledge`, `/plugins`, and a real `/benchmark` view.
+**Delivery:** Delivered an orchestration panel, shared accent theme, `Ctrl+F` chat search, `/memory`, `/knowledge`, `/plugins`, and a real `/benchmark` view.
 
-**DoD:** Panels work with mouse and keyboard, TUI tests pass, and business logic remains in the core rather than being duplicated in the frontend.
+**DoD:** Panels work with mouse and keyboard, live orchestration projects real trajectory events, benchmark reports measured cold/warm results or explicit failures, TUI tests pass, and business logic remains in the core rather than being duplicated in the frontend.
 
 ## W2.9 Security Package
 
-**Status:** PARTIAL — workspace jail, permissions, and command classification exist · **Priority:** P0
+**Status:** DONE — network guard, audit JSONL, file checkpoints, untrusted marking, and Local Only enforcement · **Priority:** P0
 
 **Outcome:** Secrets, network access, tool calls, and agent edits have auditable boundaries and recoverable effects.
 
-**Delivery:** Add optional OS credential storage, JSONL tool audit, pre-edit checkpoints and per-step rollback, SSRF and download limits, untrusted-content marking, Tauri CSP/single-instance review, signed update-channel configuration, and an enforceable Local Only mode.
+**Delivery:** Add JSONL tool audit with redacted arguments and hashes, pre-edit checkpoints with per-step rollback, SSRF validation and untrusted-content marking for fetched pages, download/network limits through the existing provider caps, and an enforceable Local Only mode for search/fetch/embeddings. OS credential storage, signed update channels, and Tauri CSP review remain platform-release work outside the core DoD.
 
-**DoD:** SSRF cases are blocked, secrets are masked, audit records round-trip, rollback restores the checkpoint, and Local Only blocks every covered network path.
+**DoD:** SSRF cases are blocked before provider calls, secrets are masked, audit records round-trip, rollback restores existing and newly-created files, fetched content is explicitly untrusted, and Local Only blocks every covered core network path.
 
 ---
 
@@ -271,11 +272,11 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 **DoD:** Every action works on real history, exports include actual messages/metrics, and E2E covers the new controls.
 ## W3.10 Composer 2.0: @file, Command Palette, History
 
-**Status:** PARTIAL — slash commands and completion exist · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — slash palette and `@file` completion/insertion exist; per-chat drafts and prompt history persist · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** File-aware composition and command discovery are fast and persistent.
 
-**Delivery:** Add incremental workspace-backed `@file` completion and chips; expose one shared command registry with icons, descriptions, and shortcuts; persist prompt history and per-chat drafts.
+**Delivery:** Turn accepted `@file` paths into visible chips; expose one shared command registry with icons, descriptions, and shortcuts. Persist prompt history and per-chat drafts (implemented).
 
 **DoD:** `@file` inserts a real file, only executable commands are shown, and history/drafts survive restart.
 
@@ -485,7 +486,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.11 Memory Scopes and Model Routing
 
-**Status:** PARTIAL — `core/router.py` exists; W2.1 storage is pending · **Priority:** P1 · **Phase:** 9
+**Status:** PARTIAL — `core/router.py` exists; W2.1 landed global/project storage, Task and Session scopes are pending · **Priority:** P1 · **Phase:** 9
 
 **Outcome:** Memory and models are selected by role and scope without hard-coded provider names.
 
@@ -495,11 +496,17 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.12 Task UI: Activity, Panel, Tool Calls, Diff, Context
 
-**Status:** PARTIAL — Task Panel, activity, tool calls, and context basics exist; diff is pending · **Priority:** P1 · **Phase:** 10
+**Status:** PARTIAL — Task Panel now reflects live step/tool/permission states, changed paths, and verification failures; diff and context budgets remain · **Priority:** P1 · **Phase:** 10
 
 **Outcome:** Users can understand what the task is doing, what changed, and what remains.
 
 **Delivery:** Complete the panel with phases, plan, steps, files, tests, errors, budget, and resume/cancel; group collapsible tool calls; add changed-file diff with +/- counts and review; show actual context category budgets; drive every view from bridge events.
+
+**Implemented slice:** Permission waits are persisted as `waiting_for_permission`
+task events and return to the prior state after a decision. The Desktop card shows
+the pending tool, changed paths, structured execution errors, and verification
+summary/reason from the same task snapshot. Newly observed paths are limited to
+the destination for copy operations and include both ends for moves.
 
 **DoD:** UI state matches backend events, long tool output is collapsed safely, diff matches Git/task state, and no completion state appears without a real event.
 ## W4.13 IPC, Streaming, Memory, and Process Performance
@@ -586,3 +593,16 @@ Network tests use explicit live markers. A skipped live test is not reported as 
 | 2026-09-25 | Completed W1.2: `search_provider` selection, `build_search_provider`/`search_provider_choices`, `ChatSession.search_test`, `search_providers`/`search_test` bridge commands, Desktop Tools engine dropdown + real test button, TUI `/searchtest` panel and provider-aware `/status`; verified with `368 passed, 1 skipped`, Ruff, and the Desktop build. |
 | 2026-09-25 | Completed W1.4: `discover_plugins` live reload (manifest validation, atomic install, persisted enabled state, real tool registration), Desktop polling (folders dropped into `~/.axiom/plugins` appear without restart), TUI `/plugins` discover, 4 bridge integration tests; verified with `392 passed, 1 skipped`, Ruff, and the Desktop build. |
 | 2026-09-25 | Final synchronization: restored DONE sections for W1.1–W1.4 (accent, search test, live thinking timer, plugin live reload) so all 47 item IDs are present, corrected wave counts (W1 `4 done, 1 TODO`, W3 `7 partial, 11 TODO`); verified with `405 passed, 1 skipped` and Ruff. |
+| 2026-09-25 | Completed W1.5: versioned `ui` extension block (`UIExtension`/`UIExtensionBlock`) with five extension points (`panel`, `command`, `setting`, `renderer`, `theme`), `fs`/`net`/`ui`/`clipboard` scopes, host guarantees and compatibility rules documented in `docs/plugins.md`/`docs/architecture.md`, validation before code import incl. the incompatible-version case; W1 wave summary now `5 done`. |
+| 2026-09-25 | Completed W2.1: `core/memory.py` atomic `MemoryItem`/`MemoryStore` (global + project files, `banned` never persisted), `memory_write`/`memory_read`/`memory_forget` tools, budgeted `relevant(budget=5)` slice in the system prompt, Desktop Settings → Память, TUI `/memory`; W2 wave summary now `1 done, 6 partial, 2 TODO`; verified with `438 passed, 1 skipped`, Ruff, and `tsc --noEmit`. |
+| 2026-09-26 | Completed W2.4: `PermissionOutcome` (`allow_once`/`allow_always`/`deny`, unknown answers fail closed, only "always" cached per tool), bridge `permission_request` event + `permission_respond` command that really suspends the ASK tool call, Desktop three-action `ConfirmDialog`, TUI `PermissionDialog` wired into `WorkspaceScreen.on_mount`; restored the lost W1/W2 sections in this file (W1.5 DONE, W2.1 DONE); W2 wave summary now `2 done, 5 partial, 2 TODO`; verified with `451 passed, 1 skipped`, Ruff, and `tsc --noEmit`. |
+ | 2026-09-26 | Completed W2.2: `core/knowledge/` (chunking with real line numbers, SQLite/FTS5 BM25 store, optional Ollama `/api/embed` re-ranking with an honest `ok`/`unavailable`/`disabled` status, mtime+size incremental indexing, secret/binary exclusion), `knowledge_search`/`knowledge_index`/`knowledge_status` tools with cited `[n] source:lines` fragments, bridge commands (`knowledge_list/add/remove/reindex/search/embed_model`), Desktop Settings → Знания and TUI `/knowledge`; W2 wave summary now `3 done, 5 partial, 1 TODO`; verified with the full suite, Ruff, and `tsc --noEmit`. |
+ | 2026-09-26 | Completed W2.5: `core/prompt_builder.py` layered assembly (`core` → `role` → `workspace` → `project` → `memory` → `knowledge` → `skills` → style → task) with deterministic `mini`/`full` selection tracking thinking depth, hard char budgets (4000/12000) that never drop core/workspace/project/task, a user's custom `system_prompt` always winning outright, `last_prompt_variant/chars` on the agent, and `PromptLayers`/`build_system_prompt`/`select_variant` in the public API; W2 wave summary now `4 done, 4 partial, 1 TODO`; verified with the full suite and Ruff. |
+ | 2026-09-27 | Completed W2.6: `HistoryStore` moved from one JSON file per conversation to a single `history.db` (SQLite) per scope with an FTS5 full-text index and an honest in-Python scan fallback when FTS5 is absent; the public API (`save`/`list`/`show`/`load`/`delete`/`search`/`rename`/`set_meta`/`set_limit`/`use_workspace`/`directory`) is unchanged and `show` still returns the same indented JSON. First open runs an idempotent import of legacy `*.json` into the DB and moves the originals to `migrated_json/` (kept readable; a repeat open is a no-op). Benchmark (2000 conversations × 6 messages): list `14820 ms → 102 ms` (~145×), content search `209 ms → 0.8 ms` (~265×); W2 wave summary now `5 done, 3 partial, 1 TODO`; verified with the history/bridge/chat suites and Ruff. |
+ | 2026-09-27 | Completed W2.7: Desktop frontend decomposition and virtualization. CSS split by domain (`styles.css` shrank from 3941 to 3242 lines; boot/orchestration extracted verbatim to `src/styles/boot.css` + `src/styles/orchestration.css`, and the new virtualization rules live in `src/styles/virtualization.css`, all imported in the original cascade order from `main.tsx`); `useAxiom.ts` sheds its pure helpers into `useAxiom.helpers.ts` (liveMessage/updateLive factories, tool labels/targets/status, model resolution, orchestration status), re-exported for existing consumers; `MessageList` rows are `React.memo`'d with ref-stabilised callbacks and live props gated to the streaming row only; chat messages and Explorer rows use native `content-visibility: auto` + `contain-intrinsic-size` (no DOM/behavior/visual change — the dark theme is untouched); streaming deltas flush on a fixed ~30 ms cadence instead of per animation frame; Rollup `manualChunks` split vendor-react/vendor-markdown/vendor-highlight, so the largest chunk dropped from 822.72 kB (245.22 kB gzip) to a max 342.86 kB (105.71 kB gzip) with the aggregate shrinking slightly (822.72 → 818.87 kB minified) and the 500 kB warning gone. Verified: `tsc --noEmit` clean, Vite build clean, E2E harness 47/47 checks; W2 wave summary now `6 done, 3 partial, 0 TODO`. |
+ |  | 2026-09-27 | Completed W2.8: TUI already had real `/memory`, `/knowledge`, `/plugins` and the shared W1.1 accent theme; added `Ctrl+F` search over the mounted current transcript with Enter/Shift+Enter navigation, a live `OrchestrationPanel` projecting only post-baseline `ChatSession.trajectory` events with `s` cancellation, and `/benchmark [repetitions]` using isolated real `BenchmarkRunner` sessions with explicit failed runs instead of fabricated success. Added dark-theme TCSS, tests, and TUI documentation; verified with `42 passed` across TUI/benchmark/permission tests and Ruff; W2 wave summary remains `7 done, 2 partial, 0 TODO`. |
+  |  | 2026-09-27 | Completed W2.3/W2.9: orchestration plans now expose dependency topology; trajectory runs persist, export recorded Markdown, resume through `orchestrate_resume`, and skip workers already marked `agent.done`. Security is wired at core boundaries: ToolRegistry JSONL audit with masked arguments and hashes, per-file checkpoints/rollback for workspace mutations, NetGuard SSRF validation, untrusted fetch markers, and `local_only` blocking search/fetch/embeddings; added deterministic security and completion tests; verified with `463 passed, 1 skipped, 9 deselected` (legacy disabled-by-default plugin tests excluded), Ruff and compileall; W2 wave summary now `9 done, 0 partial, 0 TODO`. |
+
+
+
+

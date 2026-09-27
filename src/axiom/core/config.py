@@ -71,7 +71,7 @@ class Config(BaseModel):
     #: Whether the reasoning block starts expanded
     reasoning_expanded: bool = False
     #: UI colour scheme; kept separate from the shared accent preset.
-    theme: Literal["obsidian", "light"] = "obsidian"
+    theme: Literal["obsidian", "light", "midnight", "terminal", "solarized"] = "obsidian"
     #: Accessible accent shared by Desktop and TUI.
     accent: Literal["garnet", "blue", "teal", "violet"] = "garnet"
     #: Highlight interactive panel/list rows while the pointer is over them.
@@ -85,6 +85,10 @@ class Config(BaseModel):
     system_prompt: str | None = None
     #: Global permission mode: ask, auto_approve_safe, auto_approve_all
     permission_mode: str = "auto_approve_safe"
+    #: Optional Ollama embeddings model for the knowledge base (None = BM25 only)
+    knowledge_embed_model: str | None = None
+    #: Refuse covered external network paths (search, page fetch, embeddings).
+    local_only: bool = False
 
     # ------------------------------------------------------- harness routing
     #: Enable the Model Router (п.16): pick provider/model per task type

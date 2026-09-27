@@ -43,6 +43,15 @@ class UserMessage(Container):
         super().__init__(classes="message user-message")
         self.body = text
         self.timestamp = timestamp
+        # Searchable projection used by the TUI Ctrl+F bar.
+        self.search_text = text
+
+    def find_text(self) -> str:
+        return self.search_text
+
+    def focus_match(self, query: str) -> None:
+        """Scroll this message into view; highlighting stays native/terminal-safe."""
+        self.scroll_visible()
 
     def compose(self):
         stamp = fmt.format_clock(self.timestamp)
@@ -74,6 +83,13 @@ class AssistantMessage(Container):
         self._stream: MarkdownStream | None = None
         self.answering = False
         self.finished = False
+        self.search_text = ""
+
+    def find_text(self) -> str:
+        return self.search_text
+
+    def focus_match(self, query: str) -> None:
+        self.scroll_visible()
 
     def compose(self):
         yield Static("AXIOM", classes="role-label")
@@ -229,6 +245,7 @@ class AssistantMessage(Container):
             return None
 
     def add_reasoning(self, text: str) -> None:
+        self.search_text += text
         if self._reasoning is None:
             self._reasoning = ReasoningPanel(expanded=self._expanded, animations=self._animations)
             anchor = self._anchor()
@@ -320,6 +337,7 @@ class AssistantMessage(Container):
     async def add_answer(self, text: str) -> None:
         if not text:
             return
+        self.search_text += text
         if not self.answering:
             self.answering = True
             self.query_one("#answer-label", Static).display = True
@@ -411,6 +429,21 @@ class ChatView(VerticalScroll):
     def jump_to_end(self) -> None:
         self._follow = True
         self.scroll_end(animate=False)
+        self._refresh_hint()
+
+    def find_matches(self, query: str) -> list[UserMessage | AssistantMessage]:
+        """Only the mounted transcript; no history from other conversations."""
+        needle = query.strip().casefold()
+        if not needle:
+            return []
+        return [child for child in self.children
+                if isinstance(child, (UserMessage, AssistantMessage))
+                and needle in child.find_text().casefold()]
+
+    def focus_match(self, widget: UserMessage | AssistantMessage) -> None:
+        """Show one match without changing the user's search query."""
+        self._follow = False
+        widget.scroll_visible()
         self._refresh_hint()
 
     def clear_messages(self) -> None:

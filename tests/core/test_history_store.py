@@ -33,8 +33,9 @@ def test_prune_keeps_only_newest(tmp_path: Path, steady_clock: None) -> None:
         store.save(_conv(f"c{index}"))
     listed = store.list()
     assert [c.title for c in listed] == ["c4", "c3", "c2"]
-    remaining = {p.name for p in (tmp_path / "h").glob("*.json")}
-    assert len(remaining) == 3
+    # The store keeps exactly ``limit`` conversations in history.db.
+    assert len(listed) == 3
+    assert (tmp_path / "h" / "history.db").is_file()
 
 
 def test_no_limit_keeps_everything(tmp_path: Path, steady_clock: None) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from axiom.core.errors import SearchUnavailableError
 from axiom.core.search.provider import SearchProvider
+from axiom.core.security import NetGuard, mark_untrusted
 from axiom.core.tools.base import ToolDefinition, ToolPermission, ToolResult
 
 WEB_SEARCH_TOOL = "web_search"
@@ -34,9 +35,11 @@ _FETCH_PARAMETERS = {
 class WebSearchTool:
     """Registers the real search / fetch tools in a registry."""
 
-    def __init__(self, provider: SearchProvider, max_sources: int = 5) -> None:
+    def __init__(self, provider: SearchProvider, max_sources: int = 5, *, local_only: bool = False) -> None:
         self._provider = provider
         self._max_sources = max_sources
+        self._local_only = local_only
+        self._net_guard = NetGuard()
         self.last_sources: list = []
 
     def definition(self) -> ToolDefinition:
@@ -60,6 +63,8 @@ class WebSearchTool:
 
     async def search(self, query: str, limit: int | None = None) -> ToolResult:
         """Run a real search and return a formatted, model-readable result."""
+        if self._local_only:
+            return ToolResult(name=WEB_SEARCH_TOOL, ok=False, error="Local Only mode blocks web search")
         count = limit if isinstance(limit, int) and limit > 0 else self._max_sources
         count = max(1, min(count, self._max_sources))
         try:
@@ -80,13 +85,19 @@ class WebSearchTool:
 
     async def fetch(self, url: str) -> ToolResult:
         """Read one page — the real "reading sources" step."""
+        if self._local_only:
+            return ToolResult(name=FETCH_URL_TOOL, ok=False, error="Local Only mode blocks network fetch")
+        try:
+            self._net_guard.validate(url)
+        except ValueError as exc:
+            return ToolResult(name=FETCH_URL_TOOL, ok=False, error=str(exc))
         try:
             text = await self._provider.fetch(url)
         except SearchUnavailableError as exc:
             return ToolResult(name=FETCH_URL_TOOL, ok=False, error=str(exc))
         if not text.strip():
             return ToolResult(name=FETCH_URL_TOOL, ok=True, content="(no readable text found)")
-        return ToolResult(name=FETCH_URL_TOOL, ok=True, content=text)
+        return ToolResult(name=FETCH_URL_TOOL, ok=True, content=mark_untrusted(url, text))
 
     def register(self, registry) -> None:
         """Attach both tools to a :class:`ToolRegistry`."""

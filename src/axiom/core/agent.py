@@ -191,6 +191,9 @@ class Agent:
         self._skills = None
         self._verifier = None
         self._permissions = None
+        #: W2.1 Curated Memory: :class:`~axiom.core.memory.MemoryTools` or None.
+        #: The agent only ever sees a budgeted slice via ``relevant()``.
+        self._memory = None
         self.last_route: dict = {}
         self.last_verify: dict = {}
         self._max_rounds = MAX_TOOL_ROUNDS + (3 if config.workspace_tools_enabled else 0)
@@ -596,7 +599,8 @@ class Agent:
     # ------------------------------------------------------------- agent loop
 
     def attach_harness(self, bus=None, trajectory=None, router=None, catalog=None,
-                       sandbox=None, skills=None, verifier=None, permissions=None) -> None:
+                       sandbox=None, skills=None, verifier=None, permissions=None,
+                       memory=None) -> None:
         """Подключить EventBus + Trajectory + Router + Sandbox + Skills (п.6/10/13/14/16)."""
         self._bus = bus if bus is not None else self._bus
         self._trajectory = trajectory if trajectory is not None else self._trajectory
@@ -612,6 +616,10 @@ class Agent:
             self._verifier = verifier
         if permissions is not None:
             self._permissions = permissions
+        if memory is not None:
+            # W2.1: budgeted memory slice for the system prompt. The full
+            # store never enters the context — only ``relevant()`` output.
+            self._memory = memory
 
     async def run(
         self,
@@ -631,16 +639,64 @@ class Agent:
         self._pasted_pages = []
         last_ttft: int | None = None
 
-        system = self._config.system_prompt or DEFAULT_SYSTEM_PROMPT
-        if self._config.workspace_tools_enabled and self._config.system_prompt is None:
-            system += WORKSPACE_PROMPT_ADDON
-        # §4: every request carries the real workspace path (path + kind +
-        # top-level layout, never the whole project). After a project switch
-        # this block points at the NEW folder, so the model works with it.
-        if self._config.workspace_tools_enabled:
-            block = workspace_context_block(self._config.workspace_root)
-            if block:
-                system = f"{system}\n\n{block}"
+        from axiom.core.prompt_builder import (
+            MINI_BUDGET_CHARS,
+            WORKSPACE_RULES,
+            PromptLayers,
+            build_system_prompt,
+            select_variant,
+        )
+
+        user_seed = self._last_user_text(history) or ""
+        if self._config.system_prompt:
+            # A user's custom prompt wins outright — the builder only owns
+            # the default policy assembly, never a user's words.
+            system = self._config.system_prompt
+        else:
+            variant = select_variant(
+                user_seed,
+                mode=getattr(self._config, "thinking_mode", "auto"),
+                budget=getattr(self._config, "router_budget", "balanced"),
+            )
+            # §4: every request carries the real workspace path (path + kind +
+            # top-level layout, never the whole project). After a project
+            # switch this block points at the NEW folder.
+            block = (
+                workspace_context_block(self._config.workspace_root)
+                if self._config.workspace_tools_enabled
+                else ""
+            )
+            # W2.1: a small budgeted slice of curated memory (never the full
+            # store). Only normal/sensitive items exist on disk; the block
+            # tells the model where each item came from so it can verify.
+            memory_block = ""
+            if self._memory is not None:
+                try:
+                    memory_items = self._memory.relevant(user_seed, budget=5)
+                except Exception:
+                    memory_items = []
+                if memory_items:
+                    lines = "\n".join(
+                        f"- [{item.scope}/{item.category}] {item.content}"
+                        for item in memory_items
+                    )
+                    memory_block = (
+                        "Relevant memory from this user (verify before "
+                        f"relying on it):\n{lines}"
+                    )
+            rules = WORKSPACE_RULES if self._config.workspace_tools_enabled else ""
+            workspace_text = f"{rules}\n\n{block}".strip() if (rules or block) else ""
+            base_layers = PromptLayers(
+                user_text=user_seed,
+                variant=variant,
+                budget_chars=(MINI_BUDGET_CHARS if variant == "mini" else 12000),
+                workspace=workspace_text,
+                memory=memory_block,
+                skill_blocks=self._skill_blocks(user_seed),
+            )
+            system = build_system_prompt(base_layers)
+            self.last_prompt_variant = variant
+            self.last_prompt_chars = len(system)
         if force_search:
             if not self._config.web_search_enabled or self._web_tool is None:
                 from axiom.core.events import ErrorEvent
@@ -704,10 +760,10 @@ class Agent:
                 )
             except Exception:
                 pass
-        # Harness: router-решение + skills-инжект пишутся в trajectory.
+        # Harness: router-решение + skills-инжект пишутся в trajectory. Сами
+        # skill-блоки уже вошли в system через PromptLayers — здесь только учёт.
         self._route_info(user_text)
         for block in self._skill_blocks(user_text):
-            system = f"{system}\n\n{block}"
             if self._trajectory is not None:
                 try:
                     self._trajectory.append("context.skill", block.splitlines()[0][:120],

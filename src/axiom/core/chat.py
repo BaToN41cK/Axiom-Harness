@@ -127,9 +127,40 @@ class ChatSession:
         self.provider = provider or build_search_provider(
             self.config.search_provider, timeout=self.config.search_timeout
         )
-        self.web_tool = WebSearchTool(self.provider, max_sources=self.config.search_max_sources)
+        self.web_tool = WebSearchTool(
+            self.provider,
+            max_sources=self.config.search_max_sources,
+            local_only=self.config.local_only,
+        )
         self.tools = ToolRegistry()
         self.web_tool.register(self.tools)
+        # W2.1 Curated Memory: user-controlled durable facts. Global store plus
+        # a project store when a workspace root is configured; the model only
+        # ever touches memory through the three memory tools.
+        from axiom.core.memory import MemoryStore, MemoryTools
+
+        self.memory_store = MemoryStore()
+        project_root: Path | None = None
+        if self.config.workspace_root:
+            candidate = Path(self.config.workspace_root).expanduser()
+            if candidate.exists():
+                project_root = candidate
+        self.memory_project_store = (
+            MemoryStore(scope="project", project_root=project_root) if project_root else None
+        )
+        self.memory_tools = MemoryTools(self.memory_store, self.memory_project_store)
+        self.memory_tools.register(self.tools)
+        # W2.2 Knowledge Base: named local collections (SQLite/FTS5 + optional
+        # Ollama embeddings). The model reaches them only through three tools.
+        from axiom.core.knowledge import KnowledgeManager, KnowledgeTools
+
+        self.knowledge = KnowledgeManager(local_only=self.config.local_only)
+        if self.knowledge.embed_model is None and self.config.knowledge_embed_model:
+            self.knowledge.configure_embedder(
+                self.config.ollama_url, self.config.knowledge_embed_model
+            )
+        self.knowledge_tools = KnowledgeTools(self.knowledge)
+        self.knowledge_tools.register(self.tools)
         # §8 Tool Layer: file tools + terminal tools + project tools +
         # git tools + web tools — all behind the permission system (§9-§12).
         # Workspace tools always exist: an explicit ``workspace_root`` wins,
@@ -191,6 +222,7 @@ class ChatSession:
         self.last_metrics: dict = {}
         self._task: asyncio.Task | None = None
         self.active_task: Task | None = None
+        self.active_task_runner: TaskRunner | None = None
         #: Fire-and-forget background model warm-up task. Created by the
         #: desktop bridge (``startup`` / ``set_model`` / ``warmup``); the
         #: session only keeps a reference so it can be awaited/cancelled.
@@ -264,7 +296,8 @@ class ChatSession:
         self.agent.attach_harness(bus=self.bus, trajectory=self.trajectory,
                                   router=self.router, catalog=self.model_catalog,
                                   sandbox=self.sandbox, skills=self.skills,
-                                  verifier=self.verifier, permissions=self.permissions)
+                                  verifier=self.verifier, permissions=self.permissions,
+                                  memory=self.memory_tools)
         # All providers expose the same normalized stream to Agent.  Ollama
         # remains the default, while a configured router_primary selects the
         # external provider for the real chat path.
@@ -319,6 +352,133 @@ class ChatSession:
         return await self.mcp.register_all(self.tools)
 
     # ------------------------------------------------------ harness (п.20-22)
+
+    def memory_rows(self) -> list[dict]:
+        """Memory items as UI rows (project store first, then global).
+
+        W2.1: the frontend only ever renders this projection — editing and
+        deletion go through :meth:`memory_forget` / :meth:`memory_edit`.
+        """
+        rows: list[dict] = []
+        seen: set[str] = set()
+        for store in self.memory_tools.stores():
+            for item in store.list(limit=200):
+                if item.id in seen:
+                    continue
+                seen.add(item.id)
+                rows.append(
+                    {
+                        "id": item.id,
+                        "scope": item.scope,
+                        "category": item.category,
+                        "content": item.content,
+                        "tags": list(item.tags),
+                        "updated_at": item.updated_at,
+                    }
+                )
+        rows.sort(key=lambda row: row["updated_at"], reverse=True)
+        return rows
+
+    def memory_forget(self, item_id: str) -> bool:
+        """Delete a memory item (user action from Desktop/TUI, not the model)."""
+        return any(store.remove(item_id) for store in self.memory_tools.stores())
+
+    def memory_edit(self, item_id: str, content: str) -> bool:
+        """Edit an existing memory item's content in place (user action)."""
+        cleaned = " ".join((content or "").split())
+        if not cleaned or len(cleaned) > 2000:
+            return False
+        for store in self.memory_tools.stores():
+            item = store.get(item_id)
+            if item is None:
+                continue
+            if item.category == "banned":
+                return False
+            item.content = cleaned
+            store.add(item)
+            return True
+        return False
+
+    def memory_write_for_user(
+        self, content: str, *, category: str = "normal", scope: str = "global",
+        tags: list[str] | None = None,
+    ) -> str | None:
+        """Persist a memory item at the user's explicit request (UI path).
+
+        Returns the new item id, or ``None`` when the write was rejected
+        (banned/empty/too long) — banned content never reaches disk.
+        """
+        cleaned = " ".join((content or "").split())
+        if not cleaned or len(cleaned) > 2000:
+            return None
+        if category not in ("normal", "sensitive"):
+            category = "normal"
+        target = (
+            self.memory_project_store
+            if scope == "project" and self.memory_project_store is not None
+            else self.memory_store
+        )
+        from axiom.core.memory import MemoryItem
+
+        item = MemoryItem(
+            category=category,  # type: ignore[arg-type]
+            content=cleaned,
+            tags=[t.strip() for t in (tags or []) if t.strip()],
+        )
+        if not target.add(item):
+            return None
+        return item.id
+
+    # ------------------------------------------------------ knowledge (W2.2)
+
+    def knowledge_rows(self) -> list[dict]:
+        """Collection status rows for the Desktop/TUI knowledge views."""
+        rows: list[dict] = []
+        for name in self.knowledge.names():
+            store = self.knowledge.get(name)
+            if store is None:
+                continue
+            rows.append(store.status())
+        return rows
+
+    async def knowledge_add_collection(self, name: str, path: str) -> dict:
+        """Register a collection and index it (real, incremental)."""
+        error = self.knowledge.add(name, path)
+        if error is not None:
+            return {"ok": False, "error": error}
+        return await self.knowledge_reindex(name)
+
+    async def knowledge_reindex(self, name: str) -> dict:
+        store = self.knowledge.get(name)
+        if store is None:
+            return {"ok": False, "error": f"Unknown collection: {name}"}
+        self.knowledge.configure_embedder(self.config.ollama_url, self.knowledge.embed_model)
+        stats = await asyncio.to_thread(store.index, self.knowledge.embedder)
+        status = store.status()
+        return {"ok": True, "stats": stats.to_dict(), "collection": status}
+
+    def knowledge_remove_collection(self, name: str) -> bool:
+        return self.knowledge.remove(name)
+
+    async def knowledge_search_rows(self, query: str, *, limit: int = 5) -> list[dict]:
+        """Cited search fragments across all collections (for UI views)."""
+        rows: list[dict] = []
+        for name in self.knowledge.names():
+            store = self.knowledge.get(name)
+            if store is None:
+                continue
+            hits = await asyncio.to_thread(store.search, query)
+            for hit in hits:
+                rows.append({
+                    "collection": name,
+                    "source": hit.source,
+                    "start_line": hit.start_line,
+                    "end_line": hit.end_line,
+                    "score": round(hit.score, 4),
+                    "text": hit.text[:600],
+                })
+        rows.sort(key=lambda row: -row["score"])
+        return rows[:limit]
 
     def load_plugins(self) -> list[str]:
         """Загрузить установленные плагины (п.20) и применить их вклады.
@@ -613,7 +773,11 @@ class ChatSession:
         request_registry = self.tools.subset(allowed)
         from axiom.core.tools.web_search import WebSearchTool
 
-        request_web_tool = WebSearchTool(self.provider, max_sources=self.config.search_max_sources)
+        request_web_tool = WebSearchTool(
+            self.provider,
+            max_sources=self.config.search_max_sources,
+            local_only=request_config.local_only,
+        )
         if "web_search" in allowed or "fetch_url" in allowed:
             request_web_tool.register(request_registry)
         # Every worker owns an isolated runtime context: private config copy
@@ -815,15 +979,114 @@ class ChatSession:
                     return parsed if isinstance(parsed, dict) else None
         return None
 
-    async def task_start(self, goal: str, *, planning: bool | None = None) -> Task:
+    async def task_plan(self, goal: str) -> object:
         if self.busy:
             raise ValueError("A generation is already running")
-        task = Task(goal=goal.strip(), scope=str(self.workspace_root) if self.workspace_root else None,
-                    planning=planning)
-        self.task_store.save(task)
-        return await self._run_task(task)
+        from axiom.core.planner import Planner, PlanStep, TaskPlan
+        planner = Planner(self._plan_task)
+        tools = [d.name for d in self.tools.definitions()]
+        clean_goal = goal.strip()
+        try:
+            return await planner.create(clean_goal, tools)
+        except Exception:
+            return TaskPlan(
+                steps=[
+                    PlanStep(
+                        id="analyze",
+                        goal=f"Исследовать структуру проекта и контекст задачи: {clean_goal[:120]}",
+                        tools=tools,
+                        done_when="Собрана необходимая информация о файлах и логике",
+                    ),
+                    PlanStep(
+                        id="implement",
+                        goal=f"Реализовать решение: {clean_goal[:120]}",
+                        tools=tools,
+                        done_when="Изменения внесены в исходный код проекта",
+                    ),
+                    PlanStep(
+                        id="verify",
+                        goal="Запустить проверки и тесты для валидации решения",
+                        tools=tools,
+                        done_when="Тесты и проверки выполнены успешно",
+                    ),
+                ],
+                definition_of_done=["Код реализован согласно поставленной цели", "Проверки завершены без ошибок"],
+            )
 
-    async def task_resume(self, task_id: str, *, acknowledge: bool = False) -> Task:
+    def task_create(self, goal: str, *, plan: dict | object | None = None) -> Task:
+        from axiom.core.planner import TaskPlan
+        plan_obj: TaskPlan | None = None
+        if isinstance(plan, dict):
+            plan_obj = TaskPlan.model_validate(plan)
+        elif isinstance(plan, TaskPlan):
+            plan_obj = plan
+        task = Task(
+            goal=goal.strip(),
+            scope=str(self.workspace_root) if self.workspace_root else None,
+            plan=plan_obj,
+            state=TaskState.PENDING,
+            detail="План действий сформирован. Готов к выполнению.",
+        )
+        if plan_obj is not None:
+            task.plan_history.append(plan_obj.model_copy(deep=True))
+        self.task_store.save(task)
+        return task
+
+    def task_save(
+        self,
+        task_id: str,
+        *,
+        goal: str | None = None,
+        plan: dict | object | None = None,
+        state: str | None = None,
+    ) -> Task | None:
+        import time
+
+        from axiom.core.planner import TaskPlan
+        task = self.task_store.load(task_id)
+        if task is None:
+            return None
+        if goal is not None and goal.strip():
+            task.goal = goal.strip()
+        if plan is not None:
+            if isinstance(plan, dict):
+                task.plan = TaskPlan.model_validate(plan)
+            elif isinstance(plan, TaskPlan):
+                task.plan = plan
+        if state is not None:
+            task.state = TaskState(state)
+        task.updated_at = time.time()
+        task.revision += 1
+        self.task_store.save(task)
+        return task
+
+    def task_delete(self, task_id: str) -> bool:
+        if self.active_task is not None and self.active_task.id == task_id:
+            self.task_cancel(task_id)
+        return self.task_store.delete(task_id)
+
+    async def task_start(self, goal: str, *, planning: bool | None = None, plan: dict | object | None = None,
+                         detached: bool = False) -> Task:
+        if self.busy:
+            raise ValueError("A generation is already running")
+        from axiom.core.planner import TaskPlan
+        plan_obj: TaskPlan | None = None
+        if isinstance(plan, dict):
+            plan_obj = TaskPlan.model_validate(plan)
+        elif isinstance(plan, TaskPlan):
+            plan_obj = plan
+        task = Task(
+            goal=goal.strip(),
+            scope=str(self.workspace_root) if self.workspace_root else None,
+            plan=plan_obj,
+            planning=planning,
+        )
+        if plan_obj is not None:
+            task.plan_history.append(plan_obj.model_copy(deep=True))
+        self.task_store.save(task)
+        return await self._run_task(task, detached=detached)
+
+    async def task_resume(self, task_id: str, *, acknowledge: bool = False, detached: bool = False) -> Task:
         if self.busy:
             raise ValueError("A generation is already running")
         task = self.task_store.load(task_id)
@@ -834,28 +1097,86 @@ class ChatSession:
             raise ValueError("Open the task's original workspace before resuming")
         if task.state == TaskState.COMPLETED:
             return task
-        return await self._run_task(task, resume=True, acknowledge=acknowledge)
+        return await self._run_task(task, resume=True, acknowledge=acknowledge, detached=detached)
 
     def task_state(self, task_id: str) -> Task | None:
         return self.task_store.load(task_id)
+
+    def task_review(self, task_id: str, decision: str) -> Task:
+        """Accept a task result or restore its captured text-file baseline."""
+        import time
+        task = self.task_store.load(task_id)
+        if task is None:
+            raise ValueError("Task not found")
+        if decision not in {"accept", "reject"}:
+            raise ValueError("Review decision must be accept or reject")
+        if task.state != TaskState.COMPLETED:
+            raise ValueError("Only a completed task can be reviewed")
+        if decision == "reject":
+            if self.workspace_root is None or task.scope != str(self.workspace_root):
+                raise ValueError("Open the task's original workspace before rejecting it")
+            if task.unknown_baselines:
+                raise ValueError("Cannot safely reject: original binary/unreadable files were changed")
+            for relative, original in task.file_baselines.items():
+                path = (self.workspace_root / relative).resolve()
+                try:
+                    path.relative_to(self.workspace_root.resolve())
+                except ValueError as exc:
+                    raise ValueError("Task contains a path outside its workspace") from exc
+                if original is None:
+                    if path.is_file():
+                        path.unlink()
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    temp = path.with_name(path.name + ".axiom-review-tmp")
+                    temp.write_text(original, encoding="utf-8")
+                    temp.replace(path)
+            task.review_status = "rejected"
+        else:
+            task.review_status = "accepted"
+        task.updated_at = time.time()
+        task.revision += 1
+        self.task_store.save(task)
+        payload = {"type": "task", "kind": "task.review", "task_id": task.id,
+                   "timestamp": task.updated_at, "task": task.model_dump(mode="json")}
+        self.bus.emit("task.event", payload)
+        return task
 
     def task_cancel(self, task_id: str) -> bool:
         if self.active_task is None or self.active_task.id != task_id:
             return False
         return self.cancel()
 
-    async def _run_task(self, task: Task, *, resume: bool = False, acknowledge: bool = False) -> Task:
+    async def _run_task(self, task: Task, *, resume: bool = False, acknowledge: bool = False,
+                        detached: bool = False) -> Task:
         from axiom.core.planner import Planner
 
         runner = TaskRunner(
             store=self.task_store, planner=Planner(self._plan_task), execute=self._execute_task_step,
             verify=lambda: self._verify_task(task), tools=[d.name for d in self.tools.definitions()],
             bus=self.bus, trajectory=self.trajectory,
+            workspace_root=self.workspace_root,
         )
         self.active_task = task
+        self.active_task_runner = runner
+        for tool in (self.terminal, self.verify_tools):
+            if tool is not None:
+                tool.on_process = lambda event, _runner=runner, _task=task: _runner.process_event(_task, event)
         caller = asyncio.current_task()
         worker = asyncio.create_task(runner.run(task, resume=resume, acknowledge=acknowledge))
         self._task = worker
+        if detached:
+            def clear(done: asyncio.Task) -> None:
+                if self._task is done:
+                    self._task = None
+                if self.active_task is task:
+                    self.active_task = None
+                    self.active_task_runner = None
+                # Consume errors if the worker itself escaped its guard.
+                if not done.cancelled():
+                    done.exception()
+            worker.add_done_callback(clear)
+            return task
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
@@ -873,6 +1194,7 @@ class ChatSession:
             if self._task is worker:
                 self._task = None
             self.active_task = None
+            self.active_task_runner = None
 
     async def run_orchestrated(self, text: str, *, limit: int = 4,
                                max_iterations: int = 3) -> dict:
@@ -921,6 +1243,26 @@ class ChatSession:
             if self._task is orchestration:
                 self._task = None
             self._verifying = False
+            try:
+                self.trajectory_store.save(self.trajectory)
+            except Exception:
+                pass
+
+    async def resume_orchestrated(self, run_id: str, *, limit: int = 4,
+                                  max_iterations: int = 3) -> dict:
+        """Resume a persisted orchestration without rerunning completed agents."""
+        loaded = self.trajectory_store.resume(run_id)
+        if loaded is None:
+            return {"ok": False, "error": f"Unknown trajectory: {run_id}"}
+        command = next((e.summary for e in loaded.events if e.kind == "orchestration.command"), "")
+        text = command.removeprefix("/orchestrate ").strip()
+        previous = self.trajectory
+        self.trajectory = loaded
+        try:
+            return await self.run_orchestrated(text, limit=limit, max_iterations=max_iterations)
+        finally:
+            if self.trajectory is loaded:
+                self.trajectory = previous
 
     async def _run_orchestrated_inner(self, text: str, *, limit: int, max_iterations: int) -> dict:
         try:
@@ -1339,6 +1681,14 @@ class ChatSession:
                                        actor="architect", data=index_obj.to_json())
         except Exception:
             pass
+        # W2.1: project-scoped memory follows the workspace switch.
+        try:
+            from axiom.core.memory import MemoryStore as _MemStore
+
+            self.memory_project_store = _MemStore(scope="project", project_root=target)
+            self.memory_tools.project_store = self.memory_project_store
+        except Exception:
+            pass
         self.workspaces.remember(target)
         return detect_project(target)
 
@@ -1361,6 +1711,10 @@ class ChatSession:
         self.config.save()
         for name in WORKSPACE_TOOL_NAMES:
             self.tools.unregister(name)
+        # W2.1: memory tools stay (they are not workspace-scoped), but the
+        # project store must not leak into Global Chat.
+        self.memory_project_store = None
+        self.memory_tools.project_store = None
         if self.terminal is not None:
             self.terminal.enabled = False
         if self.verify_tools is not None:

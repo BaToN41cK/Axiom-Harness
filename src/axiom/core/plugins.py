@@ -36,9 +36,137 @@ PLUGIN_API_VERSION = 1
 #: Default entry-module filename inside a plugin folder.
 DEFAULT_ENTRY = "plugin.py"
 
+#: The UI extension contract version (W1.5).  A plugin whose ``ui.api_version``
+#: differs from this value is rejected at load/install time — never silently
+#: executed.  The runtime host (iframe/Worker) that implements the declared
+#: points arrives in W3.1; this constant is the version it must honor.
+UI_EXTENSION_API_VERSION = 1
+
+#: Extension-point kinds a UI extension may declare (W1.5): ``panel``,
+#: ``command``, ``setting``, ``renderer`` or ``theme``.
+UI_EXTENSION_POINTS = frozenset({"panel", "command", "setting", "renderer", "theme"})
+
+#: Capability scopes a UI extension may request.  W1.5 validates and documents
+#: them; W3.1 enforces them at runtime (least privilege, shown at install).
+UI_EXTENSION_SCOPES = frozenset({"fs", "net", "ui", "clipboard"})
+
 
 class PluginLoadError(Exception):
     """A plugin could not be validated, imported or loaded."""
+
+
+@dataclass(frozen=True)
+class UIExtension:
+    """One declared UI extension point inside a plugin's ``ui`` block (W1.5).
+
+    Attributes
+    ----------
+    type:
+        One of :data:`UI_EXTENSION_POINTS` — ``panel``, ``command``,
+        ``setting``, ``renderer`` or ``theme``.
+    id:
+        Stable, host-scoped identifier using the same safe charset as the
+        plugin name.
+    scopes:
+        Capability scopes this extension needs; a subset of
+        :data:`UI_EXTENSION_SCOPES` (``fs``, ``net``, ``ui``, ``clipboard``).
+    meta:
+        Type-specific payload (title, mime type, defaults, colors, ...).  The
+        core treats it as opaque and passes it to the host unchanged.
+    """
+
+    type: str
+    id: str
+    scopes: tuple[str, ...] = ()
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    def validate(self, plugin_name: str) -> None:
+        if self.type not in UI_EXTENSION_POINTS:
+            raise PluginLoadError(
+                f"Plugin '{plugin_name}' declares unknown UI extension point '{self.type}'"
+            )
+        if not self.id or not str(self.id).strip():
+            raise PluginLoadError(
+                f"Plugin '{plugin_name}' UI extension of type '{self.type}' is missing an id"
+            )
+        if fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", self.id) is None:
+            raise PluginLoadError(
+                f"Plugin '{plugin_name}' UI extension id '{self.id}' must contain "
+                "only letters, numbers, '.', '_' or '-'"
+            )
+        unknown = set(self.scopes) - UI_EXTENSION_SCOPES
+        if unknown:
+            raise PluginLoadError(
+                f"Plugin '{plugin_name}' UI extension '{self.id}' declares unknown "
+                f"scopes: {sorted(unknown)}"
+            )
+
+
+@dataclass
+class UIExtensionBlock:
+    """The versioned ``ui`` block of a plugin manifest (W1.5).
+
+    Documents what the plugin asks of the future UI host — panels, commands,
+    settings, renderers and themes — and is validated before any code is
+    imported, so an incompatible or malformed declaration can never reach the
+    host.
+    """
+
+    api_version: int = UI_EXTENSION_API_VERSION
+    scopes: tuple[str, ...] = ()
+    extensions: tuple[UIExtension, ...] = ()
+
+    def validate(self, plugin_name: str) -> None:
+        if self.api_version != UI_EXTENSION_API_VERSION:
+            raise PluginLoadError(
+                f"Plugin '{plugin_name}' UI block targets API v{self.api_version}, "
+                f"but AXIOM supports UI extension v{UI_EXTENSION_API_VERSION}"
+            )
+        unknown_scopes = set(self.scopes) - UI_EXTENSION_SCOPES
+        if unknown_scopes:
+            raise PluginLoadError(
+                f"Plugin '{plugin_name}' declares unknown UI scopes: {sorted(unknown_scopes)}"
+            )
+        for extension in self.extensions:
+            extension.validate(plugin_name)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "api_version": self.api_version,
+            "scopes": list(self.scopes),
+            "extensions": [
+                {
+                    "type": extension.type,
+                    "id": extension.id,
+                    "scopes": list(extension.scopes),
+                    "meta": dict(extension.meta),
+                }
+                for extension in self.extensions
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> UIExtensionBlock:
+        extensions: list[UIExtension] = []
+        for item in data.get("extensions") or []:
+            if not isinstance(item, dict):
+                continue
+            meta = item.get("meta") or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            extensions.append(
+                UIExtension(
+                    type=str(item.get("type") or ""),
+                    id=str(item.get("id") or ""),
+                    scopes=tuple(str(s) for s in item.get("scopes") or ()),
+                    meta=dict(meta),
+                )
+            )
+        return cls(
+            api_version=int(data.get("api_version") or UI_EXTENSION_API_VERSION),
+            scopes=tuple(str(s) for s in data.get("scopes") or ()),
+            extensions=tuple(extensions),
+        )
 
 
 @dataclass
@@ -57,6 +185,9 @@ class PluginManifest:
     skills: tuple[str, ...] = ()
     events: tuple[str, ...] = ()
     ui: tuple[str, ...] = ()
+    #: Versioned UI extension block (W1.5); ``None`` for tool-only plugins or
+    #: legacy flat ``ui`` string lists.
+    ui_block: UIExtensionBlock | None = None
     #: Entry module filename inside the plugin folder.
     entry: str = DEFAULT_ENTRY
     #: Persisted enable state — a disabled plugin is kept but not loaded.
@@ -83,6 +214,12 @@ class PluginManifest:
                 f"Plugin '{self.name}' targets API v{self.api_version}, "
                 f"but AXIOM supports v{PLUGIN_API_VERSION}"
             )
+        if self.ui_block is not None:
+            if "ui" not in self.capabilities:
+                raise PluginLoadError(
+                    f"Plugin '{self.name}' declares a UI block but no 'ui' capability"
+                )
+            self.ui_block.validate(self.name)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,7 +233,7 @@ class PluginManifest:
             "providers": list(self.providers),
             "skills": list(self.skills),
             "events": list(self.events),
-            "ui": list(self.ui),
+            "ui": self.ui_block.to_dict() if self.ui_block is not None else list(self.ui),
             "entry": self.entry,
             "enabled": self.enabled,
             "source_dir": self.source_dir,
@@ -110,6 +247,16 @@ class PluginManifest:
             value = data.get(key) or ()
             return tuple(str(item) for item in value) if isinstance(value, (list, tuple)) else ()
 
+        ui_raw = data.get("ui")
+        ui_block = None
+        if isinstance(ui_raw, dict):
+            ui_block = UIExtensionBlock.from_dict(ui_raw)
+            ui = tuple(extension.type for extension in ui_block.extensions)
+        elif isinstance(ui_raw, (list, tuple)):
+            ui = tuple(str(item) for item in ui_raw)
+        else:
+            ui = ()
+
         return cls(
             name=str(data.get("name") or ""),
             version=str(data.get("version") or "0.1.0"),
@@ -121,7 +268,8 @@ class PluginManifest:
             providers=_tuple("providers"),
             skills=_tuple("skills"),
             events=_tuple("events"),
-            ui=_tuple("ui"),
+            ui=ui,
+            ui_block=ui_block,
             entry=str(data.get("entry") or DEFAULT_ENTRY),
             enabled=bool(data.get("enabled", True)),
             source_dir=str(data["source_dir"]) if data.get("source_dir") else None,
@@ -142,6 +290,7 @@ class PluginManifest:
             "tools": list(self.tools),
             "providers": list(self.providers),
             "skills": list(self.skills),
+            "ui_block": self.ui_block.to_dict() if self.ui_block is not None else None,
             "source_dir": self.source_dir,
             "bundled": self.bundled,
             "readme": self.readme,
@@ -265,6 +414,12 @@ class PluginManager:
             except PluginLoadError:
                 continue
             manifest.source_dir = str(folder)
+            # A directory copied into the plugins folder has not gone through
+            # the install/enable consent UI. Never auto-import executable code
+            # merely because its manifest says ``enabled: true``.
+            entry_path = folder / (manifest.entry or DEFAULT_ENTRY)
+            if entry_path.is_file():
+                manifest.enabled = False
             if manifest.name in self.registry:
                 existing = self.registry.get(manifest.name)
                 if existing is not None and existing.source_dir is None:
@@ -294,8 +449,9 @@ class PluginManager:
         destination = self.root / manifest.name
         previous = self.registry.get(manifest.name)
         status = "updated" if previous is not None else "installed"
-        if previous is not None:
-            manifest.enabled = previous.enabled
+        # Installation or replacement is not consent to execute Python code.
+        # Updates also require a fresh, explicit enable action.
+        manifest.enabled = False
         if session is not None:
             self.unload(manifest.name, session)
 
@@ -408,8 +564,7 @@ class PluginManager:
         destination = self.root / name
         previous = self.registry.get(name)
         status = "updated" if previous is not None else "installed"
-        if previous is not None:
-            target.enabled = previous.enabled
+        target.enabled = False
         if session is not None:
             self.unload(name, session)
         self._copy_folder(source, destination)

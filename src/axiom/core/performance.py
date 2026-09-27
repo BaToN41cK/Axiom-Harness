@@ -271,6 +271,16 @@ _GIT_MARKERS = (
     "git", "коммит", "commit", "ветк", "branch", "diff", "дифф", "лог", "log",
     "merge", "rebase", "pull", "push", "статус репозитор",
 )
+_MEMORY_MARKERS = (
+    "запомни", "запомнить", "напомни", "запиши в памят", "мои предпочтени",
+    "что ты помниш", "что я говорил", "remember", "my preference",
+    "what do you know about me", "don't forget", "memory",
+)
+_KNOWLEDGE_MARKERS = (
+    "база знаний", "знания", "мои документы", "мои заметки", "в документах",
+    "в заметках", "проиндексируй", "knowledge", "my documents", "my notes",
+    "my docs", "index this folder", "knowledge base",
+)
 _HARD_MARKERS = (
     "почему", "придумай", "реши", "напиши", "рефактор", "отлад",
     "debug", "why ", "explain", "design", "optimi", "architect",
@@ -285,6 +295,10 @@ _SCOPE_TERMINAL = ("run_command", "run_tests", "run_linter", "build_project", "v
 _SCOPE_GIT = ("git_status", "git_diff", "git_log", "git_branch")
 _SCOPE_PROJECT = ("inspect_project",)
 _SCOPE_WEB = ("web_search", "fetch_url")
+#: W2.1 Curated Memory — read is cheap/always safe, write/forget need approval.
+_SCOPE_MEMORY = ("memory_read", "memory_write", "memory_forget")
+#: W2.2 Knowledge Base — search/status are read-only; index is idempotent.
+_SCOPE_KNOWLEDGE = ("knowledge_search", "knowledge_index", "knowledge_status")
 
 
 def complexity_of(text: str, *, context_messages: int = 0) -> str:
@@ -349,6 +363,7 @@ def tool_scope(
     has_edit = any(m in lowered for m in _EDIT_MARKERS)
     has_read = any(m in lowered for m in _READ_MARKERS)
     has_project = any(m in lowered for m in ("проект", "структур", "что делает", "project"))
+    has_memory = any(m in lowered for m in _MEMORY_MARKERS)
 
     if has_git:
         _add(_SCOPE_GIT, workspace)
@@ -361,6 +376,13 @@ def tool_scope(
         _add(_SCOPE_PROJECT, workspace)
     if (has_terminal or has_edit) and terminal:
         _add(_SCOPE_TERMINAL, True)
+    # Memory tools are not workspace-scoped: they are registered unconditionally.
+    if has_memory:
+        _add(_SCOPE_MEMORY, True)
+    # W2.2: knowledge tools are not workspace-scoped either; they appear when
+    # the request mentions documents/notes/knowledge explicitly.
+    if any(m in lowered for m in _KNOWLEDGE_MARKERS):
+        _add(_SCOPE_KNOWLEDGE, True)
     _add(_SCOPE_WEB, web)
     return out or None
 

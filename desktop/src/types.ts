@@ -117,6 +117,7 @@ export interface StoredMessage {
 
 export type Density = "compact" | "comfortable" | "spacious";
 export type AccentPreset = "garnet" | "blue" | "teal" | "violet";
+export type ThemePreset = "obsidian" | "light" | "midnight" | "terminal" | "solarized";
 
 export interface AxiomConfig {
   ollama_url: string;
@@ -140,7 +141,7 @@ export interface AxiomConfig {
   history_limit: number;
   show_reasoning: boolean;
   reasoning_expanded: boolean;
-  theme: "obsidian" | "light";
+  theme: ThemePreset;
   accent: AccentPreset;
   panel_hover: boolean;
   animations: boolean;
@@ -182,6 +183,54 @@ export interface DoneMetrics {
   stopReason?: string | null;
 }
 
+/** W2.2: one knowledge collection status row from the bridge. */
+export interface KnowledgeRow {
+  name: string;
+  path: string;
+  files: number;
+  chunks: number;
+  embedded: number;
+  embeddings: string;
+  updated_at: number;
+}
+
+/** W2.2: one cited search fragment. */
+export interface KnowledgeHit {
+  collection: string;
+  source: string;
+  start_line: number;
+  end_line: number;
+  score: number;
+  text: string;
+}
+
+/** W2.2: result of an index/reindex run. */
+export interface KnowledgeIndexResult {
+  ok: boolean;
+  stats?: {
+    files_seen: number;
+    indexed: number;
+    unchanged: number;
+    removed: number;
+    skipped: number;
+    errors: string[];
+  };
+  collection?: KnowledgeRow;
+  error?: string;
+}
+
+/** W2.4: an ASK tool call waiting for the user's decision in the shell. */
+export type PermissionDecision = "allow_once" | "allow_always" | "deny";
+
+export interface PermissionRequest {
+  id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  cwd: string;
+  risk: string;
+  task_id?: string;
+}
+
 export type CoreEvent =
   | { type: "reasoning"; text: string }
   | { type: "content"; text: string }
@@ -191,12 +240,13 @@ export type CoreEvent =
   | { type: "status"; state: string; detail: string | null }
   | { type: "orchestration"; kind: string; actor: string; summary: string; seq: number }
   | { type: "task"; kind: string; task_id: string; timestamp: number; task: Task }
+  | ({ type: "permission_request" } & PermissionRequest)
   | { type: "error"; message: string; kind: string; hint: string | null }
   | ({ type: "done" } & DoneMetrics);
 
 export type TaskState =
   | "pending" | "analyzing" | "planning" | "executing" | "verifying"
-  | "waiting_for_user" | "completed" | "failed" | "cancelled";
+  | "waiting_for_permission" | "waiting_for_user" | "completed" | "failed" | "cancelled";
 
 export interface TaskPlanStep {
   id: string;
@@ -232,6 +282,12 @@ export interface Task {
   }[];
   tests: Record<string, unknown>[];
   pending_tool: Record<string, unknown> | null;
+  active_processes: Record<string, unknown>[];
+  commands: Record<string, unknown>[];
+  file_baselines: Record<string, string | null>;
+  unknown_baselines: string[];
+  diffs: Record<string, string>;
+  review_status: "pending" | "accepted" | "rejected";
   detail: string;
   created_at: number;
   updated_at: number;
@@ -437,6 +493,7 @@ export interface PluginRow {
   api_version: number;
   enabled: boolean;
   capabilities: string[];
+  ui_block: { scopes: string[]; extensions: { type: string; id: string; scopes: string[] }[] } | null;
   tools: string[];
   providers: string[];
   skills: string[];
@@ -449,6 +506,16 @@ export interface PluginInstallResult {
   name: string;
   status: "installed" | "updated";
   manifest: PluginRow;
+}
+
+/** W2.1 Curated Memory — one persisted memory item (projection of MemoryItem). */
+export interface MemoryRow {
+  id: string;
+  scope: "global" | "project" | "conversation";
+  category: "normal" | "sensitive" | "banned";
+  content: string;
+  tags: string[];
+  updated_at: number;
 }
 
 export interface ProviderModelRow {

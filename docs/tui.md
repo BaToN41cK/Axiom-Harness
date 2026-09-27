@@ -73,6 +73,7 @@ Starting AXIOM …
 | Выйти | `Ctrl+Q` |
 | Прокрутка чата/источников | колесо мыши, `PgUp`/`PgDn` |
 | Следовать за новым выводом | `End` (когда отоскроллились вверх) |
+| Поиск по текущему транскрипту | `Ctrl+F`, затем `Enter` / `Shift+Enter` для перехода |
 
 ## Slash-команды
 
@@ -95,6 +96,10 @@ Starting AXIOM …
 | `/providers` | Provider Manager: статусы, Enter — Test, ввод API-ключа (скрытый) → Save key & test, Discover models → выбор модели |
 | `/agents` | Agent Registry: роли, провайдер/модель, набор инструментов |
 | `/plugins` | Plugin Manager: установка из папки, включение/выключение, удаление; `?` — документация плагина |
+| `/memory` | Curated Memory: список, `a` добавить, `e` изменить, `d` удалить |
+| `/knowledge` | Knowledge Base: коллекции, индексирование и поиск цитат |
+| `/orchestrate <task>` | Live-панель trajectory: реальные события analyst/coder/debugger/tester/reviewer; `s` — остановить |
+| `/benchmark [repetitions]` | Реальный cold/warm benchmark через отдельные `ChatSession`; показывает только измеренные runs и ошибки |
 | `/exit` | выход |
 
 В панелях работает навигация стрелками, выбор — `Enter`, закрытие — `Esc`.

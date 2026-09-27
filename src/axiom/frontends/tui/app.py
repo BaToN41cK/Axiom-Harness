@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import webbrowser
+from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -17,6 +18,7 @@ from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.theme import Theme as TextualTheme
 
+from axiom.core.benchmark import BenchmarkRunner, BenchmarkScenario
 from axiom.core.chat import ChatSession, StartupReport
 from axiom.core.events import (
     ChatEvent,
@@ -31,17 +33,22 @@ from axiom.core.events import (
     ToolResultEvent,
 )
 from axiom.core.models import ModelRegistry
-from axiom.core.permissions import PermissionMode
+from axiom.core.permissions import PermissionMode, PermissionOutcome
 from axiom.core.state import GenerationState
 from axiom.core.tools.web_search import FETCH_URL_TOOL, WEB_SEARCH_TOOL
 from axiom.frontends.tui.widgets.commands import COMMANDS, find_command
+from axiom.frontends.tui.widgets.find import ChatFindBar
 from axiom.frontends.tui.widgets.header import HeaderBar, StatusBar
 from axiom.frontends.tui.widgets.messages import AssistantMessage, ChatView, UserMessage
 from axiom.frontends.tui.widgets.panels import (
     AgentsPanel,
+    BenchmarkPanel,
     HelpPanel,
     HistoryPanel,
+    KnowledgePanel,
+    MemoryPanel,
     ModelPanel,
+    OrchestrationPanel,
     PermissionsPanel,
     PluginsPanel,
     ProfilePanel,
@@ -53,6 +60,7 @@ from axiom.frontends.tui.widgets.panels import (
     TrajectoryPanel,
     agent_rows,
 )
+from axiom.frontends.tui.widgets.permissions import PermissionDialog
 from axiom.frontends.tui.widgets.prompt import InputBar
 from axiom.frontends.tui.widgets.splash import SplashScreen, StartupStep
 from axiom.shared import theme as palette
@@ -64,6 +72,7 @@ class WorkspaceScreen(Screen):
     BINDINGS = [
         Binding("ctrl+c", "stop_generation", "Stop", priority=True),
         Binding("escape", "stop_generation", "Stop", show=False),
+        Binding("ctrl+f", "find_chat", "Find chat", priority=True),
     ]
 
     #: Auto-focus is disabled on this screen so the hidden slash-menu list
@@ -91,11 +100,16 @@ class WorkspaceScreen(Screen):
     def compose(self) -> ComposeResult:
         yield HeaderBar()
         yield ChatView()
+        yield ChatFindBar()
         yield InputBar()
         yield StatusBar()
 
     def on_mount(self) -> None:
+        self.query_one(ChatFindBar).display = False
         self._refresh_model_display()
+        # W2.4: ASK tools (incl. model-initiated memory writes) open the real
+        # permission dialog; without this callback they are denied silently.
+        self.session.permissions.request_callback(self._ask_permission)
         # The splash probe already established reachability; reflect its real
         # result here — the status bar keeps updating from live events only.
         connected = self._version is not None
@@ -323,6 +337,42 @@ class WorkspaceScreen(Screen):
         if event.key == "end" and not self.input_bar.input.has_focus:
             self.chat_view.jump_to_end()
 
+    # --------------------------------------------------------------- chat find
+
+    def action_find_chat(self) -> None:
+        bar = self.query_one(ChatFindBar)
+        input_widget = bar.query_one("#find-input")
+        input_widget.can_focus = True
+        bar.display = True
+        self.app.set_focus(input_widget)
+        self.call_after_refresh(input_widget.focus)
+
+    def on_chat_find_bar_closed(self, event: ChatFindBar.Closed) -> None:
+        event.stop()
+        bar = self.query_one(ChatFindBar)
+        bar.display = False
+        bar.query_one("#find-input").can_focus = False
+        self.input_bar.input.focus()
+
+    def on_chat_find_bar_changed(self, event: ChatFindBar.Changed) -> None:
+        event.stop()
+        matches = self.chat_view.find_matches(event.query)
+        self.query_one(ChatFindBar).set_matches(len(matches), 0 if matches else -1)
+        if matches:
+            self.chat_view.focus_match(matches[0])
+
+    def on_chat_find_bar_navigate(self, event: ChatFindBar.Navigate) -> None:
+        event.stop()
+        bar = self.query_one(ChatFindBar)
+        query = bar._query
+        matches = self.chat_view.find_matches(query)
+        if not matches:
+            bar.set_matches(0, -1)
+            return
+        index = (bar._index + event.direction) % len(matches)
+        bar.set_matches(len(matches), index)
+        self.chat_view.focus_match(matches[index])
+
     # ---------------------------------------------------------------- commands
 
     def _execute_command(self, raw: str) -> None:
@@ -438,13 +488,95 @@ class WorkspaceScreen(Screen):
                     on_install_bundled=self._plugin_install_bundled,
                 )
             )
+        elif name == "/memory":
+            # W2.1 Curated Memory: real persisted items, user-managed.
+            self.app.push_screen(
+                MemoryPanel(
+                    self.session.memory_rows(),
+                    on_add=lambda content: self.session.memory_write_for_user(content),
+                    on_edit=self.session.memory_edit,
+                    on_delete=self.session.memory_forget,
+                    refresh=self.session.memory_rows,
+                )
+            )
+        elif name == "/knowledge":
+            # W2.2 Knowledge Base: real SQLite/FTS5 collections + cited search.
+            self.app.push_screen(
+                KnowledgePanel(
+                    self.session.knowledge_rows(),
+                    on_add=self.session.knowledge_add_collection,
+                    on_reindex=self.session.knowledge_reindex,
+                    on_delete=self.session.knowledge_remove_collection,
+                    on_search=self.session.knowledge_search_rows,
+                    refresh=self.session.knowledge_rows,
+                )
+            )
+        elif name == "/benchmark":
+            try:
+                repetitions = int(argument) if argument else 2
+            except ValueError:
+                repetitions = 0
+            if not 1 <= repetitions <= 5:
+                self.notify("Usage: /benchmark [repetitions: 1–5]", severity="warning", timeout=4)
+                return
+            if self._generating or self.session.busy:
+                self.notify("A generation is already running.", severity="warning", timeout=4)
+                return
+            self.app.run_worker(self._run_benchmark(repetitions), exclusive=True, group="benchmark")
         elif name == "/orchestrate":
             if not argument:
                 self.notify("Usage: /orchestrate <task>", severity="warning", timeout=4)
                 return
-            self.run_worker(self._run_orchestrated(argument), exclusive=True, group="generation")
+            if self._generating or self.session.busy:
+                self.notify("A generation is already running.", severity="warning", timeout=4)
+                return
+            input_bar = self.input_bar
+            baseline = len(self.session.trajectory.timeline())
+            panel = OrchestrationPanel(
+                self.session.trajectory, baseline=baseline, on_stop=self.session.cancel
+            )
+            self.app.push_screen(panel)
+            self.app.run_worker(
+                self._run_orchestrated(argument, panel, input_bar),
+                exclusive=True,
+                group="generation",
+            )
 
     # ------------------------------------------------------------------ panels
+
+    async def _run_benchmark(self, repetitions: int) -> None:
+        """Run measured cold/warm scenarios through isolated real sessions."""
+        input_bar = self.input_bar
+        self._generating = True
+        input_bar.set_busy(True)
+        try:
+            config = self.session.config.model_copy(deep=True)
+            config.save_history = False
+            config.warmup_model = False
+            scenario = BenchmarkScenario(
+                "tui-smoke",
+                "Respond with one short sentence: benchmark ready.",
+                cold=True,
+            )
+
+            async def session_factory() -> ChatSession:
+                return ChatSession(config=config.model_copy(deep=True))
+
+            report = await BenchmarkRunner(
+                session_factory,
+                [scenario],
+                repetitions=repetitions,
+            ).run()
+            self.app.push_screen(BenchmarkPanel(report), callback=self._benchmark_chosen)
+        except Exception as exc:
+            self.notify(f"Benchmark failed: {exc}", severity="error", timeout=8)
+        finally:
+            self._generating = False
+            input_bar.set_busy(False)
+
+    def _benchmark_chosen(self, result: str | None) -> None:
+        if result == "rerun":
+            self._execute_command("/benchmark")
 
     async def _run_search_test(self, query: str) -> None:
         """Run a real search probe and show the honest result (W1.2)."""
@@ -458,9 +590,15 @@ class WorkspaceScreen(Screen):
         finally:
             self.status_bar.set_web(False)
 
-    async def _run_orchestrated(self, task: str) -> None:
+    async def _run_orchestrated(
+        self,
+        task: str,
+        panel: OrchestrationPanel | None = None,
+        input_bar: InputBar | None = None,
+    ) -> None:
+        input_bar = input_bar or self.input_bar
         self._generating = True
-        self.input_bar.set_busy(True)
+        input_bar.set_busy(True)
         try:
             self.chat_view.add(UserMessage(f"/orchestrate {task}", time.time()))
             assistant = AssistantMessage(animations=self._animations)
@@ -505,7 +643,9 @@ class WorkspaceScreen(Screen):
             self.notify(str(exc), severity="error", timeout=8)
         finally:
             self._generating = False
-            self.input_bar.set_busy(False)
+            input_bar.set_busy(False)
+            if panel is not None:
+                panel.finish()
 
     def _model_chosen(self, name: str | None) -> None:
         if name:
@@ -554,6 +694,12 @@ class WorkspaceScreen(Screen):
             self.notify(f"Unknown permission mode: {mode}", severity="warning", timeout=4)
             return
         self.notify(f"Permission mode: {mode}", title="Permissions", timeout=4)
+
+    async def _ask_permission(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> PermissionOutcome:
+        """W2.4: show the real modal; the tool call waits for the user answer."""
+        return await self.app.push_screen_wait(PermissionDialog(tool_name, arguments))
 
     async def _plugin_toggle(self, name: str, enabled: bool) -> dict:
         """Toggle a plugin's enable state (``/plugins``)."""

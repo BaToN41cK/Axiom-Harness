@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterable
 from copy import copy, deepcopy
 
 from axiom.core.errors import AxiomError
+from axiom.core.security import ToolAudit
 from axiom.core.tools.base import (
     ToolDefinition,
     ToolHandler,
@@ -24,8 +25,9 @@ from axiom.core.tools.base import (
 class ToolRegistry:
     """Holds tool definitions together with their real handlers."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, audit: ToolAudit | None = None) -> None:
         self._tools: dict[str, tuple[ToolDefinition, ToolHandler]] = {}
+        self.audit = audit or ToolAudit()
         #: Per-tool classifiers: (tool name, args) -> permission. Used for
         #: tools whose danger depends on the arguments (e.g. shell commands).
         #: A classifier registered for one tool never affects other tools.
@@ -51,7 +53,7 @@ class ToolRegistry:
 
     def subset(self, names: Iterable[str]) -> ToolRegistry:
         """Return an independent registry containing only the requested tools."""
-        selected = ToolRegistry()
+        selected = ToolRegistry(audit=self.audit)
         cloned_owners: dict[int, object] = {}
 
         def _clone_bound_callable(callback):
@@ -126,10 +128,14 @@ class ToolRegistry:
         started = time.perf_counter()
         entry = self._tools.get(name)
         if entry is None:
-            return ToolResult(name=name, ok=False, error=f"Unknown tool: {name}")
+            result = ToolResult(name=name, ok=False, error=f"Unknown tool: {name}")
+            self.audit.record(name, arguments or {}, False, 0)
+            return result
         definition, handler = entry
         if definition.permission is ToolPermission.NEVER:
-            return ToolResult(name=name, ok=False, error=f"Tool '{name}' is disabled")
+            result = ToolResult(name=name, ok=False, error=f"Tool '{name}' is disabled")
+            self.audit.record(name, arguments or {}, False, 0)
+            return result
         classifier = self.classifier.get(name)
         if (not approved and classifier is not None
                 and classifier(name, arguments or {}) is ToolPermission.ASK):
@@ -152,4 +158,5 @@ class ToolRegistry:
             result = ToolResult(name=name, ok=False, error=f"{type(exc).__name__}: {exc}")
         result.name = name
         result.duration_ms = int((time.perf_counter() - started) * 1000)
+        self.audit.record(name, arguments or {}, result.ok, result.duration_ms)
         return result

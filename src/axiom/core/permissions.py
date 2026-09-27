@@ -10,7 +10,6 @@ The setting persists between launches via the config file.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any
@@ -29,25 +28,65 @@ class PermissionMode(str, Enum):
     AUTO_APPROVE_ALL = "auto_approve_all"
 
 
+class PermissionOutcome(str, Enum):
+    """Answer of an interactive permission request (W2.4).
+
+    ``ALLOW_ONCE`` approves a single call, ``ALLOW_ALWAYS`` remembers the tool
+    for the rest of the session, ``DENY`` refuses the call.
+    """
+
+    ALLOW_ONCE = "allow_once"
+    ALLOW_ALWAYS = "allow_always"
+    DENY = "deny"
+
+
+_PERMISSION_ALIASES: dict[str, PermissionOutcome] = {
+    PermissionOutcome.ALLOW_ONCE.value: PermissionOutcome.ALLOW_ONCE,
+    "once": PermissionOutcome.ALLOW_ONCE,
+    "allow": PermissionOutcome.ALLOW_ONCE,
+    PermissionOutcome.ALLOW_ALWAYS.value: PermissionOutcome.ALLOW_ALWAYS,
+    "always": PermissionOutcome.ALLOW_ALWAYS,
+    PermissionOutcome.DENY.value: PermissionOutcome.DENY,
+    "no": PermissionOutcome.DENY,
+    "never": PermissionOutcome.DENY,
+}
+
+
+def normalize_permission_outcome(value: bool | str | PermissionOutcome) -> PermissionOutcome:
+    """Normalize an answer from any frontend; unknown values fail closed."""
+    if isinstance(value, PermissionOutcome):
+        return value
+    if isinstance(value, bool):
+        # Legacy callback contract: ``True`` meant "allow and remember".
+        return PermissionOutcome.ALLOW_ALWAYS if value else PermissionOutcome.DENY
+    return _PERMISSION_ALIASES.get(str(value).strip().lower(), PermissionOutcome.DENY)
+
+
 class PermissionManager:
     """Centralised permission decision engine.
 
-    The TUI connects a callback (``request_callback``) that shows the user a
+    A frontend connects a callback (``request_callback``) that shows the user a
     modal dialog when ``ASK`` tools need approval. The callback is an async
-    callable that receives ``(tool_name, tool_args)`` and returns ``True``
-    (approved) or ``False`` (denied).
+    callable that receives ``(tool_name, tool_args)`` and returns either a
+    :class:`PermissionOutcome` (or its string value) or a legacy boolean
+    (``True`` = allow and remember the tool, ``False`` = deny).
+
+    Decisions are honest: ``ALLOW_ALWAYS`` is cached per tool name for the rest
+    of the session, while ``ALLOW_ONCE`` and ``DENY`` are asked again next time.
     """
 
     def __init__(
         self,
         config: Config | None = None,
         *,
-        request_callback: Callable[[str, dict[str, Any]], bool | Awaitable[bool]] | None = None,
+        request_callback: Callable[
+            [str, dict[str, Any]], bool | str | PermissionOutcome | Awaitable[bool | str | PermissionOutcome]
+        ] | None = None,
     ) -> None:
         self._config = config or Config.load()
         self._request_callback = request_callback
-        #: Cache: tool name -> last user decision (for the current session).
-        self._session_cache: dict[str, bool] = {}
+        #: "Always for this tool" cache (W2.4) — never caches a single call.
+        self._always_allowed: set[str] = set()
 
     # ------------------------------------------------------------------ properties
 
@@ -75,7 +114,10 @@ class PermissionManager:
     # ------------------------------------------------------------------ decision
 
     def request_callback(
-        self, callback: Callable[[str, dict[str, Any]], bool | Awaitable[bool]]
+        self,
+        callback: Callable[
+            [str, dict[str, Any]], bool | str | PermissionOutcome | Awaitable[bool | str | PermissionOutcome]
+        ],
     ) -> None:
         """Connect a UI callback for user approval dialogs."""
         self._request_callback = callback
@@ -110,26 +152,30 @@ class PermissionManager:
         return await self._ask_user(tool_name, tool_args or {})
 
     async def _ask_user(self, tool_name: str, tool_args: dict[str, Any]) -> bool:
-        """Show a permission request to the user, or use cache."""
-        cache_key = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=repr)}"
-        if cache_key in self._session_cache:
-            return self._session_cache[cache_key]
+        """Show a permission request to the user, or reuse an "always" answer."""
+        if tool_name in self._always_allowed:
+            _LOG.debug("Permission reused ('always'): %s", tool_name)
+            return True
 
         if self._request_callback is not None:
-            approved = self._request_callback(tool_name, tool_args)
-            if hasattr(approved, "__await__"):
-                approved = await approved
-            if approved:
-                self._session_cache[cache_key] = True
-                _LOG.info("Permission granted: %s %s", tool_name, tool_args)
-            else:
-                _LOG.info("Permission denied: %s %s", tool_name, tool_args)
-            return approved
+            answer = self._request_callback(tool_name, tool_args)
+            if hasattr(answer, "__await__"):
+                answer = await answer
+            outcome = normalize_permission_outcome(answer)
+            if outcome == PermissionOutcome.ALLOW_ALWAYS:
+                self._always_allowed.add(tool_name)
+                _LOG.info("Permission granted (always): %s %s", tool_name, tool_args)
+                return True
+            if outcome == PermissionOutcome.ALLOW_ONCE:
+                _LOG.info("Permission granted (once): %s %s", tool_name, tool_args)
+                return True
+            _LOG.info("Permission denied: %s %s", tool_name, tool_args)
+            return False
 
         # No callback available — deny by default (safe fallback).
         _LOG.warning("No permission callback registered; denying tool: %s", tool_name)
         return False
 
     def clear_cache(self) -> None:
-        """Clear the session permission cache."""
-        self._session_cache.clear()
+        """Forget every "always" approval granted in this session."""
+        self._always_allowed.clear()

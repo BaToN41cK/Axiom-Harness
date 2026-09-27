@@ -151,6 +151,90 @@ def test_search_test_empty_query_is_offline(bridge: BridgeProcess) -> None:
     assert reply["data"]["error"] == "Empty query"
 
 
+def test_memory_add_list_edit_delete_round_trip(bridge: BridgeProcess) -> None:
+    """W2.1: memory CRUD round-trips through the bridge and hits real disk."""
+    reply = bridge.request(60, "memory_list")
+    assert reply["ok"] is True
+    assert reply["data"] == []
+
+    added = bridge.request(61, "memory_add", {"content": "User prefers dark theme"})
+    assert added["ok"] is True
+    item_id = added["data"]["id"]
+    assert item_id
+
+    rows = bridge.request(62, "memory_list")["data"]
+    assert len(rows) == 1
+    assert rows[0]["id"] == item_id
+    assert rows[0]["content"] == "User prefers dark theme"
+    assert rows[0]["scope"] == "global"
+
+    edited = bridge.request(63, "memory_edit", {"id": item_id, "content": "Prefers dark theme everywhere"})
+    assert edited["ok"] is True
+    rows = bridge.request(64, "memory_list")["data"]
+    assert rows[0]["content"] == "Prefers dark theme everywhere"
+
+    deleted = bridge.request(65, "memory_delete", {"id": item_id})
+    assert deleted["ok"] is True
+    assert deleted["data"]["removed"] is True
+    assert bridge.request(66, "memory_list")["data"] == []
+
+
+def test_memory_add_rejects_empty_content(bridge: BridgeProcess) -> None:
+    reply = bridge.request(67, "memory_add", {"content": "   "})
+    assert reply["ok"] is False
+    assert "rejected" in reply["error"]
+
+
+def test_memory_delete_unknown_id_is_not_removed(bridge: BridgeProcess) -> None:
+    reply = bridge.request(68, "memory_delete", {"id": "nope"})
+    assert reply["ok"] is True
+    assert reply["data"]["removed"] is False
+
+
+def test_knowledge_add_list_search_remove_round_trip(bridge: BridgeProcess, tmp_path) -> None:
+    """W2.2: collection index → list → cited search → remove through the bridge."""
+    docs = tmp_path / "kb"
+    docs.mkdir()
+    (docs / "runbook.md").write_text(
+        "# Runbook\n\nThe staging VPN gateway is gw-staging.internal.\n",
+        encoding="utf-8",
+    )
+    reply = bridge.request(70, "knowledge_list")
+    assert reply["ok"] is True
+    before = len(reply["data"])
+
+    added = bridge.request(71, "knowledge_add", {"name": "runbook", "path": str(docs)})
+    assert added["ok"] is True
+    assert added["data"]["stats"]["indexed"] == 1
+    assert added["data"]["collection"]["files"] == 1
+
+    rows = bridge.request(72, "knowledge_list")["data"]
+    assert len(rows) == before + 1
+    row = next(r for r in rows if r["name"] == "runbook")
+    assert row["chunks"] >= 1
+    assert row["embeddings"] in {"disabled", "ok"} or row["embeddings"].startswith("unavailable:")
+
+    hits = bridge.request(73, "knowledge_search", {"query": "staging VPN"})["data"]
+    assert hits and hits[0]["source"] == "runbook.md"
+    assert "gw-staging" in hits[0]["text"]
+
+    removed = bridge.request(74, "knowledge_remove", {"name": "runbook"})
+    assert removed["ok"] is True and removed["data"]["removed"] is True
+    assert len(bridge.request(75, "knowledge_list")["data"]) == before
+
+
+def test_knowledge_add_rejects_missing_path(bridge: BridgeProcess, tmp_path) -> None:
+    reply = bridge.request(76, "knowledge_add", {"name": "x", "path": str(tmp_path / "nope")})
+    assert reply["ok"] is False
+    assert "does not exist" in reply["error"]
+
+
+def test_knowledge_reindex_unknown_collection_fails(bridge: BridgeProcess) -> None:
+    reply = bridge.request(77, "knowledge_reindex", {"name": "nope"})
+    assert reply["ok"] is False
+    assert "Unknown collection" in reply["error"]
+
+
 def test_list_chats_empty(bridge: BridgeProcess) -> None:
     reply = bridge.request(3, "list_chats")
     assert reply["ok"] is True
@@ -553,3 +637,69 @@ async def test_watch_orchestration_streams_live_trajectory_steps(monkeypatch) ->
     assert all(p["type"] == "event" for p in payloads)
     assert [p["event"]["kind"] for p in payloads] == ["orchestrator.plan", "agent.start"]
     assert payloads[1]["event"]["actor"] == "coder"
+
+
+async def test_permission_request_waits_for_the_real_ui_answer(monkeypatch) -> None:
+    """W2.4: an ASK tool emits a permission_request and waits for the answer."""
+    import asyncio
+
+    mod = _bridge_module()
+    written: list[str] = []
+    monkeypatch.setattr(mod, "_write_line", written.append)
+
+    class _Tools:
+        def get(self, name: str):
+            class _Definition:
+                risk = "medium"
+
+            return _Definition() if name == "memory_write" else None
+
+    class _Config:
+        workspace_root = "C:/demo"
+
+    class _Session:
+        tools = _Tools()
+        config = _Config()
+
+    task = asyncio.create_task(
+        mod._ask_permission(_Session(), "memory_write", {"content": "remember me"})
+    )
+    await asyncio.sleep(0.05)
+    assert len(written) == 1
+    payload = json.loads(written[0])
+    assert payload["type"] == "event"
+    event = payload["event"]
+    assert event["type"] == "permission_request"
+    assert event["tool"] == "memory_write"
+    assert event["arguments"] == {"content": "remember me"}
+    assert event["cwd"] == "C:/demo"
+    assert event["risk"] == "medium"
+    assert event["id"]
+
+    # The tool call is still suspended — nothing has been approved yet.
+    assert not task.done()
+    assert mod._resolve_permission(event["id"], "allow_once") is True
+    assert await asyncio.wait_for(task, timeout=5) == "allow_once"
+    # A stale second answer (or an unknown id) is a no-op, not a crash.
+    assert mod._resolve_permission(event["id"], "deny") is False
+    assert mod._resolve_permission("perm-missing", "deny") is False
+
+
+async def test_permission_payload_falls_back_without_registry() -> None:
+    """A tool that is not in the registry still yields a safe payload."""
+    mod = _bridge_module()
+
+    class _Session:
+        pass
+
+    payload = mod._permission_payload(_Session(), "memory_write", {})
+    assert payload["arguments"] == {}
+    assert payload["cwd"] == "."
+    assert payload["risk"] == "safe"
+
+
+def test_permission_respond_command_reports_stale_ids(bridge: BridgeProcess) -> None:
+    """The real bridge answers permission_respond; stale ids are not accepted."""
+    reply = bridge.request(1, "permission_respond", {"id": "perm-1", "decision": "allow_once"})
+    assert reply["ok"] is True
+    assert reply["data"] == {"resolved": False}

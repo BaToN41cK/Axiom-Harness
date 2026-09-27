@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+from itertools import count
 from pathlib import Path
 
 from axiom.core.chat import ChatSession
@@ -164,8 +165,77 @@ def _event_json(e: ChatEvent) -> dict:
 
 def _write_line(line: str) -> None:
     with OUT_LOCK:
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            # The UI may reconnect while a detached task is still running.
+            pass
+
+
+# --------------------------------------------------------------- W2.4 permissions
+#: ASK tool calls that wait for a real answer from the shell.
+_PERMISSION_FUTURES: dict[str, asyncio.Future] = {}
+_PERMISSION_SEQ = count(1)
+
+
+def _permission_payload(session: ChatSession, tool_name: str, arguments: dict) -> dict:
+    """UI projection of an ASK tool call: tool, arguments, cwd and real risk."""
+    from axiom.core.tools.base import RISK_SAFE
+
+    definition = None
+    tools = getattr(session, "tools", None)
+    if tools is not None:
+        try:
+            definition = tools.get(tool_name)
+        except Exception:
+            definition = None
+    cwd = getattr(getattr(session, "config", None), "workspace_root", None) or "."
+    payload = {
+        "type": "permission_request",
+        "tool": tool_name,
+        "arguments": dict(arguments or {}),
+        "cwd": str(cwd),
+        "risk": getattr(definition, "risk", RISK_SAFE),
+    }
+    active_task = getattr(session, "active_task", None)
+    if active_task is not None:
+        payload["task_id"] = active_task.id
+    return payload
+
+
+async def _ask_permission(session: ChatSession, tool_name: str, arguments: dict) -> str:
+    """Forward an ASK tool call to the shell and wait for its real answer.
+
+    Emits one ``permission_request`` event and suspends the tool call until
+    ``permission_respond`` arrives with ``allow_once`` / ``allow_always`` /
+    ``deny``. The pending future lives exactly as long as the request.
+    """
+    request_id = f"perm-{next(_PERMISSION_SEQ)}"
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
+    _PERMISSION_FUTURES[request_id] = future
+    payload = _permission_payload(session, tool_name, arguments)
+    payload["id"] = request_id
+    active_task = getattr(session, "active_task", None)
+    runner = getattr(session, "active_task_runner", None)
+    if active_task is not None and runner is not None:
+        runner.permission_requested(active_task, tool_name, arguments)
+    _write_line(json.dumps({"type": "event", "event": payload}, ensure_ascii=False))
+    try:
+        return await future
+    finally:
+        _PERMISSION_FUTURES.pop(request_id, None)
+        if active_task is not None and runner is not None:
+            runner.permission_resolved(active_task)
+
+
+def _resolve_permission(request_id: str, decision: str) -> bool:
+    """Deliver the user's answer to the waiting tool call."""
+    future = _PERMISSION_FUTURES.get(request_id)
+    if future is None or future.done():
+        return False
+    future.set_result(decision)
+    return True
 
 
 def _active_provider_id(session: ChatSession) -> str:
@@ -275,24 +345,56 @@ async def _watch_orchestration(session: ChatSession, baseline: int,
 
 
 async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
-    if cmd in {"task_start", "task_resume"}:
+    if cmd in {"task_start", "task_resume", "task_launch", "task_continue"}:
         # Push directly from the core bus; no polling, model calls or state
         # transitions in the frontend. The subscription is request-scoped.
         def forward(payload: dict) -> None:
             _write_line(json.dumps({"type": "event", "event": payload}, ensure_ascii=False))
 
+        detached = cmd in {"task_launch", "task_continue"}
         if session.busy:
             raise ValueError("A generation is already running")
-        off = session.bus.subscribe("task.event", forward)
+        # Detached tasks use the bridge-wide subscription installed in _run;
+        # a request's lifetime must not own the task's event stream.
+        off = None if detached else session.bus.subscribe("task.event", forward)
         try:
-            if cmd == "task_start":
-                task = await session.task_start(str(args.get("goal") or ""), planning=args.get("planning"))
+            if cmd in {"task_start", "task_launch"}:
+                task = await session.task_start(
+                    str(args.get("goal") or ""),
+                    planning=args.get("planning"),
+                    plan=args.get("plan"),
+                    detached=detached,
+                )
             else:
                 task = await session.task_resume(str(args.get("id") or ""),
-                                                 acknowledge=args.get("acknowledge") is True)
+                                                 acknowledge=args.get("acknowledge") is True,
+                                                 detached=detached)
             return task.model_dump(mode="json")
         finally:
-            off()
+            if off:
+                off()
+    if cmd == "task_plan":
+        plan = await session.task_plan(str(args.get("goal") or ""))
+        return plan.model_dump(mode="json")
+    if cmd == "task_create":
+        task = session.task_create(
+            str(args.get("goal") or ""),
+            plan=args.get("plan"),
+        )
+        return task.model_dump(mode="json")
+    if cmd == "task_save":
+        task = session.task_save(
+            str(args.get("id") or ""),
+            goal=args.get("goal"),
+            plan=args.get("plan"),
+            state=args.get("state"),
+        )
+        return task.model_dump(mode="json") if task is not None else None
+    if cmd == "task_delete":
+        return {"deleted": session.task_delete(str(args.get("id") or ""))}
+    if cmd == "task_review":
+        task = session.task_review(str(args.get("id") or ""), str(args.get("decision") or ""))
+        return task.model_dump(mode="json")
     if cmd == "task_cancel":
         return {"cancelled": session.task_cancel(str(args.get("id") or ""))}
     if cmd == "task_state":
@@ -437,6 +539,58 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             str(args.get("query") or ""),
             limit=int(args["limit"]) if args.get("limit") else None,
         )
+    if cmd == "memory_list":
+        # W2.1: the Desktop memory manager reads the same projection as TUI.
+        return session.memory_rows()
+    if cmd == "memory_add":
+        item_id = session.memory_write_for_user(
+            str(args.get("content") or ""),
+            category=str(args.get("category") or "normal"),
+            scope=str(args.get("scope") or "global"),
+            tags=[str(t) for t in (args.get("tags") or [])],
+        )
+        if item_id is None:
+            raise ValueError("Memory item was rejected (empty, too long or banned)")
+        return {"id": item_id}
+    if cmd == "memory_edit":
+        ok = session.memory_edit(
+            str(args.get("id") or ""), str(args.get("content") or "")
+        )
+        if not ok:
+            raise ValueError("Memory item not found or edit rejected")
+        return {"id": str(args.get("id") or ""), "edited": True}
+    if cmd == "memory_delete":
+        removed = session.memory_forget(str(args.get("id") or ""))
+        return {"id": str(args.get("id") or ""), "removed": removed}
+    if cmd == "knowledge_list":
+        # W2.2: collection status rows (files/chunks/embedding status).
+        return session.knowledge_rows()
+    if cmd == "knowledge_add":
+        result = await session.knowledge_add_collection(
+            str(args.get("name") or ""), str(args.get("path") or "")
+        )
+        if not result.get("ok"):
+            raise ValueError(str(result.get("error") or "knowledge add failed"))
+        return result
+    if cmd == "knowledge_remove":
+        removed = session.knowledge_remove_collection(str(args.get("name") or ""))
+        return {"name": str(args.get("name") or ""), "removed": removed}
+    if cmd == "knowledge_reindex":
+        result = await session.knowledge_reindex(str(args.get("name") or ""))
+        if not result.get("ok"):
+            raise ValueError(str(result.get("error") or "knowledge reindex failed"))
+        return result
+    if cmd == "knowledge_search":
+        return await session.knowledge_search_rows(
+            str(args.get("query") or ""),
+            limit=int(args["limit"]) if args.get("limit") else 5,
+        )
+    if cmd == "knowledge_embed_model":
+        model = str(args.get("model") or "").strip() or None
+        session.knowledge.configure_embedder(session.config.ollama_url, model)
+        session.config.knowledge_embed_model = model
+        session.config.save()
+        return {"model": model}
     if cmd == "permissions":
         mode = str(args.get("mode") or "ask")
         if mode not in {"ask", "auto_approve_safe", "auto_approve_all"}:
@@ -445,6 +599,14 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         session.config.permission_mode = mode
         session.config.save()
         return {"mode": mode}
+    if cmd == "permission_respond":
+        # W2.4: the real answer to a waiting ASK tool call (allow once /
+        # always / deny). Returns whether a request was still pending.
+        return {
+            "resolved": _resolve_permission(
+                str(args.get("id") or ""), str(args.get("decision") or "")
+            )
+        }
     if cmd == "profiles":
         return {"active": session.profiles.active_name, "items": [
             {"id": name, "name": name, "prompt": prompt}
@@ -452,6 +614,15 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         ]}
     if cmd == "trajectory":
         return session.trajectory.viewer()
+    if cmd == "trajectory_export":
+        return {"run_id": session.trajectory.run_id,
+                "markdown": session.trajectory.export_markdown()}
+    if cmd == "orchestrate_resume":
+        return await session.resume_orchestrated(
+            str(args.get("run_id") or ""),
+            limit=int(args.get("limit") or 4),
+            max_iterations=int(args.get("max_iterations") or 3),
+        )
     if cmd == "orchestrate":
         # Live progress: forward the real trajectory steps while the workers
         # run; the reply below arrives only minutes later with the full report.
@@ -856,6 +1027,15 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
 async def _run() -> None:
     loop = asyncio.get_running_loop()
     session = ChatSession()
+    # Keep task events flowing independently of the command that launched a
+    # task. On reconnect the UI also reloads persisted tasks through `tasks`.
+    session.bus.subscribe("task.event", lambda payload: _write_line(
+        json.dumps({"type": "event", "event": payload}, ensure_ascii=False)))
+    # W2.4: ASK tool calls (including model-initiated memory writes) pause on a
+    # real dialog in the shell instead of being silently denied.
+    session.permissions.request_callback(
+        lambda tool, args: _ask_permission(session, tool, args)
+    )
 
     async def dispatch(req_id: int, coro) -> None:
         try:
@@ -886,10 +1066,8 @@ async def _run() -> None:
             raw = raw.strip()
             if raw:
                 on_line(raw)
-        # stdin closed — the shell is gone (killed, crashed or restarted).
-        # Exit immediately so no orphaned bridge keeps running and, worse,
-        # keeps answering stale requests against a dead UI.
-        os._exit(0)
+        # stdin may close when a webview/IPC client disconnects. The core stays
+        # alive for detached task workers and its checkpoints survive restart.
 
     threading.Thread(target=pump, daemon=True).start()
     await asyncio.Event().wait()  # run until the shell closes stdin

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -92,6 +92,21 @@ export default function MessageList(props: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
 
+  // Stable callback identities so memoised rows never re-render just because a
+  // parent render produced fresh function objects. The refs always point at the
+  // latest store callbacks, so behavior is identical — no stale closures.
+  const cbRef = useRef({ onEdit, onOpen, onStop, onContinue });
+  cbRef.current = { onEdit, onOpen, onStop, onContinue };
+  const stable = useMemo(
+    () => ({
+      onEdit: (text: string) => cbRef.current.onEdit(text),
+      onOpen: (url: string) => cbRef.current.onOpen(url),
+      onStop: () => cbRef.current.onStop(),
+      onContinue: () => cbRef.current.onContinue(),
+    }),
+    [],
+  );
+
   const lastUserId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "user") return messages[i].id;
@@ -165,7 +180,7 @@ export default function MessageList(props: Props) {
               key={message.id}
               message={message}
               editable={message.id === lastUserId && !generating}
-              onEdit={onEdit}
+              onEdit={stable.onEdit}
             />
           ) : (
             <AssistantMessage
@@ -173,12 +188,12 @@ export default function MessageList(props: Props) {
               message={message}
               config={config}
               generating={generating}
-              liveState={liveState}
-              statusText={statusText}
-              elapsedMs={elapsedMs}
-              onOpen={onOpen}
-              onStop={onStop}
-              onContinue={onContinue}
+              liveState={message.streaming ? liveState : ""}
+              statusText={message.streaming ? statusText : null}
+              elapsedMs={message.streaming ? elapsedMs : 0}
+              onOpen={stable.onOpen}
+              onStop={stable.onStop}
+              onContinue={stable.onContinue}
             />
           ),
         )}
@@ -187,7 +202,7 @@ export default function MessageList(props: Props) {
   );
 }
 
-function UserMessage({
+const UserMessage = memo(function UserMessage({
   message,
   editable,
   onEdit,
@@ -297,9 +312,9 @@ function UserMessage({
       )}
     </div>
   );
-}
+});
 
-function AssistantMessage({
+const AssistantMessage = memo(function AssistantMessage({
   message,
   config,
   generating,
@@ -460,7 +475,7 @@ function AssistantMessage({
       )}
     </div>
   );
-}
+});
 
 /** Markdown `code` renderer: fenced blocks get the AXIOM code card. */
 function MarkdownCode(props: { className?: string; children?: ReactNode }) {

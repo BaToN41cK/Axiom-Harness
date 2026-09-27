@@ -14,6 +14,7 @@ import re
 import shutil
 from pathlib import Path
 
+from axiom.core.security import CheckpointStore
 from axiom.core.tools.base import (
     RISK_DANGEROUS,
     RISK_MEDIUM,
@@ -72,6 +73,13 @@ class WorkspaceTools:
     def __init__(self, root: Path | None = None, access_mode: str = "workspace") -> None:
         self.root = (root or default_workspace_root()).resolve()
         self.access_mode = access_mode
+        self.checkpoints = CheckpointStore(self.root)
+
+    def _checkpoint(self, target: Path) -> str | None:
+        try:
+            return self.checkpoints.capture(target).step_id
+        except (OSError, ValueError):
+            return None
 
     def set_root(self, root: Path) -> None:
         """Switch the sandbox root (project switch)."""
@@ -536,6 +544,7 @@ class WorkspaceTools:
             )
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint = self._checkpoint(target)
             target.write_text(content, encoding="utf-8")
         except OSError as exc:
             return ToolResult(name=WRITE_FILE_TOOL, ok=False, error=f"Cannot write: {exc}")
@@ -543,7 +552,7 @@ class WorkspaceTools:
         return ToolResult(
             name=WRITE_FILE_TOOL, ok=True,
             content=f"{verb} {target.relative_to(self.root)} ({new_lines} lines, {len(content)} chars)",
-            data=stats,
+            data={**stats, "checkpoint": checkpoint},
         )
 
     async def _edit_file(
@@ -597,6 +606,7 @@ class WorkspaceTools:
                 data=stats,
             )
         try:
+            checkpoint = self._checkpoint(target)
             target.write_text(updated, encoding="utf-8")
         except OSError as exc:
             return ToolResult(name=EDIT_FILE_TOOL, ok=False, error=f"Cannot write: {exc}")
@@ -607,7 +617,7 @@ class WorkspaceTools:
                 f"Edited {target.relative_to(self.root)}: "
                 f"replaced {len(old_text)} chars with {len(new_text)}\n{unified}"
             ),
-            data=stats,
+            data={**stats, "checkpoint": checkpoint},
         )
 
     async def _apply_patch(
@@ -841,6 +851,7 @@ class WorkspaceTools:
         if target == self.root:
             return ToolResult(name=DELETE_FILE_TOOL, ok=False, error="Refusing to delete the workspace root")
         try:
+            checkpoint = self._checkpoint(target)
             if target.is_dir():
                 shutil.rmtree(target)
                 summary = "directory"
@@ -853,6 +864,7 @@ class WorkspaceTools:
             name=DELETE_FILE_TOOL,
             ok=True,
             content=f"Deleted {summary} {target.relative_to(self.root)}",
+            data={"checkpoint": checkpoint},
         )
 
     async def _move_file(self, source: str, destination: str) -> ToolResult:
@@ -865,6 +877,8 @@ class WorkspaceTools:
         if dst.exists():
             return ToolResult(name=MOVE_FILE_TOOL, ok=False, error=f"Destination exists: {destination}")
         try:
+            source_checkpoint = self._checkpoint(src)
+            destination_checkpoint = self._checkpoint(dst) if dst.exists() else None
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
         except (OSError, shutil.Error) as exc:
@@ -873,6 +887,7 @@ class WorkspaceTools:
             name=MOVE_FILE_TOOL,
             ok=True,
             content=f"Moved {src.relative_to(self.root)} → {dst.relative_to(self.root)}",
+            data={"source_checkpoint": source_checkpoint, "destination_checkpoint": destination_checkpoint},
         )
 
     async def _copy_file(self, source: str, destination: str) -> ToolResult:
@@ -883,6 +898,7 @@ class WorkspaceTools:
         if not src.exists():
             return ToolResult(name=COPY_FILE_TOOL, ok=False, error=f"No such file: {source}")
         try:
+            checkpoint = self._checkpoint(dst) if dst.exists() else None
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.is_dir():
                 shutil.copytree(src, dst)
@@ -894,5 +910,6 @@ class WorkspaceTools:
             name=COPY_FILE_TOOL,
             ok=True,
             content=f"Copied {src.relative_to(self.root)} → {dst.relative_to(self.root)}",
+            data={"checkpoint": checkpoint},
         )
 

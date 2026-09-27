@@ -145,3 +145,21 @@ class Trajectory:
             if event.seq == seq:
                 return event.to_json()
         return None
+
+    def export_markdown(self) -> str:
+        """Export the recorded run as Markdown using only recorded facts."""
+        lines = [f"# Orchestration run `{self.run_id}`", "", "## Timeline", ""]
+        for event in self._events:
+            stamp = time.strftime("%H:%M:%S", time.localtime(event.ts))
+            lines.append(f"- `{stamp}` **{event.actor or 'system'}** `{event.kind}` — {event.summary}")
+        usage = self.usages()
+        lines.extend([
+            "", "## Usage", "",
+            f"- Events: {usage['events']}",
+            f"- Input tokens: {usage['input_tokens']}",
+            f"- Output tokens: {usage['output_tokens']}",
+            f"- Reasoning tokens: {usage['reasoning_tokens']}",
+            f"- Latency: {usage['latency_ms']} ms",
+            f"- Cost: ${usage['cost_usd']:.6f}",
+        ])
+        return "\n".join(lines) + "\n"

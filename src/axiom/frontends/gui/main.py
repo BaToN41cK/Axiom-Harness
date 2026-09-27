@@ -6,23 +6,22 @@ bridge). This module only *launches* it:
 
     1. a pre-built binary (``desktop/src-tauri/target/release/AXIOM.exe``
        or the debug build) — preferred, starts instantly;
-    2. ``npm run tauri dev`` — compiles on the fly (requires Node.js and
-       the Rust toolchain);
+    2. the Tauri CLI, launched directly through Node.js — compiles on the fly;
     3. a helpful error explaining what to install otherwise.
 """
 
 from __future__ import annotations
 
-import json
+import hashlib
 import os
+import platform
 import shutil
-import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
 _EXIT_OK = 0
 _EXIT_ERROR = 1
@@ -34,21 +33,16 @@ _EXE_CANDIDATES = ("axiom-desktop.exe", "AXIOM.exe", "axiom.exe", "axiom-desktop
 #: frontend, a debug build has none and needs the Vite dev server.
 _PROFILE_ORDER = ("release", "debug")
 
-#: Used when tauri.conf.json cannot be read. A literal IP survives VPN
-#: adapters flipping ``localhost`` between IPv4 and IPv6.
-_FALLBACK_DEV_URL = "http://127.0.0.1:1420"
-
-#: How long to wait for the dev server to answer, and how often to poll it.
-_DEV_SERVER_WAIT = 30.0
-_DEV_SERVER_POLL = 0.15
+_RUSTUP_BASE_URL = "https://static.rust-lang.org/rustup/dist"
+_MSVC_BUILD_TOOLS_URL = "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
 
 _IS_WINDOWS = sys.platform == "win32"
 
-#: Detached launch flags: the GUI must survive the terminal being closed.
+#: Console children must have redirected stdio and never create a window.
 if _IS_WINDOWS:
-    _DETACHED = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    _HIDDEN = subprocess.CREATE_NO_WINDOW
 else:
-    _DETACHED = 0
+    _HIDDEN = 0
 
 
 def _project_root() -> Path:
@@ -72,79 +66,451 @@ def _desktop_dirs() -> list[Path]:
     return unique
 
 
-def _dev_url(desktop: Path) -> str:
-    """Frontend dev URL of the desktop app (``build.devUrl`` in tauri.conf.json)."""
-    url: object = None
-    try:
-        conf = json.loads((desktop / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
-        build = conf.get("build", {}) if isinstance(conf, dict) else {}
-        url = build.get("devUrl") if isinstance(build, dict) else None
-    except (OSError, ValueError):
-        url = None
-    if isinstance(url, str) and url.strip():
-        return url.strip()
-    return _FALLBACK_DEV_URL
+def _node_executable() -> str | None:
+    return shutil.which("node.exe") or shutil.which("node")
 
 
-def _dev_server_port(dev_url: str) -> int | None:
-    """TCP port the dev server serves ``dev_url`` on (``None`` if unparsable)."""
-    try:
-        parsed = urlsplit(dev_url)
-        return parsed.port or (443 if parsed.scheme == "https" else 80)
-    except ValueError:
-        return None
+def _node_cli(desktop: Path, package: str) -> Path | None:
+    """Return a package CLI JS entrypoint, avoiding npm.cmd/tauri.cmd shims."""
+    candidates = {
+        "tauri": desktop / "node_modules" / "@tauri-apps" / "cli" / "tauri.js",
+    }
+    path = candidates.get(package)
+    return path if path and path.is_file() else None
 
 
-def _port_is_open(port: int, timeout: float = 0.25) -> bool:
-    """True when something accepts TCP connections on localhost:port.
+def _npm_cli(node: str) -> Path | None:
+    path = Path(node).resolve().parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    return path if path.is_file() else None
 
-    Both address families are probed on purpose: Vite resolves ``localhost``
-    to a single address (IPv6 ``::1`` on Windows), so an IPv4-only check
-    reports a running dev server as dead.
-    """
-    for family, host in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+
+class _SetupWindow:
+    """Small native-feeling progress window shown only during Rust setup."""
+
+    def __init__(self) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        self._tk = tk
+        self.root = tk.Tk()
+        self.root.title("Подготовка AXIOM")
+        self.root.resizable(False, False)
+        self.root.attributes("-topmost", True)
+        self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+        frame = ttk.Frame(self.root, padding=22)
+        frame.pack(fill="both", expand=True)
+        self.label = ttk.Label(frame, text="Проверка Rust…", width=58, wraplength=440)
+        self.label.pack(anchor="w", pady=(0, 16))
+        self.bar = ttk.Progressbar(frame, mode="indeterminate", length=440)
+        self.bar.pack(fill="x")
+        self.bar.start(12)
+        self.root.update_idletasks()
+        width, height = 500, 128
+        x = (self.root.winfo_screenwidth() - width) // 2
+        y = (self.root.winfo_screenheight() - height) // 2
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.update()
+
+    def status(self, text: str) -> None:
+        self.bar.stop()
+        self.bar.configure(mode="indeterminate", value=0)
+        self.bar.start(12)
+        self.label.configure(text=text)
+        self.root.update_idletasks()
+        self.root.update()
+
+    def progress(self, current: int, total: int) -> None:
+        if total > 0:
+            self.bar.stop()
+            self.bar.configure(mode="determinate", maximum=total, value=current)
+            percent = int(current * 100 / total)
+            self.label.configure(text=f"Загрузка установщика Rust… {percent}%")
+            self.root.update_idletasks()
+            self.root.update()
+
+    def pump(self) -> None:
+        self.root.update_idletasks()
+        self.root.update()
+
+    def close(self) -> None:
         try:
-            with socket.socket(family, socket.SOCK_STREAM) as sock:
-                sock.settimeout(timeout)
-                if sock.connect_ex((host, port)) == 0:
-                    return True
-        except OSError:  # address family unavailable on this host
-            continue
+            self.root.destroy()
+        except self._tk.TclError:
+            pass
+
+
+def _native_message(title: str, message: str, *, error: bool = True) -> None:
+    """Show a Windows dialog even if tkinter is unavailable."""
+    if _IS_WINDOWS:
+        import ctypes
+
+        icon = 0x10 if error else 0x40  # MB_ICONERROR / MB_ICONINFORMATION
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x00000000 | icon)
+    else:
+        print(f"{title}: {message}", file=sys.stderr)
+
+
+def _rust_target_triple(machine: str | None = None) -> str:
+    arch = (machine or platform.machine()).lower()
+    if arch in {"arm64", "aarch64"}:
+        return "aarch64-pc-windows-msvc"
+    if arch in {"amd64", "x86_64", "x64"}:
+        return "x86_64-pc-windows-msvc"
+    raise RuntimeError(f"Архитектура Windows не поддерживается установщиком Rust: {arch}")
+
+
+def _user_rust_paths() -> tuple[Path, Path, Path]:
+    profile = Path(os.environ.get("USERPROFILE") or Path.home())
+    cargo_home = profile / ".cargo"
+    rustup_home = profile / ".rustup"
+    return profile, cargo_home, rustup_home
+
+
+def _prepend_cargo_bin() -> Path:
+    """Make rustup proxies visible to this process and all children."""
+    _, cargo_home, _ = _user_rust_paths()
+    cargo_bin = cargo_home / "bin"
+    current = os.environ.get("PATH", "")
+    parts = current.split(os.pathsep) if current else []
+    normalized = os.path.normcase(os.path.normpath(str(cargo_bin)))
+    if not any(os.path.normcase(os.path.normpath(part.strip('"'))) == normalized for part in parts if part):
+        os.environ["PATH"] = str(cargo_bin) + (os.pathsep + current if current else "")
+    return cargo_bin
+
+
+def _find_rust_tools() -> tuple[str | None, str | None]:
+    _prepend_cargo_bin()
+    return (
+        shutil.which("cargo.exe") or shutil.which("cargo"),
+        shutil.which("rustc.exe") or shutil.which("rustc"),
+    )
+
+
+def _version_ok(executable: str | Path) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", timeout=20,
+            creationflags=_HIDDEN,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    return result.returncode == 0, result.stdout.strip()
+
+
+def _rust_host_ok(executable: str | Path) -> bool:
+    try:
+        result = subprocess.run(
+            [str(executable), "-vV"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            encoding="utf-8", errors="replace", timeout=20,
+            creationflags=_HIDDEN,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    expected = _rust_target_triple()
+    return result.returncode == 0 and any(
+        line.strip() == f"host: {expected}" for line in result.stdout.splitlines()
+    )
+
+
+def _setup_log_path() -> Path:
+    local = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    path = local / "AXIOM" / "logs" / "rust-install.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _apply_system_proxy(env: dict[str, str]) -> None:
+    """Expose Windows' configured proxy to Rustup/Cargo child processes."""
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        proxies = {}
+    for scheme in ("http", "https"):
+        proxy = (
+            os.environ.get(f"{scheme}_proxy")
+            or os.environ.get(f"{scheme.upper()}_PROXY")
+            or proxies.get(scheme)
+        )
+        if proxy:
+            env.setdefault(f"{scheme}_proxy", proxy)
+            env.setdefault(f"{scheme.upper()}_PROXY", proxy)
+            os.environ.setdefault(f"{scheme}_proxy", proxy)
+            os.environ.setdefault(f"{scheme.upper()}_PROXY", proxy)
+
+
+def _download_rustup(target: str, destination: Path, window: _SetupWindow) -> None:
+    url = f"{_RUSTUP_BASE_URL}/{target}/rustup-init.exe"
+    window.status("Загрузка официального установщика Rust…")
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(url, timeout=30) as response:
+        total = int(response.headers.get("Content-Length") or 0)
+        downloaded = 0
+        with destination.open("wb") as output:
+            while chunk := response.read(256 * 1024):
+                output.write(chunk)
+                digest.update(chunk)
+                downloaded += len(chunk)
+                if total:
+                    window.progress(downloaded, total)
+                else:
+                    window.pump()
+    with urllib.request.urlopen(url + ".sha256", timeout=30) as response:
+        expected = response.read().decode("ascii", errors="replace").split()[0].lower()
+    if len(expected) != 64 or digest.hexdigest().lower() != expected:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError("Не совпала контрольная сумма установщика Rust.")
+
+
+def _run_setup_process(
+    argv: list[str], *, log_path: Path, env: dict[str, str], window: _SetupWindow,
+) -> int:
+    with log_path.open("ab") as log:
+        log.write(("\n> " + subprocess.list2cmdline(argv) + "\n").encode("utf-8"))
+        log.flush()
+        process = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            env=env, creationflags=_HIDDEN, close_fds=True,
+        )
+        while process.poll() is None:
+            window.pump()
+            time.sleep(0.15)
+        return int(process.returncode or 0)
+
+
+def _install_rust_toolchain(window: _SetupWindow, log_path: Path) -> None:
+    target = _rust_target_triple()
+    _, cargo_home, rustup_home = _user_rust_paths()
+    cargo_bin = _prepend_cargo_bin()
+    env = os.environ.copy()
+    # The requested user install location is stable across terminal sessions.
+    env["CARGO_HOME"] = str(cargo_home)
+    env["RUSTUP_HOME"] = str(rustup_home)
+    _apply_system_proxy(env)
+    os.environ.update({"CARGO_HOME": str(cargo_home), "RUSTUP_HOME": str(rustup_home)})
+    rustup = cargo_bin / "rustup.exe"
+
+    if rustup.is_file():
+        window.status("Настройка стабильного Rust toolchain для MSVC…")
+        commands = [
+            [str(rustup), "set", "default-host", target],
+            [str(rustup), "toolchain", "install", "stable", "--profile", "minimal"],
+            [str(rustup), "default", "stable"],
+        ]
+        for argv in commands:
+            if _run_setup_process(argv, log_path=log_path, env=env, window=window) != 0:
+                raise RuntimeError("rustup завершился с ошибкой; подробности записаны в журнал.")
+    else:
+        window.status("Подготовка официального установщика Rust…")
+        with tempfile.TemporaryDirectory(prefix="axiom-rustup-") as temp:
+            installer = Path(temp) / "rustup-init.exe"
+            _download_rustup(target, installer, window)
+            window.status("Установка Rust stable (MSVC)…")
+            argv = [
+                str(installer), "-y", "--default-toolchain", "stable",
+                "--default-host", target, "--profile", "minimal", "--no-modify-path",
+            ]
+            if _run_setup_process(argv, log_path=log_path, env=env, window=window) != 0:
+                raise RuntimeError("Установщик Rust завершился с ошибкой; подробности записаны в журнал.")
+
+    _prepend_cargo_bin()
+    cargo = cargo_bin / "cargo.exe"
+    rustc = cargo_bin / "rustc.exe"
+    cargo_ok, cargo_version = _version_ok(cargo)
+    rustc_ok, rustc_version = _version_ok(rustc)
+    if not cargo_ok or not rustc_ok or not _rust_host_ok(rustc):
+        details = f"cargo: {cargo_version or 'не найден'}; rustc: {rustc_version or 'не найден'}"
+        raise RuntimeError(f"Rust MSVC toolchain установлен не полностью ({details}).")
+    window.status(f"Rust готов: {rustc_version}; {cargo_version}. Запуск AXIOM…")
+    time.sleep(0.5)
+
+
+def _ensure_rust_toolchain() -> bool:
+    """Install Rust automatically on Windows when the GUI build needs it."""
+    if not _IS_WINDOWS:
+        return True
+    cargo, rustc = _find_rust_tools()
+    if (
+        cargo and rustc and _version_ok(cargo)[0] and _version_ok(rustc)[0]
+        and _rust_host_ok(rustc)
+    ):
+        return True
+
+    window: _SetupWindow | None = None
+    try:
+        log_path = _setup_log_path()
+    except OSError:
+        log_path = Path(tempfile.gettempdir()) / "axiom-rust-install.log"
+    try:
+        window = _SetupWindow()
+        window.status("Rust не найден. AXIOM автоматически установит Rust stable…")
+        _install_rust_toolchain(window, log_path)
+        return True
+    except Exception as exc:
+        if window is not None:
+            window.close()
+        _native_message(
+            "Не удалось подготовить Rust для AXIOM",
+            f"{exc}\n\nЖурнал установки: {log_path}\n\n"
+            "Проверьте подключение к интернету и повторите запуск AXIOM.",
+        )
+        return False
+    finally:
+        if window is not None:
+            window.close()
+
+
+def _version_key(path: Path) -> tuple[int, ...]:
+    return tuple(int(part) for part in path.name.split(".") if part.isdigit())
+
+
+def _prepend_environment_paths(name: str, additions: list[Path]) -> None:
+    current = os.environ.get(name, "")
+    values = [str(path) for path in additions if path.is_dir()]
+    values.extend(part for part in current.split(os.pathsep) if part)
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = os.path.normcase(os.path.normpath(value.strip('"')))
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    if unique:
+        os.environ[name] = os.pathsep.join(unique)
+
+
+def _vswhere_path() -> Path | None:
+    program_files = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+    for path in (
+        program_files / "Microsoft Visual Studio" / "Installer" / "vswhere.exe",
+        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+        / "Microsoft Visual Studio" / "Installer" / "vswhere.exe",
+    ):
+        if path.is_file():
+            return path
+    return None
+
+
+def _visual_studio_installations() -> list[Path]:
+    vswhere = _vswhere_path()
+    if vswhere is None:
+        return []
+    try:
+        result = subprocess.run(
+            [str(vswhere), "-products", "*", "-property", "installationPath"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", timeout=15,
+            creationflags=_HIDDEN,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    return [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
+
+
+def _msvc_setup() -> bool:
+    """Populate MSVC/Windows SDK environment without invoking a command shell."""
+    if not _IS_WINDOWS:
+        return True
+    if shutil.which("cl.exe") and shutil.which("link.exe"):
+        return True  # already running in a configured VS developer environment
+    try:
+        target = _rust_target_triple()
+    except RuntimeError:
+        return False
+    arch = "arm64" if target.startswith("aarch64-") else "x64"
+    program_files_x86 = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+    sdk_root = program_files_x86 / "Windows Kits" / "10"
+    sdk_versions = sorted(
+        (path for path in (sdk_root / "Include").glob("10.*") if (path / "um" / "Windows.h").is_file()),
+        key=_version_key,
+        reverse=True,
+    )
+    sdk_version = sdk_versions[0].name if sdk_versions else ""
+    sdk_lib = sdk_root / "Lib" / sdk_version
+    sdk_bin = sdk_root / "bin" / sdk_version
+
+    for installation in _visual_studio_installations():
+        vc_root = installation / "VC"
+        tools_root = vc_root / "Tools" / "MSVC"
+        versions = sorted(
+            (path for path in tools_root.iterdir() if path.is_dir()),
+            key=_version_key,
+            reverse=True,
+        ) if tools_root.is_dir() else []
+        for tools in versions:
+            bin_candidates = [tools / "bin" / "Hostx64" / arch]
+            if arch == "arm64":
+                bin_candidates.append(tools / "bin" / "Hostarm64" / arch)
+            compiler_bin = next(
+                (path for path in bin_candidates if (path / "cl.exe").is_file() and (path / "link.exe").is_file()),
+                None,
+            )
+            if compiler_bin is None or not sdk_version:
+                continue
+            include_dirs = [
+                tools / "include",
+                sdk_root / "Include" / sdk_version / "shared",
+                sdk_root / "Include" / sdk_version / "um",
+                sdk_root / "Include" / sdk_version / "winrt",
+                sdk_root / "Include" / sdk_version / "ucrt",
+                sdk_root / "Include" / sdk_version / "cppwinrt",
+            ]
+            lib_dirs = [
+                tools / "lib" / arch,
+                sdk_lib / "um" / arch,
+                sdk_lib / "ucrt" / arch,
+            ]
+            if not all(path.is_dir() for path in include_dirs[:5] + lib_dirs):
+                continue
+            atlmfc = tools / "atlmfc"
+            path_dirs = [compiler_bin, sdk_bin / arch, sdk_bin / "x64"]
+            _prepend_environment_paths("PATH", path_dirs)
+            _prepend_environment_paths("INCLUDE", include_dirs)
+            _prepend_environment_paths("LIB", lib_dirs)
+            _prepend_environment_paths("LIBPATH", [
+                atlmfc / "lib" / arch, tools / "lib" / arch,
+                sdk_root / "References" / sdk_version,
+            ])
+            os.environ.update({
+                "VSINSTALLDIR": str(installation) + os.sep,
+                "VCINSTALLDIR": str(vc_root) + os.sep,
+                "VCToolsInstallDir": str(tools) + os.sep,
+                "VCToolsVersion": tools.name,
+                "WindowsSdkDir": str(sdk_root) + os.sep,
+                "WindowsSDKVersion": sdk_version + os.sep,
+                "UniversalCRTSdkDir": str(sdk_root) + os.sep,
+                "UCRTVersion": sdk_version,
+                "Platform": arch,
+                "VSCMD_ARG_TGT_ARCH": arch,
+            })
+            if shutil.which("cl.exe") and shutil.which("link.exe"):
+                return True
     return False
 
 
-def _dev_server_answers(dev_url: str, timeout: float = 0.6) -> bool:
-    """True when the dev server really serves HTTP at ``dev_url``.
+def _show_msvc_required() -> None:
+    if not _IS_WINDOWS:
+        return
+    import ctypes
 
-    A bare TCP probe is not enough — the port may be held by an unrelated
-    process. An explicitly empty ProxyHandler keeps a system proxy away from
-    localhost: a proxy that intercepts local traffic answers 503 and would
-    otherwise make a perfectly healthy dev server look dead.
-    """
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(dev_url, timeout=timeout) as response:
-            return 200 <= response.status < 500
-    except (OSError, ValueError):
-        return False
-
-
-def _is_dev_build(exe: Path) -> bool:
-    """True for a Tauri debug build, which carries no frontend of its own.
-
-    ``tauri dev`` compiles the shell without embedded assets: the window loads
-    ``build.devUrl``. Such an exe is therefore useless — and renders
-    ``ERR_CONNECTION_REFUSED`` — unless the Vite dev server is up.
-    """
-    return exe.parent.name == "debug"
-
-
-def _desktop_of(exe: Path) -> Path | None:
-    """``desktop/`` directory an exe belongs to (…/src-tauri/target/<profile>/)."""
-    parents = exe.parents
-    if len(parents) < 4 or not (parents[3] / "package.json").exists():
-        return None
-    return parents[3]
+    answer = ctypes.windll.user32.MessageBoxW(
+        None,
+        "Для сборки GUI AXIOM нужен компонент Visual C++ Build Tools "
+        "«Desktop development with C++» и Windows SDK. Rust уже подготовлен, "
+        "но эти системные компоненты не найдены.\n\n"
+        "Открыть официальную страницу Build Tools? После установки просто "
+        "запустите axiom --gui ещё раз — новый CMD открывать не нужно.",
+        "Для AXIOM нужны компоненты MSVC",
+        0x00000004 | 0x00000030,  # MB_YESNO | MB_ICONWARNING
+    )
+    if answer == 6:
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "open", _MSVC_BUILD_TOOLS_URL, None, None, 1,
+        )
 
 
 def _newest_web_source() -> float:
@@ -157,6 +523,20 @@ def _newest_web_source() -> float:
         if src_dir.exists() and (desktop / "src-tauri").exists():
             mtimes = (p.stat().st_mtime for p in src_dir.rglob("*") if p.is_file())
             newest = max(newest, max(mtimes, default=0.0))
+    return newest
+
+
+def _newest_native_source() -> float:
+    """Newest Rust/bridge/config source that must be present in the shell exe."""
+    newest = 0.0
+    for desktop in _desktop_dirs():
+        tauri = desktop / "src-tauri"
+        candidates = [tauri / "Cargo.toml", tauri / "tauri.conf.json", tauri / "build.rs"]
+        for directory in (tauri / "src", tauri / "bridge"):
+            if directory.exists():
+                candidates.extend(directory.rglob("*"))
+        mtimes = (p.stat().st_mtime for p in candidates if p.is_file())
+        newest = max(newest, max(mtimes, default=0.0))
     return newest
 
 
@@ -186,87 +566,24 @@ def _find_built_exe_any(profile: str | None = None) -> Path | None:
 def _find_built_exe() -> Path | None:
     """Built shell worth launching, or ``None`` when the dev shell is better.
 
-    A release build embeds the frontend, so it is used only while it is not
-    older than the web sources (otherwise the UI would be stale). A debug
-    build always takes its UI from the dev server — web sources never make it
-    stale — but it only runs once that server is started (see
-    :func:`_launch_exe`).
+    A release build embeds the frontend, so it must be newer than both web and
+    native sources. A debug build gets its UI from its Rust-owned Vite server,
+    but its shell and bridge resources must still be current.
     """
     newest_source = _newest_web_source()
+    newest_native = _newest_native_source()
     release = _built_exe("release")
-    if release is not None and (not newest_source or release.stat().st_mtime >= newest_source):
+    if release is not None and release.stat().st_mtime >= max(newest_source, newest_native):
         return release
-    return _built_exe("debug")
-
-
-def _wait_for_dev_server(desktop: Path, dev_url: str, timeout: float = _DEV_SERVER_WAIT) -> bool:
-    """Poll until the dev server really answers HTTP at ``dev_url``.
-
-    Re-probing both address families and bypassing any system proxy keeps the
-    check honest while a VPN is reconnecting: a half-up VPN often accepts the
-    TCP connection but answers nothing.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _dev_server_answers(dev_url):
-            return True
-        time.sleep(_DEV_SERVER_POLL)
-    return False
-
-
-def _start_dev_server(desktop: Path) -> bool:
-    """Start the Vite dev server detached and wait until it serves HTTP.
-
-    Returns ``True`` when the server is up (either just started or already
-    running). This is what makes a debug Tauri shell usable after a reboot or
-    a VPN change: without it the window loads ``http://127.0.0.1:1420`` and
-    renders ``ERR_CONNECTION_REFUSED``.
-    """
-    npm_cmd = shutil.which("npm") or shutil.which("npm.cmd")
-    if npm_cmd is None:
-        return False
-    dev_url = _dev_url(desktop)
-    if _dev_server_answers(dev_url):
-        return True
-    if not (desktop / "node_modules").exists():
-        return False
-    log = open(desktop / "vite_dev.log", "ab")  # noqa: SIM115 - owned by the child
-    try:
-        subprocess.Popen(
-            [npm_cmd, "run", "dev"],
-            cwd=desktop,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            creationflags=_DETACHED if _IS_WINDOWS else 0,
-            start_new_session=not _IS_WINDOWS,
-        )
-    except OSError:
-        return False
-    finally:
-        log.close()
-    return _wait_for_dev_server(desktop, dev_url)
+    debug = _built_exe("debug")
+    if debug is not None and debug.stat().st_mtime >= newest_native:
+        return debug
+    return None
 
 
 def _launch_exe(exe: Path) -> bool:
-    """Launch a built exe, starting the Vite dev server first when needed.
-
-    A debug build ships no frontend of its own: the window loads
-    ``build.devUrl``. Launching it without a live dev server only shows
-    ``ERR_CONNECTION_REFUSED``, so the server is started here.
-    """
-    if _is_dev_build(exe):
-        desktop = _desktop_of(exe)
-        if desktop is None or not _start_dev_server(desktop):
-            print(
-                "✕ Отладочная сборка AXIOM требует dev-сервер (Vite), "
-                "но он не запустился.\n"
-                "  Лог: desktop/vite_dev.log\n"
-                "  Запустите вручную: cd desktop && npm run dev",
-                file=sys.stderr,
-            )
-            return False
-    _spawn_detached(exe)
+    """Launch the GUI; debug shells own their Vite process in Rust."""
+    _spawn_gui(exe)
     return True
 
 
@@ -277,8 +594,9 @@ def _run_dev(desktop: Path) -> int:
     output redirected to a log file, so closing the caller's terminal can
     never kill the build or the GUI.
     """
-    npm_cmd = shutil.which("npm") or shutil.which("npm.cmd")
-    if npm_cmd is None:
+    node = _node_executable()
+    tauri_cli = _node_cli(desktop, "tauri")
+    if node is None or tauri_cli is None:
         print(
             "✕ Node.js (npm) не найден в PATH.\n"
             "  Установите Node.js LTS: https://nodejs.org/download/",
@@ -291,32 +609,49 @@ def _run_dev(desktop: Path) -> int:
             "нативное окно на Rust.\n"
             "  Установите rustup: https://rustup.ru/  (Windows: дополнительно "
             "нужны MSVC Build Tools — rustup предложит их сам).\n"
-            "  После установки откройте НОВЫЙ терминал и повторите: axiom --gui",
+            "  Не удалось подготовить Rust автоматически. Проверьте журнал установки "
+            "и повторите запуск axiom --gui.",
             file=sys.stderr,
         )
         return _EXIT_ERROR
+    try:
+        msvc_ready = _msvc_setup()
+    except OSError:
+        msvc_ready = False
+    if _IS_WINDOWS and not msvc_ready:
+        _show_msvc_required()
+        return _EXIT_ERROR
     if not (desktop / "node_modules").exists():
         print(f"Устанавливаю зависимости десктоп-приложения ({desktop})…", file=sys.stderr)
-        install = subprocess.run([npm_cmd, "install"], cwd=desktop, stdin=subprocess.DEVNULL)
+        npm_cli = _npm_cli(node)
+        if npm_cli is None:
+            print("✕ npm JavaScript CLI не найден рядом с Node.js.", file=sys.stderr)
+            return _EXIT_ERROR
+        install = subprocess.run(
+            [node, str(npm_cli), "install"], cwd=desktop,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, creationflags=_HIDDEN,
+        )
         if install.returncode != 0:
             return _EXIT_ERROR
     log_path = desktop / "tauri_dev.log"
     if _IS_WINDOWS:
-        # Fully detached, no window at all; build output goes to the log.
+        # No console window; build output goes to the log.
         log = open(log_path, "ab")  # noqa: SIM115 - stays open for the child lifetime
         subprocess.Popen(
-            [npm_cmd, "run", "tauri", "dev"],
+            [node, str(tauri_cli), "dev"],
             cwd=desktop,
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            creationflags=_DETACHED,
+            creationflags=_HIDDEN,
+            close_fds=True,
         )
         log.close()
     else:
         log = open(log_path, "ab")  # noqa: SIM115 - stays open for the child lifetime
         subprocess.Popen(
-            [npm_cmd, "run", "tauri", "dev"],
+            [node, str(tauri_cli), "dev"],
             cwd=desktop,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -335,21 +670,25 @@ def _run_dev(desktop: Path) -> int:
     return _EXIT_OK
 
 
-def _spawn_detached(exe: Path) -> None:
-    """Start the exe detached so the terminal can be closed freely."""
+def _spawn_gui(exe: Path) -> None:
+    """Start the GUI without attaching it to a console or inheriting stdio."""
     if _IS_WINDOWS:
-        subprocess.Popen([str(exe)], stdin=subprocess.DEVNULL, creationflags=_DETACHED, close_fds=True)
+        subprocess.Popen(
+            [str(exe)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, creationflags=_HIDDEN, close_fds=True,
+        )
     else:
         subprocess.Popen([str(exe)], stdin=subprocess.DEVNULL, start_new_session=True)
 
 
 def main() -> int:
     """Entry point for ``axiom --gui``. Never raises."""
+    if _IS_WINDOWS and not _ensure_rust_toolchain():
+        return _EXIT_ERROR
     exe = _find_built_exe()
     if exe is not None:
         try:
-            # Detached: the GUI keeps running after the terminal is closed,
-            # and no inherited pipe pins this process to the console.
+            # The GUI starts as a windowed process without inherited stdio.
             if _launch_exe(exe):
                 return _EXIT_OK
         except FileNotFoundError:
@@ -357,17 +696,6 @@ def main() -> int:
     for desktop in _desktop_dirs():
         if (desktop / "package.json").exists() and (desktop / "src-tauri").exists():
             dev = _run_dev(desktop)
-            if dev == _EXIT_OK and _IS_WINDOWS:
-                return _EXIT_OK  # detached build already started
-            if dev == _EXIT_ERROR:
-                # Toolchain missing → try even a stale exe rather than nothing.
-                exe = _find_built_exe_any()
-                if exe is not None:
-                    try:
-                        if _launch_exe(exe):
-                            return _EXIT_OK
-                    except FileNotFoundError:
-                        pass
             return dev
     print(
         "✕ Десктопное приложение AXIOM не найдено.\n"

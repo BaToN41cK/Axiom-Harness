@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -87,8 +88,61 @@ def test_no_exe_anywhere(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert gui._find_built_exe_any() is None
 
 
-def test_windows_detached_flags_defined() -> None:
+def test_gui_launcher_uses_hidden_non_console_flags() -> None:
     if sys.platform == "win32":
-        assert gui._DETACHED != 0
+        assert gui._HIDDEN == subprocess.CREATE_NO_WINDOW
     else:
-        assert gui._DETACHED == 0
+        assert gui._HIDDEN == 0
+
+
+def test_rust_target_uses_msvc_architecture() -> None:
+    assert gui._rust_target_triple("AMD64") == "x86_64-pc-windows-msvc"
+    assert gui._rust_target_triple("ARM64") == "aarch64-pc-windows-msvc"
+
+
+def test_system_proxy_is_passed_to_rustup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.setattr(gui.urllib.request, "getproxies", lambda: {
+        "http": "http://127.0.0.1:8080", "https": "http://127.0.0.1:8080",
+    })
+    env: dict[str, str] = {}
+
+    gui._apply_system_proxy(env)
+
+    assert env["http_proxy"] == "http://127.0.0.1:8080"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:8080"
+
+
+def test_existing_rust_skips_installer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gui, "_IS_WINDOWS", True)
+    monkeypatch.setattr(gui, "_find_rust_tools", lambda: ("cargo.exe", "rustc.exe"))
+    monkeypatch.setattr(gui, "_version_ok", lambda _: (True, "version"))
+    monkeypatch.setattr(gui, "_rust_host_ok", lambda _: True)
+    monkeypatch.setattr(gui, "_install_rust_toolchain", lambda *_: pytest.fail("unexpected install"))
+    assert gui._ensure_rust_toolchain() is True
+
+
+def test_missing_rust_installs_and_continues(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def status(self, _text: str) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(gui, "_IS_WINDOWS", True)
+    monkeypatch.setattr(gui, "_find_rust_tools", lambda: (None, None))
+    monkeypatch.setattr(gui, "_setup_log_path", lambda: tmp_path / "rust-install.log")
+    monkeypatch.setattr(gui, "_SetupWindow", FakeWindow)
+    monkeypatch.setattr(gui, "_native_message", lambda *_args, **_kwargs: pytest.fail("unexpected dialog"))
+    installed: list[Path] = []
+    monkeypatch.setattr(gui, "_install_rust_toolchain", lambda _window, log: installed.append(log))
+
+    assert gui._ensure_rust_toolchain() is True
+    assert installed == [tmp_path / "rust-install.log"]
