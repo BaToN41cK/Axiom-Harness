@@ -294,6 +294,12 @@ export interface Task {
   revision: number;
   replans: number;
   planning: boolean | null;
+  /** Actual per-category context sizes vs budgets from the last task step (W4.12). */
+  context_report?: {
+    categories: Record<string, number>;
+    budgets: Record<string, number>;
+    over_budget: string[];
+  } | null;
 }
 
 export type ToolState = "running" | "ok" | "failed" | "cancelled";

@@ -9,6 +9,18 @@
 
 ## [Unreleased]
 
+### Added — Desktop task workflow: central execution, resume, delete, diff and context budgets (W4.12/W4.14 slice)
+
+- The chat area switches from the transcript to a central task execution view (`TaskExecution`) when a task is focused: state label, plan and progress, the active step, the pending tool with its arguments, real commands, verification output, errors and the completion/review state all come from the same bridge task snapshot.
+- Cancelled/failed/`waiting_for_user` tasks offer «Продолжить выполнение» through the existing `task_continue`; when a step was interrupted mid-run the resume button stays disabled until the user explicitly acknowledges that this step re-runs from the start (same task id, completed steps are never repeated).
+- Inactive tasks can be deleted from the central view through the existing `task_delete` behind a confirmation dialog; active tasks show no delete action, deleting the opened task returns to the chat, and project files are never touched.
+- The right panel resize is clamped to 360–680 px (`desktop/src/lib/panelSize.ts`), so all four side tabs and the task action buttons stay inside the panel even at the minimum width.
+- The planner prompt now requires human-readable plan values in the user's language (JSON keys and tool names stay English); the hardcoded Russian fallback in `chat.py` was removed (new test `tests/core/test_task_planning_language.py`).
+- `ui-polish-smoke.mjs` covers the panel minimum width and tabs, the central execution view, reload persistence, resume with the same id plus acknowledgement, the delete confirm/cancel/confirm flows, the changed-file diff with real +/- counts, context budget bars and review accept/reject (80 checks).
+- The central view renders per-file diffs from `task.diffs` with real +/- counts, colored diff lines and a 1500-line cap; a completed task can be accepted or rejected inline through the existing `task_review` (same id, review state shown in the view).
+- `TaskRunner` records the actual per-category context sizes and budgets after `build_task_context` into the new `Task.context_report` field; the central view shows budget bars per category with an over-budget highlight (new test `tests/core/test_tasks.py::test_task_runner_records_real_context_report`).
+- docs: `docs/roadmap.md` marks W4.12 DONE (W4 wave `7 done, 7 partial, 1 TODO`); W4.14 stays PARTIAL with its resume UI slice.
+
 ### Completed — W4.7 Tool Router and Robust Tools
 
 - `ToolRegistry.execute()` routes validation → permission → timeout → normalized result → audit. Static/classified `ASK` fail closed without approval, classified `NEVER` blocks even with `approved=True`, and denials are audited.

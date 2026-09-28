@@ -371,6 +371,35 @@ async def test_task_runner_uses_ranked_context_files_in_step_prompt(tmp_path) ->
     assert any(event.kind == "context.files" for event in runner.trajectory.events)
 
 
+@pytest.mark.asyncio
+async def test_task_runner_records_real_context_report(tmp_path) -> None:
+    """W4.12: the Task carries the actual per-category sizes and budgets."""
+    (tmp_path / "calc.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    async def execute(*, step, prompt, on_event):
+        return {"content": "evidence"}
+
+    async def verify():
+        return {"ok": True, "executed": True, "summary": "passed"}
+
+    runner = _runner(tmp_path, planner=Planner(lambda prompt: _plan("x").model_dump_json()),
+                     execute=execute, verify=verify, workspace_root=tmp_path)
+    task = await runner.run(Task(goal="Fix calc", changed_files=["calc.py"], plan=TaskPlan(
+        steps=[PlanStep(id="inspect", goal="Inspect calc.py", tools=["read_file"], done_when="seen")],
+        definition_of_done=["passed"],
+    )))
+    assert task.state is TaskState.COMPLETED
+    report = task.context_report
+    assert report is not None
+    assert report["categories"]["files"] > 0
+    assert report["budgets"]["files"] > 0
+    assert set(report["categories"]) == set(report["budgets"])
+    assert report["over_budget"] == []
+    # The report is ordinary Task State: it survives a store round trip (restart).
+    loaded = runner.store.load(task.id)
+    assert loaded is not None and loaded.context_report == report
+
+
 async def test_task_runner_compacts_structured_state_and_continues(tmp_path) -> None:
     seen: list[tuple[str, str]] = []
 

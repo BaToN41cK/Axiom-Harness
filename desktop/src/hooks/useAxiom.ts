@@ -25,6 +25,7 @@ import { clearComposerData, readComposerDraft, writeComposerDraft } from "../lib
 import { stripDataUrl } from "../lib/format";
 import { playUiSound } from "../lib/sound";
 import type { UiSound } from "../lib/sound";
+import { clampRightPanelWidth, RIGHT_PANEL_MIN } from "../lib/panelSize";
 import {
   activeProviderLabel,
   errorText,
@@ -159,6 +160,8 @@ export function useAxiom() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskRequestPending, setTaskRequestPending] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
+  const latestTaskEventRef = useRef<Task | null>(null);
   // W2.4: an ASK tool call that is really blocked until the user answers.
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [liveState, setLiveState] = useState("idle");
@@ -233,9 +236,9 @@ export function useAxiom() {
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(() => {
     try {
       const saved = Number(localStorage.getItem("axiom.rightPanelWidth"));
-      return Number.isFinite(saved) && saved >= 240 && saved <= 680 ? saved : 340;
+      return clampRightPanelWidth(saved);
     } catch {
-      return 340;
+      return RIGHT_PANEL_MIN;
     }
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -856,6 +859,9 @@ export function useAxiom() {
         }
         case "task": {
           if (event.task.scope !== taskScopeRef.current) break;
+          const last = latestTaskEventRef.current;
+          if (last?.id === event.task.id && last.revision > event.task.revision) break;
+          latestTaskEventRef.current = event.task;
           setTasks((list) => {
             const existing = list.find((task) => task.id === event.task.id);
             if (existing && existing.revision > event.task.revision) return list;
@@ -863,6 +869,7 @@ export function useAxiom() {
           });
           if (taskActiveRef.current) {
             setActiveTaskId(event.task_id);
+            if (event.kind === "task.started" || event.kind === "task.resumed") setFocusedTaskId(event.task_id);
             const labels: Record<Task["state"], string> = {
               pending: "готова к запуску",
               analyzing: "анализирует проект",
@@ -1516,13 +1523,21 @@ export function useAxiom() {
       return null;
     }
     taskActiveRef.current = true;
+    latestTaskEventRef.current = null;
+    setFocusedTaskId(typeof args.id === "string" ? args.id : null);
+    const scopeSeq = workspaceSeqRef.current;
     setTaskRequestPending(true);
     beginGeneration();
     let launched = false;
     try {
-      const task = await request<Task>(cmd, args);
+      const reply = await request<Task>(cmd, args);
+      if (scopeSeq !== workspaceSeqRef.current) return null;
+      // A completion event may arrive before the launch acknowledgement.
+      const eventTask = latestTaskEventRef.current as Task | null;
+      const task = eventTask?.id === reply.id && eventTask.revision > reply.revision ? eventTask : reply;
       setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
       setActiveTaskId(task.id);
+      setFocusedTaskId(task.id);
       launched = !["completed", "failed", "cancelled", "waiting_for_user"].includes(task.state);
       if (!launched) {
         taskActiveRef.current = false;
@@ -1601,6 +1616,7 @@ export function useAxiom() {
       const result = await request<{ deleted: boolean }>("task_delete", { id });
       if (result.deleted) {
         setTasks((list) => list.filter((item) => item.id !== id));
+        setFocusedTaskId((current) => current === id ? null : current);
       }
       return result.deleted;
     } catch (err) {
@@ -1668,6 +1684,7 @@ export function useAxiom() {
   }
 
   function commitRightPanelWidth(width: number) {
+    width = clampRightPanelWidth(width);
     setRightPanelWidth(width);
     try {
       localStorage.setItem("axiom.rightPanelWidth", String(width));
@@ -2092,6 +2109,8 @@ export function useAxiom() {
 
   useEffect(() => {
     taskScopeRef.current = workspace?.current?.path ?? null;
+    setFocusedTaskId(null);
+    latestTaskEventRef.current = null;
     setTasks([]);
     if (phase === "ready") void refreshTasks();
   }, [workspace?.current?.path, phase]);
@@ -2502,6 +2521,8 @@ export function useAxiom() {
     tasks,
     taskRequestPending,
     activeTaskId,
+    focusedTaskId,
+    setFocusedTaskId,
     startTask,
     resumeTask,
     cancelTask,

@@ -58,6 +58,8 @@ class Task(BaseModel):
     errors: list[TaskError] = Field(default_factory=list)
     tests: list[dict] = Field(default_factory=list)
     context_snapshot: CompactionState | None = None
+    #: Actual per-category context sizes/budgets from the last task step (W4.12).
+    context_report: dict | None = None
     pending_tool: dict | None = None
     active_processes: list[dict] = Field(default_factory=list)
     commands: list[dict] = Field(default_factory=list)
@@ -395,6 +397,10 @@ class TaskRunner:
                         f"{task.goal}\n{step.goal}", [], workspace_root=self.workspace_root,
                         changed_files=task.changed_files, budgets={"task": 0, "files": file_budget},
                     )
+                    # Real category sizes vs budgets for the Task UI (W4.12).
+                    task.context_report = {"categories": evidence.report["categories"],
+                                           "budgets": evidence.report["budgets"],
+                                           "over_budget": evidence.report["over_budget"]}
                     if evidence.files and evidence.messages:
                         prompt += "\n" + str(evidence.messages[0]["content"])
                         self.trajectory.append("context.files", "Relevant task files selected",

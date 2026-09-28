@@ -12,6 +12,8 @@ import ModelSelector from "./components/ModelSelector";
 import { useAxiom } from "./hooks/useAxiom";
 import Presence from "./components/Presence";
 import { installSoundActivation, playUiSound } from "./lib/sound";
+import { clampRightPanelWidth } from "./lib/panelSize";
+import TaskExecution from "./components/TaskExecution";
 
 import Explorer from "./components/Explorer";
 import GitPanel from "./components/GitPanel";
@@ -45,7 +47,7 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
       if (!dragging.current) return;
-      const next = Math.min(680, Math.max(240, window.innerWidth - event.clientX));
+      const next = clampRightPanelWidth(window.innerWidth - event.clientX);
       lastWidth.current = next;
       s.setRightPanelWidth(next);
     };
@@ -94,7 +96,6 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
         <TaskPanel
           tasks={s.tasks}
           busy={s.generating || s.taskRequestPending}
-          activeId={s.activeTaskId}
           onStart={s.startTask}
           onResume={s.resumeTask}
           onCancel={s.cancelTask}
@@ -104,6 +105,7 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
           onSave={s.saveTask}
           onDelete={s.deleteTask}
           onReview={s.reviewTask}
+          onInspect={s.setFocusedTaskId}
         />
       )}
       {tab === "files" && (
@@ -325,6 +327,13 @@ export default function App() {
 
         <div className={"workbench" + (s.rightPanelOpen ? "" : " panel-closed")}>
           <div className="workbench-chat">
+            {s.focusedTaskId || s.taskRequestPending ? (
+              <TaskExecution
+                task={s.tasks.find((task) => task.id === s.focusedTaskId) ?? null}
+                store={s}
+                onBack={() => s.setFocusedTaskId(null)}
+              />
+            ) : (
             <MessageList
               messages={s.messages}
               generating={s.generating}
@@ -341,6 +350,7 @@ export default function App() {
               onStop={s.cancel}
               onContinue={s.continueGeneration}
             />
+            )}
 
             {s.lastAction && (
               <div className={"last-action" + (s.lastAction.ok ? " ok" : " error")}>

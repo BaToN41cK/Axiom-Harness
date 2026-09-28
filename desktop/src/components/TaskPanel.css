@@ -1,4 +1,23 @@
 /* AXIOM Task Panel — Interactive checklist & plan execution */
+.task-summary { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; padding: 12px; text-align: left; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-secondary); margin-bottom: 8px; cursor: pointer; }
+.task-delete-confirm { margin: 18px 0; padding: 14px; border: 1px solid color-mix(in srgb, var(--status-error) 32%, transparent); border-radius: var(--radius); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; }
+.task-delete-confirm b { color: var(--status-error); }
+.task-delete-confirm p { margin: 6px 0 14px; line-height: 1.5; }
+.task-delete-confirm > div { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.task-execution-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.task-summary strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.task-summary-link { font-size: 11px; color: var(--accent-text); }
+.task-summary:hover { border-color: var(--accent-border); }
+.task-resume { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin: 18px 0; padding: 16px; border: 1px solid var(--accent-border); border-radius: var(--radius); background: var(--bg-secondary); }
+.task-resume p { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.task-resume .task-acknowledge-check { color: var(--text-secondary); align-items: flex-start; }
+.task-execution-warning pre { margin: 4px 0 0; max-height: 120px; overflow: auto; font: 11px/1.5 var(--mono); }
+.task-execution-scroll { overflow-wrap: anywhere; }
+.task-execution-scroll > details { margin-top: 24px; }
+.task-execution-scroll summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); padding: 8px 0; }
+.task-execution-scroll pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-execution-loading { display: flex; gap: 10px; align-items: center; padding: 40px 24px; color: var(--text-muted); }
+.task-execution-head { flex-wrap: wrap; flex-shrink: 0; padding-top: 8px; padding-bottom: 8px; }
 .task-panel {
   display: flex;
   flex-direction: column;
@@ -116,6 +135,7 @@
 
 .task-creator-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
@@ -136,7 +156,10 @@
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 0.12s ease;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .task-btn.primary {
@@ -291,6 +314,7 @@
 
 .task-card-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -334,6 +358,7 @@
 }
 
 .task-goal {
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: 13.5px;
   font-weight: 600;
@@ -343,6 +368,7 @@
 }
 
 .task-detail-hint {
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
@@ -672,6 +698,7 @@
 
 .task-completed-note {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 12px;

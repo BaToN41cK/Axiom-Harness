@@ -27,7 +27,7 @@ A feature is complete only after implementation, real tests, and updated documen
 | W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
 | W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
 | W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 7 partial, 11 TODO |
-| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 6 done, 8 partial, 1 TODO |
+| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 7 done, 7 partial, 1 TODO |
 
 ---
 
@@ -496,7 +496,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.12 Task UI: Activity, Panel, Tool Calls, Diff, Context
 
-**Status:** PARTIAL — Task Panel now reflects live step/tool/permission states, changed paths, and verification failures; diff and context budgets remain · **Priority:** P1 · **Phase:** 10
+**Status:** DONE — the chat area has a central task execution view (plan/progress, live step/tool/permission states, collapsible commands, checks, errors, changed paths, resume and confirmed delete) plus per-file diffs with +/- counts, inline accept/reject review, and actual per-category context budgets · **Priority:** P1 · **Phase:** 10
 
 **Outcome:** Users can understand what the task is doing, what changed, and what remains.
 
@@ -506,7 +506,14 @@ After every phase: tests → build/type-check → review changed files → fix r
 task events and return to the prior state after a decision. The Desktop card shows
 the pending tool, changed paths, structured execution errors, and verification
 summary/reason from the same task snapshot. Newly observed paths are limited to
-the destination for copy operations and include both ends for moves.
+the destination for copy operations and include both ends for moves. The Desktop
+chat area switches from the transcript to a central execution view
+(`TaskExecution`) when a task is focused: state label, plan progress, the active
+step, the pending tool with arguments, collapsible real commands, checks,
+errors, and completion/review state are rendered from bridge task events. The
+view offers user-confirmed resume for cancelled/failed/`waiting_for_user` tasks
+(with an interrupted-step acknowledgement checkbox) and a confirmed delete for
+inactive tasks that returns to the chat. The same view renders per-file diffs from the task snapshot with real +/- counts, colored lines and a 1500-line cap, offers inline accept/reject review through the existing `task_review` once the task completes, and shows the actual per-category context sizes against their budgets (bars with an over-budget highlight) from the new `Task.context_report` field.
 
 **DoD:** UI state matches backend events, long tool output is collapsed safely, diff matches Git/task state, and no completion state appears without a real event.
 ## W4.13 IPC, Streaming, Memory, and Process Performance
@@ -521,7 +528,7 @@ the destination for copy operations and include both ends for moves.
 
 ## W4.14 Errors, Cancellation, Resume, Observability
 
-**Status:** PARTIAL — model/orchestrator cancellation, trajectory resume, subprocess cleanup, and Task resume exist · **Priority:** P0 · **Phase:** 12
+**Status:** PARTIAL — model/orchestrator cancellation, trajectory resume, subprocess cleanup, Task resume, and a user-confirmed resume UI with interrupted-step acknowledgement exist · **Priority:** P0 · **Phase:** 12
 
 **Outcome:** Failures and interruption are first-class, recoverable task data rather than transient UI text.
 
@@ -607,3 +614,4 @@ Network tests use explicit live markers. A skipped live test is not reported as 
 | 2026-09-27 | Completed W4.4: `CompactionState` (goal/plan/decisions/changed_files/errors/tests/important_context) is validated before use; `ContextEngine.compact_structured()` triggers at 75% of a known window, leaves original messages intact and emits a `context.compacted` trajectory event. TaskRunner persists a compact snapshot in Task State, restores it on restart/resume, and does not re-execute completed steps. W4.3 budgets were hardened for long task/history/trajectory payloads and oversized files. Deterministic trigger/schema/trajectory/three-step continuation/restart tests added; W4 summary `4 done, 10 partial, 1 TODO`. |
 | 2026-09-27 | Completed W4.7: ToolRegistry routes validation → permission → timeout → normalized result → audit. Static/classified ASK fail closed without approval; classified NEVER blocks even with `approved=True`; denials are audited. `max_output` enforced at the registry; `ToolResult.as_contract()` exposes `{tool, ok, content, error, duration_ms, meta}`; registry-level timeout cancels handlers and process tools reap their process trees on `CancelledError`; terminal output streams line-by-line via `on_output`. Agent `git_add` stages only explicit workspace files and requires fresh `allow_once` consent even in auto mode; agent `git_commit` requires a SHA-256 hash of the real staged diff (shown in the permission dialog) and fresh per-call consent, failing when the staged diff changed after review; `git_push` stays manual HIGH risk and absent from the registry. Tests: timeout/cancellation/audit, streaming, explicit-file staging, reviewed-diff commit acceptance/staleness; verified with the tool/git/security suites and Ruff. |
 | 2026-09-27 | Completed W4.8: `Config.max_retries` (default 3) bounds the TaskRunner repair loop; real subprocess `exit_code` is preserved so `ok=True` with a non-zero exit can never pass; structured `{file, line, message}` diagnostics are extracted from pytest/Ruff/TypeScript/Rust output and prioritized by the task's changed files in the repair prompt; the ChatSession boundary refuses a reviewer when any real check failed; a deterministic acceptance runs real pytest failing → focused file repair → passing. Tests: diagnostics extraction/prioritization, retry-limit honesty, contradictory-exit rejection, real fail→repair→pass; W4 wave summary now `6 done, 8 partial, 1 TODO`; verified with the verification/task suites and Ruff. |
+| 2026-09-28 | Desktop task workflow slice (W4.12 completed, W4.14 partial): the chat area opens a central task execution view (`TaskExecution`) driven by focused-task bridge events — plan/progress, live step, pending tool, collapsible commands, checks, errors, review state; user-confirmed resume of cancelled/failed/`waiting_for_user` tasks via the existing `task_continue` with an acknowledgement checkbox when a step was interrupted mid-run; confirmed deletion of inactive tasks via the existing `task_delete` (active tasks are not deletable, deleting the opened task returns to the chat, project files untouched); right panel clamped to 360–680 px so all four tabs and task buttons fit at minimum width; the planner now requires human-readable plan values in the user language (hardcoded Russian fallback removed from `chat.py`, new `test_task_planning_language.py`); `ui-polish-smoke.mjs` extended to 80 checks covering panel width, central execution, reload persistence, resume-with-same-id, the delete confirm/cancel flows, the changed-file diff with +/- counts, context budget bars and inline review accept/reject; the central view gained per-file diffs with real +/- counts and review actions, and `TaskRunner` persists the actual per-category context sizes/budgets in the new `Task.context_report` field (new test `test_task_runner_records_real_context_report`). |

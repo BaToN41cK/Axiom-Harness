@@ -35,7 +35,6 @@ export const STATE_CONFIG: Record<
 interface TaskCardProps {
   task: Task;
   busy: boolean;
-  activeId: string | null;
   onResume: (id: string, acknowledge: boolean) => Promise<Task | null>;
   onCancel: (id: string) => Promise<boolean>;
   onSave: (
@@ -44,10 +43,11 @@ interface TaskCardProps {
   ) => Promise<Task | null>;
   onDelete: (id: string) => Promise<boolean>;
   onReview: (id: string, decision: "accept" | "reject") => Promise<Task | null>;
+  onInspect: (id: string) => void;
 }
 
 export function TaskCard(props: TaskCardProps) {
-  const { task, busy, activeId, onResume, onCancel, onSave, onDelete, onReview } = props;
+  const { task, busy, onResume, onCancel, onSave, onDelete, onReview, onInspect } = props;
   const [acknowledged, setAcknowledged] = useState(false);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editStepText, setEditStepText] = useState("");
@@ -55,7 +55,7 @@ export function TaskCard(props: TaskCardProps) {
   const [newStepGoal, setNewStepGoal] = useState("");
 
   const runningState = ["analyzing", "planning", "executing", "waiting_for_permission", "verifying"].includes(task.state);
-  const isActive = runningState && (activeId === task.id || (busy && task.state === "executing"));
+  const isActive = runningState;
   const stateMeta = STATE_CONFIG[task.state] || { label: task.state, tone: "muted" };
 
   const steps = task.plan?.steps ?? [];
@@ -128,6 +128,15 @@ export function TaskCard(props: TaskCardProps) {
         </span>
 
         <div className="task-card-header-actions">
+          <button
+            type="button"
+            className="task-btn-icon"
+            title="Открыть выполнение на главном экране"
+            aria-label="Открыть выполнение на главном экране"
+            onClick={() => onInspect(task.id)}
+          >
+            <Play size={13} strokeWidth={1.8} />
+          </button>
           {!isActive && (
             <button
               className="task-btn-icon danger"
@@ -177,7 +186,7 @@ export function TaskCard(props: TaskCardProps) {
           <ul className="task-steps-list">
             {steps.map((step, idx) => {
               const isCompleted = step.state === "completed";
-              const isRunning = step.state === "running";
+              const isRunning = step.state === "running" && isActive;
               const isFailed = step.state === "failed";
               const isEditing = editingStepId === step.id;
 

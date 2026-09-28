@@ -77,6 +77,9 @@ class Planner:
             "Each step has id (unique ASCII identifier), goal, tools (names), done_when. "
             "Use 1 to 8 small sequential steps; do not claim work has already happened. "
             "definition_of_done is a nonempty list of concrete acceptance criteria. "
+            "Write all human-readable values (goal, done_when, definition_of_done) in the same natural language "
+            "as the user's Goal. Do not translate the user's goal into another language. Keep JSON keys, step ids, "
+            "and tool names unchanged/ASCII. "
             "Do not execute tools. Available tools: " + json.dumps(tools)
             + "\nGoal: " + goal + context
         )

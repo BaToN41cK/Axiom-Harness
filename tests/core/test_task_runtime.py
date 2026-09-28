@@ -159,7 +159,11 @@ async def test_task_plan_create_save_and_custom_start(tmp_path, monkeypatch):
     mod = _bridge_module()
     monkeypatch.setattr(mod, "_write_line", lambda line: None)
 
-    # 1. task_plan fallback or model
+    async def generate(prompt):
+        return plan_json()
+
+    monkeypatch.setattr(session, "_plan_task", generate)
+    # 1. task_plan uses an actual validated model response.
     plan = await mod._handle(session, "task_plan", {"goal": "Реализовать фичу"})
     assert "steps" in plan
     assert len(plan["steps"]) >= 1

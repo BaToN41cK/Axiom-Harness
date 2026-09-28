@@ -990,36 +990,15 @@ class ChatSession:
     async def task_plan(self, goal: str) -> object:
         if self.busy:
             raise ValueError("A generation is already running")
-        from axiom.core.planner import Planner, PlanStep, TaskPlan
+        from axiom.core.planner import Planner
         planner = Planner(self._plan_task)
         tools = [d.name for d in self.tools.definitions()]
         clean_goal = goal.strip()
-        try:
-            return await planner.create(clean_goal, tools)
-        except Exception:
-            return TaskPlan(
-                steps=[
-                    PlanStep(
-                        id="analyze",
-                        goal=f"Исследовать структуру проекта и контекст задачи: {clean_goal[:120]}",
-                        tools=tools,
-                        done_when="Собрана необходимая информация о файлах и логике",
-                    ),
-                    PlanStep(
-                        id="implement",
-                        goal=f"Реализовать решение: {clean_goal[:120]}",
-                        tools=tools,
-                        done_when="Изменения внесены в исходный код проекта",
-                    ),
-                    PlanStep(
-                        id="verify",
-                        goal="Запустить проверки и тесты для валидации решения",
-                        tools=tools,
-                        done_when="Тесты и проверки выполнены успешно",
-                    ),
-                ],
-                definition_of_done=["Код реализован согласно поставленной цели", "Проверки завершены без ошибок"],
-            )
+        if not clean_goal:
+            raise ValueError("Task goal cannot be empty")
+        # Do not replace a failed model response with a canned plan: that would
+        # hide the failure and can silently use the wrong natural language.
+        return await planner.create(clean_goal, tools)
 
     def task_create(self, goal: str, *, plan: dict | object | None = None) -> Task:
         from axiom.core.planner import TaskPlan

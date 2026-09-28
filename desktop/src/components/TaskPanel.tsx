@@ -1,13 +1,12 @@
 import { useState } from "react";
 import { ListChecks, Loader2, Play, RefreshCw, Sparkles } from "lucide-react";
 import type { Task, TaskPlan } from "../types";
-import { TaskCard } from "./TaskCard";
+import { TaskCard, STATE_CONFIG } from "./TaskCard";
 import "./TaskPanel.css";
 
 interface Props {
   tasks: Task[];
   busy: boolean;
-  activeId: string | null;
   onStart: (goal: string, plan?: TaskPlan) => Promise<Task | null>;
   onResume: (id: string, acknowledge: boolean) => Promise<Task | null>;
   onCancel: (id: string) => Promise<boolean>;
@@ -20,6 +19,7 @@ interface Props {
   ) => Promise<Task | null>;
   onDelete: (id: string) => Promise<boolean>;
   onReview: (id: string, decision: "accept" | "reject") => Promise<Task | null>;
+  onInspect: (id: string) => void;
 }
 
 export default function TaskPanel(props: Props) {
@@ -33,8 +33,8 @@ export default function TaskPanel(props: Props) {
     try {
       const plan = await props.onPlan(text);
       if (plan) {
-        await props.onCreate(text, plan);
-        setGoal("");
+        const task = await props.onCreate(text, plan);
+        if (task) setGoal("");
       }
     } finally {
       setPlanning(false);
@@ -47,8 +47,9 @@ export default function TaskPanel(props: Props) {
     setPlanning(true);
     try {
       const plan = await props.onPlan(text);
-      await props.onStart(text, plan ?? undefined);
-      setGoal("");
+      if (!plan) return;
+      const task = await props.onStart(text, plan);
+      if (task) setGoal("");
     } finally {
       setPlanning(false);
     }
@@ -132,17 +133,23 @@ export default function TaskPanel(props: Props) {
             </p>
           </div>
         ) : (
-          props.tasks.map((task) => (
+          props.tasks.map((task) => task.state !== "pending" ? (
+            <button className="task-summary" key={task.id} onClick={() => props.onInspect(task.id)}>
+              <span className={`task-status-badge ${STATE_CONFIG[task.state].tone}`}>{STATE_CONFIG[task.state].label}</span>
+              <strong>{task.goal}</strong>
+              <span className="task-summary-link">Открыть выполнение →</span>
+            </button>
+          ) : (
             <TaskCard
               key={task.id}
               task={task}
               busy={props.busy}
-              activeId={props.activeId}
               onResume={props.onResume}
               onCancel={props.onCancel}
               onSave={props.onSave}
               onDelete={props.onDelete}
-          onReview={props.onReview}
+              onReview={props.onReview}
+              onInspect={props.onInspect}
             />
           ))
         )}

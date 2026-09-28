@@ -31,9 +31,40 @@ const shim = `(() => {
     router_primary: null, router_fallbacks: [] };
   window.__patches = [];
   window.__calls = [];
+  let task = JSON.parse(sessionStorage.getItem('smoke.task') || 'null');
+  const plan = {steps:[
+    {id:'inspect',goal:'Изучить проект',tools:[],done_when:'Контекст собран',state:'pending',result:''},
+    {id:'fix',goal:'Исправить ошибку',tools:[],done_when:'Проверка пройдена',state:'pending',result:''}
+  ],definition_of_done:['Проверка пройдена']};
+  const publish = (state, kind) => {
+    task.state = state; task.revision++; task.updated_at = Date.now()/1000;
+    sessionStorage.setItem('smoke.task', JSON.stringify(task));
+    listeners.get('bridge://line')?.({payload:{type:'event',event:{type:'task',kind,task_id:task.id,timestamp:Date.now()/1000,task:structuredClone(task)}}});
+  };
+  window.__finishTask = () => {
+    task.plan.steps[1].state='completed'; task.plan.steps[1].result='Изменения проверены';
+    task.tests=[{ok:true,executed:true,summary:'2 passed'}];
+    publish('completed','task.completed');
+  };
   function data(cmd, args) {
     window.__calls.push({cmd, args});
     switch(cmd) {
+      case 'tasks': return task ? [task] : [];
+      case 'task_plan': return structuredClone(plan);
+      case 'task_launch':
+        task={id:'smoke-task',goal:args.goal,state:'executing',scope:null,plan:structuredClone(args.plan),plan_history:[],
+          changed_files:['src/example.ts'],errors:[],tests:[],pending_tool:null,active_processes:[],commands:[],
+          file_baselines:{},unknown_baselines:[],review_status:'pending',detail:'Выполняется второй шаг',
+          diffs:{'src/example.ts':'--- a/src/example.ts\\n+++ b/src/example.ts\\n@@ -1,2 +1,3 @@\\n const a = 1;\\n-const b = 2;\\n+const b = 3;\\n+const c = 4;\\n'},
+          context_report:{categories:{system:120,project:40,files:860,tool_results:0,conversation:0},
+            budgets:{system:4000,project:2000,files:24000,tool_results:6000,conversation:16000},over_budget:[]},
+          created_at:Date.now()/1000,updated_at:Date.now()/1000,revision:1,replans:0,planning:true};
+        task.plan.steps[0].state='completed'; task.plan.steps[0].result='Контекст собран'; task.plan.steps[1].state='running';
+        publish('executing','task.started'); return structuredClone(task);
+      case 'task_cancel': publish('cancelled','task.cancelled'); return {cancelled:true};
+      case 'task_continue': publish('executing','task.resumed'); return structuredClone(task);
+      case 'task_delete': task=null; sessionStorage.removeItem('smoke.task'); return {deleted:true};
+      case 'task_review': task.review_status = args.decision === 'accept' ? 'accepted' : 'rejected'; publish(task.state,'task.reviewed'); return structuredClone(task);
       case 'health': return { available: true, version: 'test', url: config.ollama_url };
       case 'get_config': return config;
       case 'set_config': window.__patches.push(args.patch); Object.assign(config, args.patch); return config;
@@ -199,6 +230,7 @@ try {
   await click('.ws-current');
   const width = await evaluate("document.querySelector('.workbench-side').getBoundingClientRect().width");
   await click('.topbar .icon-btn[aria-label$=" R"]');
+  await sleep(250);
   check("right panel collapsed and inert", await evaluate("document.querySelector('.workbench-side').inert && document.querySelector('.workbench-side').getBoundingClientRect().width === 0"));
   await click('.topbar .icon-btn[aria-label$=" R"]');
   check("right panel width restored", await evaluate(`document.querySelector('.workbench-side').getBoundingClientRect().width === ${width}`));
@@ -212,6 +244,55 @@ try {
   await evaluate("document.body.classList.add('resizing'); document.documentElement.classList.add('theme-anim')");
   check("resize has no lag even during theme fade", await evaluate("getComputedStyle(document.querySelector('.workbench-side')).transitionDuration === '0s'"));
   await evaluate("document.body.classList.remove('resizing'); document.documentElement.classList.remove('theme-anim')");
+  const minHandle = await evaluate("(() => { const r=document.querySelector('.side-resizer').getBoundingClientRect(); return {x:r.x+2,y:r.y+100}; })()");
+  await send('Input.dispatchMouseEvent', {type:'mousePressed', ...minHandle, button:'left', clickCount:1});
+  await send('Input.dispatchMouseEvent', {type:'mouseMoved', x:1398, y:minHandle.y, buttons:1});
+  await send('Input.dispatchMouseEvent', {type:'mouseReleased', x:1398, y:minHandle.y, button:'left', clickCount:1});
+  await sleep(300);
+  check('panel minimum is 360px', await evaluate("document.querySelector('.workbench-side').getBoundingClientRect().width===360"));
+  check('all four tabs remain inside panel', await evaluate("(() => {const r=document.querySelector('.workbench-side').getBoundingClientRect();return [...document.querySelectorAll('.side-tabs button')].every(b=>b.getBoundingClientRect().right<=r.right);})()"));
+  await click('.side-tabs button:last-child');
+  check('task buttons fit minimum panel width', await evaluate("(() => {const r=document.querySelector('.workbench-side').getBoundingClientRect();return [...document.querySelectorAll('.task-creator-actions button')].every(b=>b.getBoundingClientRect().right<=r.right);})()"));
+  await evaluate("(() => {const e=document.querySelector('.task-goal-input');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'Исправить ошибку');e.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  await sleep(50);
+  await click('.task-creator-actions .primary');
+  check('execution opens in main chat area', await evaluate("!!document.querySelector('.workbench-chat .task-execution') && !!document.querySelector('.task-summary')"));
+  check('real completed steps determine progress', await evaluate("document.querySelector('.task-execution-title-row strong').textContent==='50%'"));
+  await click('.task-execution-stop');
+  check('stop offers resume', await evaluate("!!document.querySelector('.task-resume') && !document.querySelector('.task-execution-now')"));
+  check('interrupted writes require acknowledgement', await evaluate("document.querySelector('.task-resume button').disabled"));
+  await send('Page.reload');
+  for(let i=0;i<80;i++){if(await evaluate("!!document.querySelector('.topbar')")) break;await sleep(100);}
+  await click('.side-tabs button:last-child');
+  await click('.task-summary');
+  check('saved stopped task can be opened after reload', await evaluate("!!document.querySelector('.task-resume')"));
+  await click('.task-resume input');
+  await click('.task-resume button');
+  check('resume uses same task id and explicit acknowledgement', await evaluate("window.__calls.some(c=>c.cmd==='task_continue' && c.args.id==='smoke-task' && c.args.acknowledge===true)"));
+  check('resume keeps completed work', await evaluate("document.querySelector('.task-execution-title-row strong').textContent==='50%' && !!document.querySelector('.task-execution-now')"));
+  const taskShot = await send('Page.captureScreenshot');
+  await writeFile(path.join(tmp, 'task-execution.png'), Buffer.from(taskShot.data,'base64'));
+  await evaluate('window.__finishTask()'); await sleep(80);
+  check('completed result stays in central screen', await evaluate("!!document.querySelector('.task-execution-done') && document.querySelector('.task-execution-title-row strong').textContent==='100%'"));
+  check('changed-file diff is shown with real +/- counts', await evaluate("(() => { const s=document.querySelector('.task-execution-section .task-diff-file summary'); return !!s && s.textContent.includes('src/example.ts') && s.textContent.includes('+2') && s.textContent.includes('−1'); })()"));
+  check('context category budgets are shown', await evaluate("document.querySelectorAll('.task-execution-budget').length >= 4 && document.querySelector('.task-execution-budget-num').textContent.includes('/')"));
+  check('completed diff offers review actions', await evaluate("!!document.querySelector('.task-execution-review .primary') && !!document.querySelector('.task-execution-review .danger')"));
+  await click('.task-execution-review .primary');
+  check('review uses existing task_review with same id', await evaluate("window.__calls.some(c=>c.cmd==='task_review' && c.args.id==='smoke-task' && c.args.decision==='accept')"));
+  check('accepted review is reflected in the central screen', await evaluate("!!document.querySelector('.task-execution-review-state.accepted') && document.querySelector('.task-execution-done').textContent.includes('приняты')"));
+  await click('.task-execution-back');
+  check('return to chat is available', await evaluate("!document.querySelector('.task-execution') && !!document.querySelector('.chat-scroll')"));
+  await click('.task-summary');
+  check('completed task shows delete action', await evaluate("!!document.querySelector('.task-execution-actions .danger')"));
+  await click('.task-execution-actions .danger');
+  check('delete asks for confirmation first', await evaluate("!!document.querySelector('.task-delete-confirm') && !window.__calls.some(c=>c.cmd==='task_delete')"));
+  await click('.task-delete-confirm .ghost');
+  check('cancel leaves the completed task', await evaluate("!!document.querySelector('.task-execution') && !window.__calls.some(c=>c.cmd==='task_delete')"));
+  await click('.task-execution-actions .danger');
+  await click('.task-delete-confirm .danger');
+  check('confirmed delete uses same task id', await evaluate("window.__calls.some(c=>c.cmd==='task_delete' && c.args.id==='smoke-task')"));
+  check('deleting opened task returns to chat', await evaluate("!document.querySelector('.task-execution') && !!document.querySelector('.chat-scroll')"));
+  check('deleted task disappears from task list', await evaluate("!document.querySelector('.task-summary')"));
   for (const theme of ['obsidian', 'light', 'midnight', 'terminal', 'solarized']) {
     await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
     check(`theme ${theme} has semantic surfaces`, await evaluate("getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)'"));
