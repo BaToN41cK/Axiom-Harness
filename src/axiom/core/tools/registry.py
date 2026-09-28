@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable, Iterable
 from copy import copy, deepcopy
 
+from axiom.core.cancellation import CancelToken
 from axiom.core.errors import AxiomError
 from axiom.core.security import ToolAudit
 from axiom.core.tools.base import (
@@ -33,6 +34,10 @@ class ToolRegistry:
         #: tools whose danger depends on the arguments (e.g. shell commands).
         #: A classifier registered for one tool never affects other tools.
         self.classifier: dict[str, Callable[[str, dict], ToolPermission]] = {}
+        #: Shared cooperative cancellation signal (W4.14). When set, no new
+        #: tool execution starts; already-running tools keep their own
+        #: process-tree cleanup on asyncio cancellation.
+        self.cancel_token: CancelToken | None = None
 
     def register(
         self,
@@ -126,6 +131,8 @@ class ToolRegistry:
         A model can never force execution of a ``NEVER`` tool, and unknown
         tools fail with a structured result instead of raising.
         """
+        if self.cancel_token is not None:
+            self.cancel_token.raise_if_cancelled()
         started = time.perf_counter()
         entry = self._tools.get(name)
         if entry is None:

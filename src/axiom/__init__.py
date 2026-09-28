@@ -8,6 +8,7 @@ and on :mod:`axiom.core` / :mod:`axiom.shared` modules.
 
 from axiom.core.agents import AgentProfile, AgentRegistry
 from axiom.core.bus import EventBus
+from axiom.core.cancellation import CancelToken
 from axiom.core.chat import ChatSession
 from axiom.core.config import Config
 from axiom.core.context_engine import CompactionState, ContextEngine, StructuredCompaction
@@ -99,6 +100,7 @@ __all__ = [
     "OpenAICompatibleProvider",
     "ProviderCapabilities",
     "ProviderStatus",
+    "CancelToken",
     "EventBus",
     "Trajectory",
     "TrajectoryStore",

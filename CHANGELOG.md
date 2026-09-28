@@ -19,7 +19,9 @@
 - `ui-polish-smoke.mjs` covers the panel minimum width and tabs, the central execution view, reload persistence, resume with the same id plus acknowledgement, the delete confirm/cancel/confirm flows, the changed-file diff with real +/- counts, context budget bars and review accept/reject (80 checks).
 - The central view renders per-file diffs from `task.diffs` with real +/- counts, colored diff lines and a 1500-line cap; a completed task can be accepted or rejected inline through the existing `task_review` (same id, review state shown in the view).
 - `TaskRunner` records the actual per-category context sizes and budgets after `build_task_context` into the new `Task.context_report` field; the central view shows budget bars per category with an over-budget highlight (new test `tests/core/test_tasks.py::test_task_runner_records_real_context_report`).
-- docs: `docs/roadmap.md` marks W4.12 DONE (W4 wave `7 done, 7 partial, 1 TODO`); W4.14 stays PARTIAL with its resume UI slice.
+- Shared `CancelToken` (new `axiom.core.cancellation`, exported from `axiom`): one token per task run with parent/child linking; `TaskRunner.request_cancel()` sets it and the run stops at its next checkpoint (start, before each step, model request, verification attempt); `ChatSession.task_cancel` signals it before the hard asyncio cancel; `ToolRegistry.execute` refuses to start new work after cancellation and the per-request tool subset inherits the task token (new tests `tests/core/test_cancellation.py`, checkpoint tests in `tests/core/test_tasks.py`).
+- Failed verification normalizes into a structured `TaskError` (`type`, `command`, `exit_code`, `stdout` taken from the failing check); task-scoped `model.request`/`model.response` and `verification.started`/`verification.completed`/`verification.failed` events now carry `task_id`/`step_id`/`attempt`/`agent` on the bus and in the durable trajectory (new tests `test_failed_verification_error_is_structured`, `test_verification_and_model_events_carry_task_id`).
+- docs: `docs/roadmap.md` marks W4.12 DONE and W4.14 DONE (W4 wave `8 done, 6 partial, 1 TODO`).
 
 ### Completed — W4.7 Tool Router and Robust Tools
 

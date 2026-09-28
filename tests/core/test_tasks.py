@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import defaultdict
 
 import pytest
 
@@ -515,3 +516,123 @@ async def test_real_pytest_failure_is_repaired_and_retested(tmp_path):
     assert reports[0]["ok"] is False and reports[0]["checks"]["exit_code"] == 1
     assert reports[1]["ok"] is True and reports[1]["checks"]["exit_code"] == 0
     assert (tmp_path / "calc.py").read_text(encoding="utf-8").endswith("return a + b\n")
+
+
+@pytest.mark.asyncio
+async def test_runner_cancel_token_stops_at_next_checkpoint(tmp_path) -> None:
+    """W4.14: cooperative cancel stops between steps and keeps completed work."""
+    executed: list[str] = []
+    holder: dict = {}
+
+    async def generate(_prompt: str) -> str:
+        return json.dumps({
+            "steps": [
+                {"id": "first", "goal": "First", "tools": ["read_file"], "done_when": "First done"},
+                {"id": "second", "goal": "Second", "tools": ["read_file"], "done_when": "Second done"},
+            ],
+            "definition_of_done": ["Both steps done"],
+        })
+
+    async def execute(*, step, prompt, on_event):
+        executed.append(step.id)
+        holder["runner"].request_cancel()  # operator cancels while the step runs
+        return {"content": f"{step.id} evidence"}
+
+    async def verify():
+        return {"ok": True, "executed": True, "summary": "verify PASSED"}
+
+    runner = _runner(tmp_path, planner=Planner(generate), execute=execute, verify=verify)
+    holder["runner"] = runner
+    task = await runner.run(Task(goal="Two steps", planning=True))
+    assert task.state is TaskState.CANCELLED
+    assert executed == ["first"]
+    assert task.plan.steps[0].state == "completed"
+    assert task.plan.steps[1].state == "pending"
+    assert runner.store.load(task.id).state is TaskState.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_run_short_circuits_execution(tmp_path) -> None:
+    executed: list[str] = []
+
+    async def generate(_prompt: str) -> str:
+        return _plan("inspect").model_dump_json()
+
+    async def execute(*, step, prompt, on_event):
+        executed.append(step.id)
+        return {"content": "evidence"}
+
+    async def verify():
+        raise AssertionError("verification must not run after cancel")
+
+    runner = _runner(tmp_path, planner=Planner(generate), execute=execute, verify=verify)
+    runner.request_cancel()
+    task = await runner.run(Task(goal="Cancelled early", planning=True))
+    assert task.state is TaskState.CANCELLED
+    assert executed == []
+
+
+@pytest.mark.asyncio
+async def test_failed_verification_error_is_structured(tmp_path) -> None:
+    """W4.14: verification failures carry type/command/exit_code/stdout."""
+    async def generate(_prompt: str) -> str:
+        return _plan("inspect").model_dump_json()
+
+    async def execute(*, step, prompt, on_event):
+        return {"content": "evidence"}
+
+    async def verify():
+        return {"ok": False, "executed": True, "summary": "verify FAILED",
+                "checks": {"exit_code": 1, "status": "failed",
+                           "steps": [{"name": "test", "ok": False, "exit_code": 1,
+                                      "command": "pytest -q",
+                                      "output": "assert add(2, 3) == 5"}]}}
+
+    runner = TaskRunner(
+        store=TaskStore(tmp_path / "tasks"), planner=Planner(generate), execute=execute,
+        verify=verify, tools=["read_file"], bus=EventBus(), trajectory=Trajectory(),
+        max_verification_repairs=0,
+    )
+    task = await runner.run(Task(goal="Broken tests"))
+    assert task.state is TaskState.WAITING_FOR_USER
+    error = task.errors[-1]
+    assert error.type == "verification"
+    assert error.exit_code == 1
+    assert error.command == "pytest -q"
+    assert "assert add(2, 3) == 5" in error.stdout
+    assert error.step_id is None
+
+
+@pytest.mark.asyncio
+async def test_verification_and_model_events_carry_task_id(tmp_path) -> None:
+    """W4.14: model.*/verification.* events carry task/agent IDs on bus and trajectory."""
+    async def generate(_prompt: str) -> str:
+        return _plan("inspect").model_dump_json()
+
+    async def execute(*, step, prompt, on_event):
+        return {"content": "evidence"}
+
+    async def verify():
+        return {"ok": True, "executed": True, "summary": "verify PASSED"}
+
+    events: dict[str, list[dict]] = defaultdict(list)
+    bus = EventBus()
+    for name in ("model.request", "model.response", "verification.started", "verification.completed"):
+        bus.subscribe(name, lambda payload, _name=name: events[_name].append(payload))
+    runner = TaskRunner(
+        store=TaskStore(tmp_path / "tasks"), planner=Planner(generate), execute=execute,
+        verify=verify, tools=["read_file"], bus=bus, trajectory=Trajectory(),
+    )
+    task = await runner.run(Task(goal="Observable run", planning=True))
+    assert task.state is TaskState.COMPLETED
+    for name in ("model.request", "model.response", "verification.started", "verification.completed"):
+        assert events[name], f"missing {name}"
+        assert events[name][0]["task_id"] == task.id
+    assert events["model.request"][0]["step_id"] == "inspect"
+    assert events["model.request"][0]["agent"] == "coder"
+    assert events["model.response"][0]["ok"] is True
+    assert events["verification.started"][0]["attempt"] == 0
+    assert events["verification.completed"][0]["agent"] == "tester"
+    kinds = [event.kind for event in runner.trajectory.events]
+    assert "model.request" in kinds and "model.response" in kinds
+    assert "verification.started" in kinds and "verification.completed" in kinds

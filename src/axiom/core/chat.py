@@ -771,6 +771,9 @@ class ChatSession:
             f"{role_prompts.get(agent_id, 'Complete the assigned task.')}"
         ).strip()
         request_registry = self.tools.subset(allowed)
+        if self.active_task_runner is not None:
+            # The worker's tools observe the task's shared CancelToken (W4.14).
+            request_registry.cancel_token = self.active_task_runner.cancel_token
         from axiom.core.tools.web_search import WebSearchTool
 
         request_web_tool = WebSearchTool(
@@ -904,6 +907,9 @@ class ChatSession:
         return "".join(parts)
 
     async def _execute_task_step(self, *, step, prompt: str, on_event) -> dict:
+        if self.active_task_runner is not None:
+            # Shared CancelToken: never start a model request after cancel (W4.14).
+            self.active_task_runner.cancel_token.raise_if_cancelled()
         return await self._subagent_runner(
             agent="coder", task=prompt, tools=step.tools, trajectory=self.trajectory, on_event=on_event,
         )
@@ -1132,6 +1138,11 @@ class ChatSession:
     def task_cancel(self, task_id: str) -> bool:
         if self.active_task is None or self.active_task.id != task_id:
             return False
+        runner = self.active_task_runner
+        if runner is not None:
+            # Cooperative signal first: the runner stops at its next
+            # checkpoint even if the hard asyncio cancel lands later (W4.14).
+            runner.request_cancel()
         return self.cancel()
 
     async def _run_task(self, task: Task, *, resume: bool = False, acknowledge: bool = False,

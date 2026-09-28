@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from axiom.core.bus import EventBus
+from axiom.core.cancellation import CancelToken
 from axiom.core.config import axiom_home
 from axiom.core.context_engine import CompactionState, ContextEngine
 from axiom.core.events import ToolCallEvent, ToolResultEvent
@@ -145,7 +146,7 @@ class TaskRunner:
                  verify: Callable[[], Awaitable[dict]], tools: list[str], bus: EventBus,
                  trajectory: Trajectory, max_replans: int = 1, max_verification_repairs: int = 3,
                  workspace_root: Path | None = None, context_engine: ContextEngine | None = None,
-                 context_max_tokens: int | None = None) -> None:
+                 context_max_tokens: int | None = None, cancel_token: CancelToken | None = None) -> None:
         self.store = store
         self.planner = planner
         self.execute = execute
@@ -158,6 +159,7 @@ class TaskRunner:
         self.workspace_root = workspace_root.resolve() if workspace_root is not None else None
         self.context_engine = context_engine or ContextEngine(max_tokens=context_max_tokens)
         self.context_max_tokens = context_max_tokens
+        self.cancel_token = cancel_token or CancelToken()
         self.context_messages: list[dict] = []
         self._permission_previous_state: TaskState | None = None
         self._permission_tool_name: str | None = None
@@ -286,6 +288,71 @@ class TaskRunner:
         } else "task.state"
         self.publish(task, kind)
 
+    def request_cancel(self) -> None:
+        """Signal cooperative cancellation; the run stops at its next checkpoint (W4.14)."""
+        self.cancel_token.cancel()
+
+    async def _run_model_step(self, task: Task, step: PlanStep, prompt: str) -> dict:
+        """Execute one model-driven step and publish task-scoped model.* events (W4.14)."""
+        self.cancel_token.raise_if_cancelled()
+        request = {"task_id": task.id, "step_id": step.id, "agent": "coder"}
+        self.bus.emit("model.request", request)
+        self.trajectory.append("model.request", step.goal, actor="coder", data=request)
+        started = time.perf_counter()
+        try:
+            result = await self.execute(step=step, prompt=prompt,
+                                        on_event=partial(self.observe, task, step))
+        except BaseException as exc:
+            self._publish_model_response(task, step, started, ok=False,
+                                         error=f"{type(exc).__name__}: {exc}")
+            raise
+        self._publish_model_response(
+            task, step, started, ok=not bool(result.get("error") or result.get("tools_failed")),
+        )
+        return result
+
+    def _publish_model_response(self, task: Task, step: PlanStep, started: float, *,
+                                ok: bool, error: str = "") -> None:
+        payload: dict = {"task_id": task.id, "step_id": step.id, "agent": "coder",
+                         "duration_ms": int((time.perf_counter() - started) * 1000), "ok": ok}
+        if error:
+            payload["error"] = error
+        self.bus.emit("model.response", payload)
+        self.trajectory.append("model.response", step.goal, actor="coder", data=payload)
+
+    def _publish_verification(self, task: Task, kind: str, attempt: int, *,
+                              summary: str = "", error: str = "") -> None:
+        payload: dict = {"task_id": task.id, "attempt": attempt, "agent": "tester"}
+        if summary:
+            payload["summary"] = summary
+        if error:
+            payload["error"] = error
+        self.bus.emit(kind, payload)
+        self.trajectory.append(kind, summary or error, actor="tester", data=payload)
+
+    @staticmethod
+    def _verification_error(report: dict, message: str) -> TaskError:
+        """Normalize a failed verification report into a structured TaskError (W4.14)."""
+        checks = report.get("checks") if isinstance(report.get("checks"), dict) else {}
+        steps = [item for item in checks.get("steps") or [] if isinstance(item, dict)]
+        failed = next(
+            (item for item in steps
+             if item.get("ok") is not True or item.get("exit_code") not in (None, 0)),
+            None,
+        )
+        exit_code = checks.get("exit_code") if isinstance(checks.get("exit_code"), int) else None
+        if exit_code is None and isinstance(failed, dict) and isinstance(failed.get("exit_code"), int):
+            exit_code = failed["exit_code"]
+        command = failed.get("command") if isinstance(failed, dict) else None
+        output = str((failed or {}).get("output") or checks.get("output") or "")
+        return TaskError(
+            type="verification",
+            message=message,
+            command=str(command) if command else None,
+            exit_code=exit_code,
+            stdout=output[:4000],
+        )
+
     def observe(self, task: Task, step: PlanStep, event) -> None:
         if isinstance(event, ToolCallEvent):
             # Do not persist file bodies or shell environment in checkpoints.
@@ -351,6 +418,7 @@ class TaskRunner:
     async def run(self, task: Task, *, resume: bool = False, acknowledge: bool = False) -> Task:
         try:
             self.publish(task, "task.resumed" if resume else "task.started")
+            self.cancel_token.raise_if_cancelled()
             interrupted = task.plan and any(step.state == "running" for step in task.plan.steps)
             if (task.pending_tool or interrupted) and not acknowledge:
                 self.transition(task, TaskState.WAITING_FOR_USER,
@@ -379,6 +447,7 @@ class TaskRunner:
                 step = next((s for s in task.plan.steps if s.state != "completed"), None)
                 if step is None:
                     break
+                self.cancel_token.raise_if_cancelled()
                 self.transition(task, TaskState.EXECUTING, step.goal)
                 step.state = "running"
                 self.publish(task, "task.step")
@@ -410,8 +479,7 @@ class TaskRunner:
                 if self.context_messages and self.context_messages[0].get("role") == "system":
                     prompt += "\n" + str(self.context_messages[0]["content"])
                 self.context_messages.append({"role": "user", "content": prompt})
-                result = await self.execute(step=step, prompt=prompt,
-                                            on_event=partial(self.observe, task, step))
+                result = await self._run_model_step(task, step, prompt)
                 step.result = str(result.get("content") or "")[:8000]
                 self.context_messages.append({"role": "assistant", "content": step.result})
                 error = result.get("error") or ("Tool calls failed" if result.get("tools_failed") else None)
@@ -434,17 +502,22 @@ class TaskRunner:
                 self.publish(task, "task.step")
             self.transition(task, TaskState.VERIFYING)
             for attempt in range(self.max_verification_repairs + 1):
+                self.cancel_token.raise_if_cancelled()
                 detail = "Проверка изменений" if attempt == 0 else f"Повторная проверка после исправления {attempt}"
                 self.transition(task, TaskState.VERIFYING, detail)
+                self._publish_verification(task, "verification.started", attempt, summary=detail)
                 report = await self.verify()
                 task.tests.append(report)
                 # A no-checks/no-git result is NOT a passing test.
                 if report.get("ok") is True and report.get("executed") is True:
-                    self.transition(task, TaskState.COMPLETED, str(report.get("summary") or "Verification passed"))
+                    summary = str(report.get("summary") or "Verification passed")
+                    self.transition(task, TaskState.COMPLETED, summary)
+                    self._publish_verification(task, "verification.completed", attempt, summary=summary)
                     break
                 message = str(report.get("error") or report.get("summary") or "Verification unavailable")
+                self._publish_verification(task, "verification.failed", attempt, error=message)
                 if not report.get("executed") or attempt >= self.max_verification_repairs:
-                    task.errors.append(TaskError(type="verification", message=message))
+                    task.errors.append(self._verification_error(report, message))
                     reason = (f"Verification repair limit ({self.max_verification_repairs}) exhausted: {message}"
                               if attempt >= self.max_verification_repairs and report.get("executed") else message)
                     self.transition(task, TaskState.WAITING_FOR_USER, reason)
@@ -477,8 +550,7 @@ class TaskRunner:
                           "Prioritized diagnostics:\n"
                           f"{diagnostic_text or '(no structured file/line diagnostic was reported)'}\n"
                           "Do not claim success. Make a focused fix; the verifier will run again.")
-                result = await self.execute(step=repair, prompt=prompt,
-                                            on_event=partial(self.observe, task, repair))
+                result = await self._run_model_step(task, repair, prompt)
                 repair.result = str(result.get("content") or "")[:8000]
                 if result.get("error") or result.get("tools_failed"):
                     task.errors.append(TaskError(type="verification_repair",
