@@ -1158,6 +1158,11 @@ class ChatSession:
         )
         self.active_task = task
         self.active_task_runner = runner
+        # W4.9: task-scoped approvals live exactly as long as this run.
+        self.permissions.bind_context(
+            task_id=task.id,
+            project=str(self.workspace_root) if self.workspace_root else None,
+        )
         for tool in (self.terminal, self.verify_tools):
             if tool is not None:
                 tool.on_process = lambda event, _runner=runner, _task=task: _runner.process_event(_task, event)
@@ -1171,6 +1176,11 @@ class ChatSession:
                 if self.active_task is task:
                     self.active_task = None
                     self.active_task_runner = None
+                    # W4.9: a detached run keeps its scope only while active.
+                    try:
+                        self.permissions.drop_task_scope(task.id)
+                    except Exception:
+                        pass
                 # Consume errors if the worker itself escaped its guard.
                 if not done.cancelled():
                     done.exception()
@@ -1192,6 +1202,8 @@ class ChatSession:
         finally:
             if self._task is worker:
                 self._task = None
+            # W4.9: leaving the run drops its task-scoped approvals.
+            self.permissions.drop_task_scope(task.id)
             self.active_task = None
             self.active_task_runner = None
 
@@ -1634,6 +1646,11 @@ class ChatSession:
         # Leaving Global Chat re-enables workspace tooling for the new project.
         self.config.workspace_tools_enabled = True
         self.config.save()
+        # W4.9: a workspace switch rebinds the project approval scope; stale
+        # ``allow_project`` entries never leak into the new project.
+        self.permissions.bind_context(
+            task_id=self.permissions.active_task_id, project=str(target),
+        )
         if self.workspace_tools is not None:
             self.workspace_tools.set_root(target)
             # Re-register: clear_workspace() dropped these names from the registry.
@@ -1724,11 +1741,17 @@ class ChatSession:
         """Run a real shell command in the workspace (GUI terminal panel).
 
         Safe commands run immediately; anything else returns ``permission:
-        "ask"`` so the GUI can confirm with the user first.
+        "ask"`` so the GUI can confirm with the user first. HIGH/CRITICAL
+        commands (push, recursive delete, network pipe, blocklisted patterns)
+        always gate on ``confirmed`` and report their W4.9 risk tier + reason.
         """
+        from axiom.core.command_policy import classify_command_risk
+
         if self.terminal is None:
             return {"ok": False, "error": "Terminal access is disabled", "permission": "blocked"}
-        if classify_command(command) == ToolPermission.ALWAYS or confirmed:
+        tier, reason = classify_command_risk(command)
+        if ((classify_command(command) == ToolPermission.ALWAYS and tier not in ("HIGH", "CRITICAL"))
+                or confirmed):
             result = await self.terminal._run(command)
             return {
                 "ok": result.ok,
@@ -1737,8 +1760,10 @@ class ChatSession:
                 "exit_code": (result.data or {}).get("exit_code"),
                 "cwd": (result.data or {}).get("cwd"),
                 "permission": "granted",
+                "risk": tier,
+                "reason": reason,
             }
-        return {"ok": False, "permission": "ask", "command": command}
+        return {"ok": False, "permission": "ask", "command": command, "risk": tier, "reason": reason}
 
     def _save_conversation(self) -> None:
         if not self.config.save_history:

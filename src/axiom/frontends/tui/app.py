@@ -439,7 +439,7 @@ class WorkspaceScreen(Screen):
             )
         elif name == "/permissions":
             self.app.push_screen(
-                PermissionsPanel(self.session.permissions.mode.value),
+                PermissionsPanel(self.session.permissions.autonomy),
                 callback=self._permissions_chosen,
             )
         elif name == "/profiles":
@@ -688,6 +688,14 @@ class WorkspaceScreen(Screen):
         """Apply the mode chosen in ``/permissions`` (the real PermissionManager)."""
         if not mode:
             return
+        if mode in {"plan", "edit", "auto", "full"}:
+            try:
+                applied = self.session.permissions.set_autonomy(mode)
+            except ValueError:
+                self.notify(f"Unknown autonomy mode: {mode}", severity="warning", timeout=4)
+                return
+            self.notify(f"Autonomy: {applied}", title="Permissions", timeout=4)
+            return
         try:
             self.session.permissions.mode = PermissionMode(mode)
         except ValueError:
@@ -698,8 +706,22 @@ class WorkspaceScreen(Screen):
     async def _ask_permission(
         self, tool_name: str, arguments: dict[str, Any]
     ) -> PermissionOutcome:
-        """W2.4: show the real modal; the tool call waits for the user answer."""
-        return await self.app.push_screen_wait(PermissionDialog(tool_name, arguments))
+        """W2.4+W4.9: show the real modal with risk/command/task context."""
+        detail: dict[str, Any] = {}
+        describe = getattr(self.session.permissions, "describe_request", None)
+        if callable(describe):
+            try:
+                detail = dict(describe(tool_name, dict(arguments or {})) or {})
+            except Exception:
+                detail = {}
+        task_id = self.session.permissions.active_task_id
+        return await self.app.push_screen_wait(PermissionDialog(
+            tool_name, dict(arguments or {}),
+            risk=str(detail.get("risk", "SAFE")),
+            reason=str(detail.get("reason", "")),
+            command=str(detail.get("command", "")),
+            task_id=task_id,
+        ))
 
     async def _plugin_toggle(self, name: str, enabled: bool) -> dict:
         """Toggle a plugin's enable state (``/plugins``)."""

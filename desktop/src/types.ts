@@ -157,6 +157,7 @@ export interface AxiomConfig {
   show_metrics: boolean;
   show_context: boolean;
   permission_mode: "ask" | "auto_approve_safe" | "auto_approve_all";
+  autonomy_mode?: "plan" | "edit" | "auto" | "full" | string;
   router_enabled: boolean;
   router_budget: "performance" | "balanced" | "economy";
   router_primary: { provider_id: string; model: string } | null;
@@ -219,15 +220,19 @@ export interface KnowledgeIndexResult {
   error?: string;
 }
 
-/** W2.4: an ASK tool call waiting for the user's decision in the shell. */
-export type PermissionDecision = "allow_once" | "allow_always" | "deny";
+/** W2.4+W4.9: an ASK tool call waiting for the user's decision in the shell. */
+export type PermissionDecision =
+  | "allow_once" | "allow_task" | "allow_project" | "allow_always" | "deny";
 
 export interface PermissionRequest {
   id: string;
   tool: string;
   arguments: Record<string, unknown>;
+  command?: string;
   cwd: string;
   risk: string;
+  reason?: string;
+  autonomy?: string;
   task_id?: string;
 }
 

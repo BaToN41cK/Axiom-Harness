@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 import threading
 from itertools import count
@@ -180,7 +179,12 @@ _PERMISSION_SEQ = count(1)
 
 
 def _permission_payload(session: ChatSession, tool_name: str, arguments: dict) -> dict:
-    """UI projection of an ASK tool call: tool, arguments, cwd and real risk."""
+    """UI projection of an ASK tool call: tool, arguments, cwd, risk (W4.9).
+
+    The real risk tier comes from ``PermissionManager.describe_request``
+    (SAFE..CRITICAL command policy); the registry ``risk`` stays only as a
+    fallback so a missing registry still yields a safe payload.
+    """
     from axiom.core.tools.base import RISK_SAFE
 
     definition = None
@@ -190,13 +194,38 @@ def _permission_payload(session: ChatSession, tool_name: str, arguments: dict) -
             definition = tools.get(tool_name)
         except Exception:
             definition = None
+    permissions = getattr(session, "permissions", None)
+    describe = getattr(permissions, "describe_request", None)
     cwd = getattr(getattr(session, "config", None), "workspace_root", None) or "."
+    if callable(describe):
+        try:
+            detail = describe(tool_name, dict(arguments or {}), cwd=str(cwd))
+        except Exception:
+            detail = None
+        if isinstance(detail, dict):
+            payload = {
+                "type": "permission_request",
+                "tool": tool_name,
+                "arguments": dict(arguments or {}),
+                "command": detail.get("command", ""),
+                "cwd": str(detail.get("cwd", cwd)),
+                "risk": detail.get("risk", getattr(definition, "risk", RISK_SAFE)),
+                "reason": detail.get("reason", ""),
+                "autonomy": detail.get("autonomy", "auto"),
+            }
+            active_task = getattr(session, "active_task", None)
+            if active_task is not None:
+                payload["task_id"] = active_task.id
+            return payload
     payload = {
         "type": "permission_request",
         "tool": tool_name,
         "arguments": dict(arguments or {}),
+        "command": "",
         "cwd": str(cwd),
         "risk": getattr(definition, "risk", RISK_SAFE),
+        "reason": "",
+        "autonomy": "auto",
     }
     active_task = getattr(session, "active_task", None)
     if active_task is not None:
@@ -208,8 +237,9 @@ async def _ask_permission(session: ChatSession, tool_name: str, arguments: dict)
     """Forward an ASK tool call to the shell and wait for its real answer.
 
     Emits one ``permission_request`` event and suspends the tool call until
-    ``permission_respond`` arrives with ``allow_once`` / ``allow_always`` /
-    ``deny``. The pending future lives exactly as long as the request.
+    ``permission_respond`` arrives with ``allow_once`` / ``allow_task`` /
+    ``allow_project`` / ``allow_always`` / ``deny``. The pending future lives
+    exactly as long as the request.
     """
     request_id = f"perm-{next(_PERMISSION_SEQ)}"
     future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -610,15 +640,33 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         return {"model": model}
     if cmd == "permissions":
         mode = str(args.get("mode") or "ask")
+        if mode in {"plan", "edit", "auto", "full"}:
+            # W4.9 autonomy preset: composes both persisted axes at once.
+            applied = session.permissions.set_autonomy(mode)
+            try:
+                session.sandbox.apply_preset(
+                    {"plan": "readonly", "edit": "workspace",
+                     "auto": "workspace", "full": "full"}.get(applied, "workspace")
+                )
+            except Exception:
+                pass
+            return {"mode": session.permissions.mode.value, "autonomy": applied,
+                    "access_mode": session.config.access_mode}
         if mode not in {"ask", "auto_approve_safe", "auto_approve_all"}:
             raise ValueError("Unknown permission mode")
         session.permissions.mode = type(session.permissions.mode)(mode)
         session.config.permission_mode = mode
+        try:
+            session.config.autonomy_mode = session.permissions.autonomy
+        except Exception:
+            pass
         session.config.save()
-        return {"mode": mode}
+        return {"mode": mode, "autonomy": session.permissions.autonomy,
+                "access_mode": session.config.access_mode}
     if cmd == "permission_respond":
-        # W2.4: the real answer to a waiting ASK tool call (allow once /
-        # always / deny). Returns whether a request was still pending.
+        # W2.4+W4.9: the real answer to a waiting ASK tool call (allow once /
+        # task / project / always / deny). Unknown answers fail closed in the
+        # PermissionManager; stale ids just report ``resolved: False``.
         return {
             "resolved": _resolve_permission(
                 str(args.get("id") or ""), str(args.get("decision") or "")
@@ -945,16 +993,47 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         return json.loads(session.config.model_dump_json())
     if cmd == "set_config":
         current = session.config.model_dump()
+        autonomy_request = (args.get("patch") or {}).get("autonomy_mode")
         for key, value in (args.get("patch") or {}).items():
-            if key in current:
+            if key in current and key != "autonomy_mode":
                 current[key] = value
         new_cfg = Config.model_validate(current)
+        if isinstance(autonomy_request, str) and autonomy_request.strip():
+            # W4.9: one autonomy switch composes both persisted axes at once.
+            from axiom.core.autonomy import apply_autonomy as _apply_autonomy
+
+            axes = _apply_autonomy(autonomy_request)
+            new_cfg.access_mode = axes["access_mode"]  # type: ignore[assignment]
+            new_cfg.permission_mode = axes["permission_mode"]
+        from axiom.core.autonomy import resolve_autonomy as _resolve_autonomy
+
+        try:
+            new_cfg.autonomy_mode = _resolve_autonomy(new_cfg.access_mode, new_cfg.permission_mode)
+        except Exception:
+            pass
         new_cfg.save()
         session.config = new_cfg
         session._configure_router_from_config()
         permissions = getattr(session, "permissions", None)
         if permissions is not None:
             permissions._config = new_cfg
+            try:
+                permissions.bind_context(
+                    task_id=permissions.active_task_id,
+                    project=str(new_cfg.workspace_root) if new_cfg.workspace_root else None,
+                )
+            except Exception:
+                pass
+        sandbox = getattr(session, "sandbox", None)
+        if sandbox is not None and hasattr(sandbox, "apply_preset"):
+            try:
+                autonomy = _resolve_autonomy(new_cfg.access_mode, new_cfg.permission_mode)
+                sandbox.apply_preset(
+                    {"plan": "readonly", "edit": "workspace",
+                     "auto": "workspace", "full": "full"}.get(autonomy, "workspace")
+                )
+            except Exception:
+                pass
         # Agent and web tool read live attributes; update them defensively.
         agent = getattr(session, "agent", None)
         if agent is not None:

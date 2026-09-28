@@ -1447,15 +1447,16 @@ class PluginInfoPanel(PanelScreen):
 
 
 class PermissionsPanel(PanelScreen):
-    """``/permissions`` — выбор реального режима разрешений (п.23)."""
+    """``/permissions`` — выбор реального режима разрешений (W4.9 autonomy)."""
 
     title_text = "PERMISSIONS"
 
-    #: (value, label, hint) — the real PermissionMode values, in order.
+    #: (value, label, hint) — W4.9 autonomy presets composed from the two axes.
     MODES: tuple[tuple[str, str, str], ...] = (
-        ("ask", "Ask", "Every tool execution needs confirmation"),
-        ("auto_approve_safe", "Auto-approve safe", "Safe tools run, risky ones ask"),
-        ("auto_approve_all", "Auto-approve all", "Everything runs without confirmation"),
+        ("plan", "Plan", "Read-only analysis, writes blocked"),
+        ("edit", "Edit", "Workspace edits run, commands ask"),
+        ("auto", "Auto", "Safe tools run, risky ones ask"),
+        ("full", "Full", "Everything allowed except dangerous (asks)"),
     )
 
     def __init__(self, current: str) -> None:

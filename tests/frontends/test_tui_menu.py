@@ -324,15 +324,16 @@ async def test_permissions_command_opens_panel_and_applies_mode(tmp_path, monkey
         await pilot.pause()
         panel = app.screen
         assert isinstance(panel, PermissionsPanel)
-        panel.dismiss("ask")
+        panel.dismiss("plan")
         await pilot.pause()
         await pilot.pause()
+        assert app.session.permissions.autonomy == "plan"
         assert app.session.permissions.mode.value == "ask"
 
 
 def test_permissions_panel_lists_real_modes() -> None:
     values = [value for value, _label, _hint in PermissionsPanel.MODES]
-    assert values == ["ask", "auto_approve_safe", "auto_approve_all"]
+    assert values == ["plan", "edit", "auto", "full"]
 
 
 async def test_providers_panel_has_hidden_key_input_and_model_list() -> None:

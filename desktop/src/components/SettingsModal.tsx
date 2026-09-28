@@ -277,6 +277,7 @@ export default function SettingsModal({
       show_metrics: draft.show_metrics,
       show_context: draft.show_context,
       permission_mode: draft.permission_mode,
+      autonomy_mode: draft.autonomy_mode,
       router_enabled: draft.router_enabled,
     };
     onSave(patch);
@@ -1202,11 +1203,12 @@ function ToolsSection({
           onChange={(v) => set("workspace_tools_enabled", v)}
         />
       </Row>
-      <Row label="Режим разрешений" hint="ask · auto_approve_safe · auto_approve_all">
-        <select value={draft.permission_mode} onChange={(e) => set("permission_mode", e.target.value as AxiomConfig["permission_mode"])}>
-          <option value="ask">Спрашивать каждый раз</option>
-          <option value="auto_approve_safe">Автоматически: безопасные действия</option>
-          <option value="auto_approve_all">Автоматически: все действия</option>
+      <Row label="Режим разрешений" hint="plan · edit · auto · full (поверх ask/auto)">
+        <select value={draft.autonomy_mode ?? "auto"} onChange={(e) => set("autonomy_mode", e.target.value as string)}>
+          <option value="plan">Plan — только чтение</option>
+          <option value="edit">Edit — правки в проекте, команды спрашивать</option>
+          <option value="auto">Auto — безопасное само, рискованное спросить</option>
+          <option value="full">Full — всё само, кроме опасного (осторожно)</option>
         </select>
       </Row>
       <Row label="Доступ AI" hint="read_only — только чтение · workspace — внутри проекта · full — весь ПК (осторожно)">

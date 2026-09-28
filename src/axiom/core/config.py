@@ -87,6 +87,9 @@ class Config(BaseModel):
     system_prompt: str | None = None
     #: Global permission mode: ask, auto_approve_safe, auto_approve_all
     permission_mode: str = "auto_approve_safe"
+    #: W4.9 derived autonomy preset (plan/edit/auto/full) composed from
+    #: access_mode + permission_mode; informational, recomputed on demand.
+    autonomy_mode: str = "auto"
     #: Optional Ollama embeddings model for the knowledge base (None = BM25 only)
     knowledge_embed_model: str | None = None
     #: Refuse covered external network paths (search, page fetch, embeddings).

@@ -9,6 +9,15 @@
 
 ## [Unreleased]
 
+### Completed — W4.9 Permissions 2.0: autonomy presets, risk tiers, approval scopes
+
+- New `axiom.core.autonomy` composes the four PLAN/EDIT/AUTO/FULL presets from the existing `access_mode`/`permission_mode` axes; unknown autonomy values fail closed to plan axes. `PermissionManager.set_autonomy`, the TUI `/permissions` panel (MODES) and Desktop Settings apply the preset as one switch, and `Config.autonomy_mode` records the composed result.
+- New `axiom.core.command_policy.classify_command_risk` classifies shell commands into SAFE/LOW/MEDIUM/HIGH/CRITICAL with a human-readable reason, mirroring `terminal.SAFE_PREFIXES`/`BLOCKED_PATTERNS`; an unknown command classifies as HIGH (fail closed).
+- Approval scopes are once/task/project/always/deny with the risk tier inside every approval cache key. HIGH/CRITICAL calls are honored but never cached (`_ask_user(..., cacheable=False)`) — they always prompt per call; `git_add`/`git_commit` remain once-only and refuse persistent approval. `chat.py` binds the task/project scope for the running task (`bind_context`) and drops it on completion (`drop_task_scope`/`drop_project_scope`).
+- `PermissionManager.describe_request` projects tool, arguments, cwd, risk tier and reason to the UI: the TUI permission dialog and the Desktop `ConfirmDialog` show the risk badge and offer once/task/project/always/deny, while HIGH/CRITICAL offer only once/deny.
+- `sandbox.py` gains named presets `readonly`/`workspace`/`workspace-network`/`full` (unknown preset fails closed to `workspace`).
+- Tests: new `tests/core/test_permissions_49.py` (29 tests — presets, risk tiers, scopes, non-inheritance), risk-aware/high-risk dialog coverage in `tests/frontends/test_permission_dialog.py`, autonomy MODES in `tests/frontends/test_tui_menu.py`; docs: `docs/roadmap.md` marks W4.9 DONE (W4 wave `9 done, 5 partial, 1 TODO`); verified with full pytest `567 passed, 1 skipped`, Ruff and `tsc --noEmit`.
+
 ### Added — Desktop task workflow: central execution, resume, delete, diff and context budgets (W4.12/W4.14 slice)
 
 - The chat area switches from the transcript to a central task execution view (`TaskExecution`) when a task is focused: state label, plan and progress, the active step, the pending tool with its arguments, real commands, verification output, errors and the completion/review state all come from the same bridge task snapshot.
