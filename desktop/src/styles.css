@@ -1,40 +1,47 @@
-/* AXIOM desktop — semantic tokens shared by every surface and component. */
+/*
+ * AXIOM desktop — semantic tokens shared by every surface and component.
+ *
+ * The raw palette now lives in `styles/tokens.css`; this block maps the
+ * historical variable names onto it so all existing component CSS keeps
+ * working while there is exactly one place to change a colour.
+ */
 :root {
   color-scheme: dark;
 
-  --bg-primary: #050505;
-  --bg-secondary: #0A0A0A;
-  --bg-tertiary: #0F0F0F;
-  --bg-elevated: #121212;
-  --bg-hover: #181818;
+  --bg-primary: var(--ax-bg-app);
+  --bg-secondary: var(--ax-bg-panel);
+  --bg-tertiary: var(--ax-bg-inset);
+  --bg-elevated: var(--ax-bg-elevated);
+  --bg-hover: var(--ax-bg-hover);
 
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-default: rgba(255, 255, 255, 0.11);
-  --border-active: rgba(255, 59, 48, 0.45);
+  --border-subtle: var(--ax-border-subtle);
+  --border-default: var(--ax-border);
+  --border-active: var(--ax-accent-border);
 
-  --text-primary: #FFFFFF;
-  --text-secondary: #B8B8B8;
-  --text-muted: #777777;
-  --text-disabled: #4A4A4A;
+  --text-primary: var(--ax-text);
+  --text-secondary: var(--ax-text-muted);
+  --text-muted: var(--ax-text-faint);
+  --text-disabled: var(--ax-text-disabled);
 
-  --accent: #FF3B30;
-  --accent-hover: #FF5147;
-  --accent-active: #E62E24;
-  --accent-fill: #FF3B30;
-  --accent-dark: #E62E24;
-  --accent-soft: rgba(255, 59, 48, 0.12);
-  --accent-border: rgba(255, 59, 48, 0.35);
-  --accent-strong: #FF3B30;
-  --accent-text: #FF5147;
-  --accent-contrast: #FF5147;
+  --accent: var(--ax-accent);
+  --accent-hover: var(--ax-accent-hover);
+  --accent-active: var(--ax-accent-active);
+  --accent-fill: var(--ax-accent);
+  --accent-dark: var(--ax-accent-active);
+  --accent-soft: var(--ax-accent-soft);
+  --accent-border: var(--ax-accent-border);
+  --accent-strong: var(--ax-accent);
+  --accent-text: var(--ax-accent-text);
+  --accent-contrast: var(--ax-accent-text);
 
-  --status-success: #34D399;
-  --status-warning: #F59E0B;
-  --status-error: #FF3B30;
-  --status-info: #60A5FA;
-  --ok: var(--status-success);
-  --bad: var(--status-error);
-  --warn: var(--status-warning);
+  --status-success: var(--ax-success);
+  --status-warning: var(--ax-warning);
+  /* Error is its own hue so it never reads as a primary action. */
+  --status-error: var(--ax-error);
+  --status-info: var(--ax-info);
+  --ok: var(--ax-success-text);
+  --bad: var(--ax-error-text);
+  --warn: var(--ax-warning-text);
 
   /* Compatibility aliases keep the existing component CSS semantic. */
   --bg: var(--bg-primary);
@@ -46,168 +53,200 @@
   --text-dim: var(--text-secondary);
   --text-faint: var(--text-muted);
 
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 12px;
-  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: var(--ax-radius-sm);
+  --radius: var(--ax-radius);
+  --radius-lg: var(--ax-radius-lg);
+  --font: var(--ax-font-ui);
+  --mono: var(--ax-font-mono);
   --sidebar-w: 268px;
-  --shadow-panel: 0 18px 42px rgba(0, 0, 0, 0.38);
-  --shadow-modal: 0 24px 72px rgba(0, 0, 0, 0.58);
-  --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
-  --motion-fast: 140ms;
-  --motion-panel: 240ms;
+  --shadow-panel: var(--ax-elev-2);
+  --shadow-modal: var(--ax-elev-3);
+  --ease-ui: var(--ax-ease);
+  --motion-fast: var(--ax-motion-fast);
+  --motion-panel: var(--ax-motion-slow);
 }
 
-/* AXIOM Light — the same hierarchy with warm paper surfaces. */
+/* AXIOM Light — the same hierarchy with warm paper surfaces.
+   Themes override the raw `--ax-*` scale; the legacy aliases in `:root` follow
+   automatically, so a palette is defined in exactly one place. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg-primary: #FFF7F7;
-  --bg-secondary: #FFF0F0;
-  --bg-tertiary: #FFFFFF;
-  --bg-elevated: #FFFFFF;
-  --bg-hover: #FFE4E4;
-  --border-subtle: rgba(0, 0, 0, 0.07);
-  --border-default: rgba(0, 0, 0, 0.12);
-  --border-active: rgba(255, 59, 48, 0.45);
-  --text-primary: #171717;
-  --text-secondary: #555555;
-  --text-muted: #777777;
-  --text-disabled: #A5A5A5;
-  --accent: #FF3B30;
-  --accent-hover: #E62E24;
-  --accent-active: #C92D25;
-  --accent-fill: #FF3B30;
-  --accent-dark: #C92D25;
-  --accent-soft: rgba(255, 59, 48, 0.10);
-  --accent-border: rgba(255, 59, 48, 0.35);
-  --accent-strong: #FF3B30;
-  --accent-text: #C92D25;
-  --accent-contrast: #C92D25;
-  --status-success: #16805B;
-  --status-warning: #9A5F00;
-  --status-error: #C92D25;
-  --status-info: #2563A8;
-  --shadow-panel: 0 18px 42px rgba(80, 20, 20, 0.12);
-  --shadow-modal: 0 24px 72px rgba(80, 20, 20, 0.18);
+  --ax-bg-app: #FFF7F7;
+  --ax-bg-panel: #FFF0F0;
+  --ax-bg-inset: #FFFFFF;
+  --ax-bg-elevated: #FFFFFF;
+  --ax-bg-hover: #FFE4E4;
+  --ax-bg-active: #FFD6D6;
+  --ax-bg-overlay: rgba(60, 20, 20, 0.28);
+  --ax-border: rgba(0, 0, 0, 0.12);
+  --ax-border-subtle: rgba(0, 0, 0, 0.07);
+  --ax-border-strong: rgba(0, 0, 0, 0.2);
+  --ax-text: #171717;
+  --ax-text-muted: #555555;
+  --ax-text-faint: #777777;
+  --ax-text-disabled: #A5A5A5;
+  --ax-text-on-accent: #FFFFFF;
+  --ax-accent: #E0352A;
+  --ax-accent-hover: #C92D25;
+  --ax-accent-active: #A82420;
+  --ax-accent-soft: rgba(224, 53, 42, 0.10);
+  --ax-accent-softer: rgba(224, 53, 42, 0.05);
+  --ax-accent-border: rgba(224, 53, 42, 0.35);
+  --ax-accent-text: #B62A22;
+  --ax-success: #16805B;
+  --ax-success-text: #0F6347;
+  --ax-success-soft: rgba(22, 128, 91, 0.12);
+  --ax-warning: #9A5F00;
+  --ax-warning-text: #7A4B00;
+  --ax-warning-soft: rgba(154, 95, 0, 0.12);
+  --ax-info: #2563A8;
+  --ax-info-text: #1D4E86;
+  --ax-info-soft: rgba(37, 99, 168, 0.12);
+  --ax-error: #B3123A;
+  --ax-error-text: #94062E;
+  --ax-error-soft: rgba(179, 18, 58, 0.10);
+  --ax-error-border: rgba(179, 18, 58, 0.42);
+  --ax-git-conflict: #B24E00;
+  --ax-elev-1: 0 1px 2px rgba(80, 20, 20, 0.08);
+  --ax-elev-2: 0 6px 16px rgba(80, 20, 20, 0.12);
+  --ax-elev-3: 0 16px 40px rgba(80, 20, 20, 0.18);
+  --ax-focus-ring: 0 0 0 2px var(--ax-bg-app), 0 0 0 4px var(--ax-accent-border);
 }
 
 /* Additional palettes use the same component roles, not separate UI rules. */
 :root[data-theme="midnight"] {
-  --bg-primary: #0D1117;
-  --bg-secondary: #111820;
-  --bg-tertiary: #17212B;
-  --bg-elevated: #1B2632;
-  --bg-hover: #22303D;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-default: rgba(255, 255, 255, 0.13);
-  --border-active: rgba(88, 166, 255, 0.48);
-  --text-primary: #F0F6FC;
-  --text-secondary: #B4C0CC;
-  --text-muted: #7D8B99;
-  --text-disabled: #53606D;
-  --accent: #58A6FF;
-  --accent-hover: #79B8FF;
-  --accent-active: #388BDE;
-  --accent-fill: #388BDE;
-  --accent-dark: #1F6FBA;
-  --accent-soft: rgba(88, 166, 255, 0.13);
-  --accent-border: rgba(88, 166, 255, 0.38);
-  --accent-strong: #58A6FF;
-  --accent-text: #79B8FF;
-  --accent-contrast: #79B8FF;
+  --ax-bg-app: #0D1117;
+  --ax-bg-panel: #111820;
+  --ax-bg-inset: #0A0F15;
+  --ax-bg-elevated: #1B2632;
+  --ax-bg-hover: #22303D;
+  --ax-bg-active: #2A3A49;
+  --ax-border: rgba(255, 255, 255, 0.13);
+  --ax-border-subtle: rgba(255, 255, 255, 0.08);
+  --ax-border-strong: rgba(255, 255, 255, 0.22);
+  --ax-text: #F0F6FC;
+  --ax-text-muted: #B4C0CC;
+  --ax-text-faint: #7D8B99;
+  --ax-text-disabled: #53606D;
+  --ax-text-on-accent: #04101F;
+  --ax-accent: #58A6FF;
+  --ax-accent-hover: #79B8FF;
+  --ax-accent-active: #388BDE;
+  --ax-accent-soft: rgba(88, 166, 255, 0.13);
+  --ax-accent-softer: rgba(88, 166, 255, 0.07);
+  --ax-accent-border: rgba(88, 166, 255, 0.38);
+  --ax-accent-text: #79B8FF;
+  /* Accent is blue here, so info shifts to cyan and stays distinguishable. */
+  --ax-info: #45C6D6;
+  --ax-info-text: #6FDCE8;
+  --ax-info-soft: rgba(69, 198, 214, 0.14);
 }
 
 :root[data-theme="terminal"] {
   color-scheme: dark;
-  --bg-primary: #000000;
-  --bg-secondary: #050505;
-  --bg-tertiary: #0A0A0A;
-  --bg-elevated: #101010;
-  --bg-hover: #171717;
-  --border-subtle: rgba(0, 255, 65, 0.14);
-  --border-default: rgba(0, 255, 65, 0.22);
-  --border-active: rgba(0, 255, 65, 0.52);
-  --text-primary: #F2FFF4;
-  --text-secondary: #B3CDB7;
-  --text-muted: #708A75;
-  --text-disabled: #405445;
-  --accent: #00FF41;
-  --accent-hover: #42FF70;
-  --accent-active: #00C832;
-  --accent-fill: #00C832;
-  --accent-dark: #008A23;
-  --accent-soft: rgba(0, 255, 65, 0.11);
-  --accent-border: rgba(0, 255, 65, 0.35);
-  --accent-strong: #00FF41;
-  --accent-text: #42FF70;
-  --accent-contrast: #42FF70;
+  --ax-bg-app: #000000;
+  --ax-bg-panel: #050505;
+  --ax-bg-inset: #030303;
+  --ax-bg-elevated: #101010;
+  --ax-bg-hover: #171717;
+  --ax-bg-active: #1F1F1F;
+  --ax-border: rgba(0, 255, 65, 0.22);
+  --ax-border-subtle: rgba(0, 255, 65, 0.14);
+  --ax-border-strong: rgba(0, 255, 65, 0.36);
+  --ax-text: #F2FFF4;
+  --ax-text-muted: #B3CDB7;
+  --ax-text-faint: #708A75;
+  --ax-text-disabled: #405445;
+  --ax-text-on-accent: #001A06;
+  --ax-accent: #00FF41;
+  --ax-accent-hover: #42FF70;
+  --ax-accent-active: #00C832;
+  --ax-accent-soft: rgba(0, 255, 65, 0.11);
+  --ax-accent-softer: rgba(0, 255, 65, 0.06);
+  --ax-accent-border: rgba(0, 255, 65, 0.35);
+  --ax-accent-text: #42FF70;
+  /* Accent owns green, so success becomes cyan to stay readable as a status. */
+  --ax-success: #2BD9C8;
+  --ax-success-text: #5FE8DA;
+  --ax-success-soft: rgba(43, 217, 200, 0.14);
 }
 
 :root[data-theme="solarized"] {
   color-scheme: dark;
-  --bg-primary: #002B36;
-  --bg-secondary: #073642;
-  --bg-tertiary: #0B3F4A;
-  --bg-elevated: #104B56;
-  --bg-hover: #155360;
-  --border-subtle: rgba(238, 232, 213, 0.11);
-  --border-default: rgba(238, 232, 213, 0.17);
-  --border-active: rgba(181, 137, 0, 0.55);
-  --text-primary: #FDF6E3;
-  --text-secondary: #C8C2AF;
-  --text-muted: #839496;
-  --text-disabled: #586E75;
-  --accent: #B58900;
-  --accent-hover: #D3A500;
-  --accent-active: #8F6D00;
-  --accent-fill: #8F6D00;
-  --accent-dark: #6F5600;
-  --accent-soft: rgba(181, 137, 0, 0.14);
-  --accent-border: rgba(181, 137, 0, 0.42);
-  --accent-strong: #B58900;
-  --accent-text: #D3A500;
-  --accent-contrast: #D3A500;
+  --ax-bg-app: #002B36;
+  --ax-bg-panel: #073642;
+  --ax-bg-inset: #00212B;
+  --ax-bg-elevated: #104B56;
+  --ax-bg-hover: #155360;
+  --ax-bg-active: #1B5F6D;
+  --ax-border: rgba(238, 232, 213, 0.17);
+  --ax-border-subtle: rgba(238, 232, 213, 0.11);
+  --ax-border-strong: rgba(238, 232, 213, 0.28);
+  --ax-text: #FDF6E3;
+  --ax-text-muted: #C8C2AF;
+  --ax-text-faint: #839496;
+  --ax-text-disabled: #586E75;
+  --ax-text-on-accent: #1A1300;
+  --ax-accent: #B58900;
+  --ax-accent-hover: #D3A500;
+  --ax-accent-active: #8F6D00;
+  --ax-accent-soft: rgba(181, 137, 0, 0.14);
+  --ax-accent-softer: rgba(181, 137, 0, 0.07);
+  --ax-accent-border: rgba(181, 137, 0, 0.42);
+  --ax-accent-text: #D3A500;
+  /* Accent is amber here; warning moves to orange so the two never collide. */
+  --ax-warning: #CB4B16;
+  --ax-warning-text: #E4703B;
+  --ax-warning-soft: rgba(203, 75, 22, 0.16);
+  --ax-success: #859900;
+  --ax-success-text: #9FB300;
+  --ax-success-soft: rgba(133, 153, 0, 0.16);
+  --ax-error: #DC322F;
+  --ax-error-text: #F0534F;
+  --ax-error-soft: rgba(220, 50, 47, 0.16);
+  --ax-error-border: rgba(220, 50, 47, 0.45);
+  --ax-info: #268BD2;
+  --ax-info-text: #4FA6E0;
+  --ax-info-soft: rgba(38, 139, 210, 0.16);
 }
 
 /* The legacy accent preference remains available for the two AXIOM-branded
    palettes. Presets are opt-in; the default is always AXIOM Red. */
 :root[data-theme="obsidian"][data-accent="blue"] {
-  --accent: #58A6FF; --accent-hover: #79B8FF; --accent-active: #388BDE;
-  --accent-fill: #388BDE; --accent-dark: #1F6FBA;
-  --accent-soft: rgba(88, 166, 255, 0.13); --accent-border: rgba(88, 166, 255, 0.38);
-  --accent-strong: #58A6FF; --accent-text: #79B8FF; --accent-contrast: #79B8FF;
+  --ax-accent: #58A6FF; --ax-accent-hover: #79B8FF; --ax-accent-active: #388BDE;
+  --ax-accent-soft: rgba(88, 166, 255, 0.13); --ax-accent-softer: rgba(88, 166, 255, 0.07);
+  --ax-accent-border: rgba(88, 166, 255, 0.38); --ax-accent-text: #79B8FF;
+  --ax-text-on-accent: #04101F;
 }
 :root[data-theme="obsidian"][data-accent="teal"] {
-  --accent: #2DD4BF; --accent-hover: #5EEAD4; --accent-active: #14B8A6;
-  --accent-fill: #0F766E; --accent-dark: #115E59;
-  --accent-soft: rgba(45, 212, 191, 0.13); --accent-border: rgba(45, 212, 191, 0.38);
-  --accent-strong: #2DD4BF; --accent-text: #5EEAD4; --accent-contrast: #5EEAD4;
+  --ax-accent: #2DD4BF; --ax-accent-hover: #5EEAD4; --ax-accent-active: #14B8A6;
+  --ax-accent-soft: rgba(45, 212, 191, 0.13); --ax-accent-softer: rgba(45, 212, 191, 0.07);
+  --ax-accent-border: rgba(45, 212, 191, 0.38); --ax-accent-text: #5EEAD4;
+  --ax-text-on-accent: #032420;
 }
 :root[data-theme="obsidian"][data-accent="violet"] {
-  --accent: #A78BFA; --accent-hover: #C4B5FD; --accent-active: #8B5CF6;
-  --accent-fill: #6D28D9; --accent-dark: #5B21B6;
-  --accent-soft: rgba(167, 139, 250, 0.13); --accent-border: rgba(167, 139, 250, 0.38);
-  --accent-strong: #A78BFA; --accent-text: #C4B5FD; --accent-contrast: #C4B5FD;
+  --ax-accent: #A78BFA; --ax-accent-hover: #C4B5FD; --ax-accent-active: #8B5CF6;
+  --ax-accent-soft: rgba(167, 139, 250, 0.13); --ax-accent-softer: rgba(167, 139, 250, 0.07);
+  --ax-accent-border: rgba(167, 139, 250, 0.38); --ax-accent-text: #C4B5FD;
+  --ax-text-on-accent: #150B2E;
 }
 :root[data-theme="light"][data-accent="blue"] {
-  --accent: #2563EB; --accent-hover: #1D4ED8; --accent-active: #1E40AF;
-  --accent-fill: #2563EB; --accent-dark: #1E40AF;
-  --accent-soft: rgba(37, 99, 235, 0.10); --accent-border: rgba(37, 99, 235, 0.35);
-  --accent-strong: #2563EB; --accent-text: #1D4ED8; --accent-contrast: #1D4ED8;
+  --ax-accent: #2563EB; --ax-accent-hover: #1D4ED8; --ax-accent-active: #1E40AF;
+  --ax-accent-soft: rgba(37, 99, 235, 0.10); --ax-accent-softer: rgba(37, 99, 235, 0.05);
+  --ax-accent-border: rgba(37, 99, 235, 0.35); --ax-accent-text: #1D4ED8;
+  --ax-text-on-accent: #FFFFFF;
 }
 :root[data-theme="light"][data-accent="teal"] {
-  --accent: #0F766E; --accent-hover: #115E59; --accent-active: #134E4A;
-  --accent-fill: #0F766E; --accent-dark: #134E4A;
-  --accent-soft: rgba(15, 118, 110, 0.10); --accent-border: rgba(15, 118, 110, 0.35);
-  --accent-strong: #0F766E; --accent-text: #115E59; --accent-contrast: #115E59;
+  --ax-accent: #0F766E; --ax-accent-hover: #115E59; --ax-accent-active: #134E4A;
+  --ax-accent-soft: rgba(15, 118, 110, 0.10); --ax-accent-softer: rgba(15, 118, 110, 0.05);
+  --ax-accent-border: rgba(15, 118, 110, 0.35); --ax-accent-text: #115E59;
+  --ax-text-on-accent: #FFFFFF;
 }
 :root[data-theme="light"][data-accent="violet"] {
-  --accent: #6D28D9; --accent-hover: #5B21B6; --accent-active: #4C1D95;
-  --accent-fill: #6D28D9; --accent-dark: #4C1D95;
-  --accent-soft: rgba(109, 40, 217, 0.10); --accent-border: rgba(109, 40, 217, 0.35);
-  --accent-strong: #6D28D9; --accent-text: #5B21B6; --accent-contrast: #5B21B6;
+  --ax-accent: #6D28D9; --ax-accent-hover: #5B21B6; --ax-accent-active: #4C1D95;
+  --ax-accent-soft: rgba(109, 40, 217, 0.10); --ax-accent-softer: rgba(109, 40, 217, 0.05);
+  --ax-accent-border: rgba(109, 40, 217, 0.35); --ax-accent-text: #5B21B6;
+  --ax-text-on-accent: #FFFFFF;
 }
 
 * { box-sizing: border-box; }

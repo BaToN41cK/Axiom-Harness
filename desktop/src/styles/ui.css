@@ -1,0 +1,573 @@
+/*
+ * AXIOM design system — component styles.
+ *
+ * Every value here comes from `tokens.css`. No raw colours, no ad-hoc spacing.
+ * All interactive primitives implement the full state set: hover, focus-visible,
+ * active, disabled, loading and error.
+ */
+
+/* Screen-reader-only text for icon-only affordances. */
+.ax-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes ax-spin {
+  to { transform: rotate(360deg); }
+}
+.ax-spin { animation: ax-spin 900ms linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .ax-spin { animation-duration: 2400ms; }
+}
+
+/* ============================== Button ============================== */
+
+.ax-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ax-space-2);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius);
+  background: var(--ax-bg-elevated);
+  color: var(--ax-text);
+  font-family: var(--ax-font-ui);
+  font-size: var(--ax-text-base);
+  font-weight: var(--ax-weight-medium);
+  line-height: var(--ax-leading-tight);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--ax-motion) var(--ax-ease),
+    border-color var(--ax-motion) var(--ax-ease),
+    color var(--ax-motion) var(--ax-ease);
+}
+.ax-btn-md { padding: 0 var(--ax-space-3); height: 30px; }
+.ax-btn-sm { padding: 0 var(--ax-space-2); height: 24px; font-size: var(--ax-text-sm); }
+.ax-btn-block { width: 100%; }
+
+.ax-btn:hover:not(:disabled) { background: var(--ax-bg-hover); border-color: var(--ax-border-strong); }
+.ax-btn:active:not(:disabled) { background: var(--ax-bg-active); }
+.ax-btn:focus-visible { outline: none; box-shadow: var(--ax-focus-ring); }
+.ax-btn:disabled { color: var(--ax-text-disabled); cursor: not-allowed; background: var(--ax-bg-panel); }
+.ax-btn.is-loading { cursor: progress; }
+
+/* Primary is the only accent-filled variant. */
+.ax-btn-primary {
+  background: var(--ax-accent);
+  border-color: var(--ax-accent);
+  color: var(--ax-text-on-accent);
+  font-weight: var(--ax-weight-semibold);
+}
+.ax-btn-primary:hover:not(:disabled) { background: var(--ax-accent-hover); border-color: var(--ax-accent-hover); }
+.ax-btn-primary:active:not(:disabled) { background: var(--ax-accent-active); border-color: var(--ax-accent-active); }
+.ax-btn-primary:disabled { background: var(--ax-accent-soft); border-color: var(--ax-accent-border); color: var(--ax-text-disabled); }
+
+.ax-btn-ghost { background: transparent; border-color: transparent; color: var(--ax-text-muted); }
+.ax-btn-ghost:hover:not(:disabled) { background: var(--ax-bg-hover); border-color: transparent; color: var(--ax-text); }
+
+/* Danger uses the error hue, never the accent. */
+.ax-btn-danger { background: transparent; border-color: var(--ax-error-border); color: var(--ax-error-text); }
+.ax-btn-danger:hover:not(:disabled) { background: var(--ax-error-soft); border-color: var(--ax-error); }
+.ax-btn-danger:active:not(:disabled) { background: var(--ax-error-soft); border-color: var(--ax-error); }
+
+.ax-btn.is-invalid { border-color: var(--ax-error); }
+.ax-btn svg { flex: none; }
+
+/* ============================ IconButton ============================ */
+
+.ax-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--ax-radius-sm);
+  background: transparent;
+  color: var(--ax-text-muted);
+  cursor: pointer;
+  transition:
+    background var(--ax-motion) var(--ax-ease),
+    color var(--ax-motion) var(--ax-ease),
+    border-color var(--ax-motion) var(--ax-ease);
+}
+.ax-icon-btn-sm { width: 20px; height: 20px; }
+.ax-icon-btn-md { width: 26px; height: 26px; }
+.ax-icon-btn-lg { width: 32px; height: 32px; border-radius: var(--ax-radius); }
+.ax-icon-btn:hover:not(:disabled) { background: var(--ax-bg-hover); color: var(--ax-text); }
+.ax-icon-btn:active:not(:disabled) { background: var(--ax-bg-active); }
+.ax-icon-btn:focus-visible { outline: none; box-shadow: var(--ax-focus-ring); }
+.ax-icon-btn:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
+.ax-icon-btn.is-active {
+  background: var(--ax-accent-soft);
+  border-color: var(--ax-accent-border);
+  color: var(--ax-accent-text);
+}
+.ax-icon-btn-secondary { border-color: var(--ax-border); background: var(--ax-bg-elevated); }
+.ax-icon-btn-danger:hover:not(:disabled) { background: var(--ax-error-soft); color: var(--ax-error-text); }
+
+/* ========================= Input / Search ========================= */
+
+.ax-field { display: flex; flex-direction: column; gap: var(--ax-space-1); }
+.ax-field-block { width: 100%; }
+.ax-field-label {
+  font-size: var(--ax-text-sm);
+  font-weight: var(--ax-weight-medium);
+  color: var(--ax-text-muted);
+}
+.ax-input-shell {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-space-2);
+  min-width: 0;
+  padding: 0 var(--ax-space-2);
+  height: 28px;
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius);
+  background: var(--ax-bg-inset);
+  transition: border-color var(--ax-motion) var(--ax-ease), box-shadow var(--ax-motion) var(--ax-ease);
+}
+.ax-input-shell:hover { border-color: var(--ax-border-strong); }
+.ax-input-shell:focus-within { border-color: var(--ax-accent); box-shadow: 0 0 0 2px var(--ax-accent-softer); }
+.ax-input-shell.is-invalid { border-color: var(--ax-error); }
+.ax-input-shell.is-invalid:focus-within { box-shadow: 0 0 0 2px var(--ax-error-soft); }
+.ax-input-icon { display: inline-flex; color: var(--ax-text-faint); flex: none; }
+.ax-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ax-text);
+  font-family: var(--ax-font-ui);
+  font-size: var(--ax-text-base);
+  outline: none;
+}
+.ax-input::placeholder { color: var(--ax-text-faint); }
+.ax-input:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
+.ax-input[type="search"]::-webkit-search-cancel-button { display: none; }
+.ax-search { border-radius: var(--ax-radius-pill); padding-right: var(--ax-space-1); }
+.ax-search-clear { flex: none; }
+.ax-field-hint { margin: 0; font-size: var(--ax-text-xs); color: var(--ax-text-faint); }
+.ax-field-error {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-space-1);
+  margin: 0;
+  font-size: var(--ax-text-xs);
+  color: var(--ax-error-text);
+}
+.ax-field-error::before { content: "!"; font-weight: var(--ax-weight-semibold); }
+
+/* ====================== Badge / StatusPill ====================== */
+
+.ax-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ax-space-1);
+  padding: 1px var(--ax-space-2);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-pill);
+  background: var(--ax-bg-elevated);
+  color: var(--ax-text-muted);
+  font-size: var(--ax-text-xs);
+  font-weight: var(--ax-weight-medium);
+  line-height: 1.5;
+}
+.ax-badge-count {
+  min-width: 18px;
+  justify-content: center;
+  padding: 0 var(--ax-space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.ax-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ax-space-1);
+  padding: 2px var(--ax-space-2);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-pill);
+  background: var(--ax-bg-elevated);
+  color: var(--ax-text-muted);
+  font-size: var(--ax-text-xs);
+  font-weight: var(--ax-weight-medium);
+  white-space: nowrap;
+}
+.ax-pill svg { flex: none; }
+.ax-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.ax-pill-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* Shared tone scale for badges, pills and empty states. */
+.ax-tone-neutral { color: var(--ax-text-muted); }
+.ax-tone-accent {
+  color: var(--ax-accent-text);
+  border-color: var(--ax-accent-border);
+  background: var(--ax-accent-soft);
+}
+.ax-tone-success { color: var(--ax-success-text); border-color: var(--ax-success); background: var(--ax-success-soft); }
+.ax-tone-warning { color: var(--ax-warning-text); border-color: var(--ax-warning); background: var(--ax-warning-soft); }
+.ax-tone-info { color: var(--ax-info-text); border-color: var(--ax-info); background: var(--ax-info-soft); }
+.ax-tone-error { color: var(--ax-error-text); border-color: var(--ax-error); background: var(--ax-error-soft); }
+
+.ax-error-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ax-space-2);
+  padding: var(--ax-space-2) var(--ax-space-3);
+  border: 1px solid var(--ax-error-border);
+  border-radius: var(--ax-radius);
+  background: var(--ax-error-soft);
+  color: var(--ax-error-text);
+  font-size: var(--ax-text-base);
+}
+.ax-error-note svg { flex: none; margin-top: 2px; }
+.ax-error-note-body { display: flex; flex-direction: column; gap: var(--ax-space-1); min-width: 0; }
+.ax-error-note-body span { color: var(--ax-text-muted); font-size: var(--ax-text-sm); }
+
+.ax-unknown { color: var(--ax-text-faint); font-variant-numeric: tabular-nums; }
+
+/* ================================ Tabs ================================ */
+
+.ax-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-space-2);
+  min-width: 0;
+}
+.ax-tabs-strip { display: flex; align-items: center; gap: var(--ax-space-1); min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.ax-tabs-strip::-webkit-scrollbar { display: none; }
+.ax-tabs-actions { display: flex; align-items: center; gap: var(--ax-space-1); margin-left: auto; flex: none; }
+
+.ax-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ax-space-2);
+  padding: 0 var(--ax-space-3);
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--ax-radius-sm);
+  background: transparent;
+  color: var(--ax-text-muted);
+  font-family: var(--ax-font-ui);
+  font-size: var(--ax-text-sm);
+  font-weight: var(--ax-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--ax-motion) var(--ax-ease), color var(--ax-motion) var(--ax-ease);
+}
+.ax-tab svg { flex: none; }
+.ax-tab:hover:not(:disabled) { background: var(--ax-bg-hover); color: var(--ax-text); }
+.ax-tab:focus-visible { outline: none; box-shadow: var(--ax-focus-ring); }
+.ax-tab:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
+/* Selected state is the one other place the accent is allowed. */
+.ax-tab.is-active {
+  background: var(--ax-accent-soft);
+  border-color: var(--ax-accent-border);
+  color: var(--ax-text);
+}
+.ax-tab.is-active svg { color: var(--ax-accent); }
+.ax-tabs-inline .ax-tab { height: 24px; padding: 0 var(--ax-space-2); }
+.ax-tabpanel { min-height: 0; display: flex; flex-direction: column; }
+
+/* ============================ Card / Empty ============================ */
+
+.ax-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ax-space-2);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius);
+  background: var(--ax-bg-panel);
+  padding: var(--ax-space-3);
+}
+.ax-card-elevated { background: var(--ax-bg-elevated); box-shadow: var(--ax-elev-1); }
+.ax-card-inset { background: var(--ax-bg-inset); }
+.ax-card.is-selected { border-color: var(--ax-accent-border); background: var(--ax-accent-softer); }
+
+.ax-card-head { display: flex; align-items: center; gap: var(--ax-space-2); min-width: 0; }
+.ax-card-icon { display: inline-flex; color: var(--ax-text-muted); flex: none; }
+.ax-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ax-card-title-text {
+  font-size: var(--ax-text-base);
+  font-weight: var(--ax-weight-medium);
+  color: var(--ax-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ax-card-meta { font-size: var(--ax-text-xs); color: var(--ax-text-faint); }
+.ax-card-actions { display: flex; align-items: center; gap: var(--ax-space-1); flex: none; }
+
+.ax-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ax-space-2);
+  padding: var(--ax-space-6) var(--ax-space-4);
+  text-align: center;
+  color: var(--ax-text-muted);
+}
+.ax-empty-icon { display: inline-flex; color: var(--ax-text-faint); }
+.ax-empty.ax-tone-error { background: transparent; border: 0; }
+.ax-empty.ax-tone-error .ax-empty-icon { color: var(--ax-error-text); }
+.ax-empty-title {
+  margin: 0;
+  font-size: var(--ax-text-base);
+  font-weight: var(--ax-weight-medium);
+  color: var(--ax-text);
+}
+.ax-empty-text {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--ax-text-sm);
+  line-height: var(--ax-leading);
+  color: var(--ax-text-muted);
+}
+.ax-empty-action { margin-top: var(--ax-space-1); }
+
+/* ============================== Skeleton ============================== */
+
+@keyframes ax-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+.ax-skeleton-group { display: flex; flex-direction: column; gap: var(--ax-space-2); width: 100%; }
+.ax-skeleton {
+  display: block;
+  border-radius: var(--ax-radius-sm);
+  background:
+    linear-gradient(90deg, var(--ax-bg-elevated) 0%, var(--ax-bg-hover) 50%, var(--ax-bg-elevated) 100%);
+  background-size: 200% 100%;
+  animation: ax-shimmer 1200ms linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ax-skeleton { animation: none; background: var(--ax-bg-elevated); }
+}
+
+/* ============================== Dropdown ============================== */
+
+.ax-dropdown { position: relative; display: inline-flex; min-width: 0; }
+.ax-menu {
+  position: absolute;
+  top: calc(100% + var(--ax-space-1));
+  z-index: var(--ax-z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--ax-space-1);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius);
+  background: var(--ax-bg-elevated);
+  box-shadow: var(--ax-elev-2);
+  outline: none;
+}
+.ax-menu-start { left: 0; }
+.ax-menu-end { right: 0; }
+.ax-menu-title {
+  margin: 0;
+  padding: var(--ax-space-1) var(--ax-space-2);
+  font-size: var(--ax-text-xs);
+  letter-spacing: var(--ax-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ax-text-faint);
+}
+.ax-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-space-2);
+  padding: var(--ax-space-1) var(--ax-space-2);
+  min-height: 26px;
+  border: 0;
+  border-radius: var(--ax-radius-sm);
+  background: transparent;
+  color: var(--ax-text);
+  font-family: var(--ax-font-ui);
+  font-size: var(--ax-text-base);
+  text-align: left;
+  cursor: pointer;
+}
+.ax-menu-item:hover:not(:disabled),
+.ax-menu-item.is-cursor:not(:disabled) { background: var(--ax-bg-hover); }
+.ax-menu-item:focus-visible { outline: none; box-shadow: var(--ax-focus-ring); }
+.ax-menu-item:disabled { color: var(--ax-text-disabled); cursor: not-allowed; }
+.ax-menu-item.is-danger { color: var(--ax-error-text); }
+.ax-menu-item.is-danger:hover:not(:disabled) { background: var(--ax-error-soft); }
+.ax-menu-icon { display: inline-flex; color: var(--ax-text-muted); flex: none; }
+.ax-menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-menu-hint { font-size: var(--ax-text-xs); color: var(--ax-text-faint); flex: none; }
+
+/* ============================ Tooltip / Kbd ============================ */
+
+.ax-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--ax-space-1);
+  min-width: 18px;
+  height: 17px;
+  justify-content: center;
+  border: 1px solid var(--ax-border);
+  border-bottom-width: 2px;
+  border-radius: var(--ax-radius-sm);
+  background: var(--ax-bg-inset);
+  color: var(--ax-text-muted);
+  font-family: var(--ax-font-ui);
+  font-size: var(--ax-text-xs);
+  font-weight: var(--ax-weight-medium);
+  white-space: nowrap;
+}
+
+.ax-tooltip-host { position: relative; display: inline-flex; min-width: 0; }
+.ax-tooltip {
+  position: absolute;
+  z-index: var(--ax-z-tooltip);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ax-space-1);
+  padding: var(--ax-space-1) var(--ax-space-2);
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius-sm);
+  background: var(--ax-bg-elevated);
+  box-shadow: var(--ax-elev-2);
+  color: var(--ax-text);
+  font-size: var(--ax-text-xs);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--ax-motion-fast) var(--ax-ease);
+}
+.ax-tooltip-top .ax-tooltip { bottom: calc(100% + var(--ax-space-1)); left: 50%; transform: translateX(-50%); }
+.ax-tooltip-bottom .ax-tooltip { top: calc(100% + var(--ax-space-1)); left: 50%; transform: translateX(-50%); }
+.ax-tooltip-left .ax-tooltip { right: calc(100% + var(--ax-space-1)); top: 50%; transform: translateY(-50%); }
+.ax-tooltip-right .ax-tooltip { left: calc(100% + var(--ax-space-1)); top: 50%; transform: translateY(-50%); }
+/* Shown on hover and on keyboard focus alike. */
+.ax-tooltip-host:hover > .ax-tooltip,
+.ax-tooltip-host:focus-within > .ax-tooltip { opacity: 1; }
+
+/* ============================== Splitter ============================== */
+
+.ax-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  z-index: var(--ax-z-panel);
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  transition: background var(--ax-motion-fast) var(--ax-ease);
+}
+.ax-splitter-left { right: -2px; }
+.ax-splitter-right { left: -2px; }
+.ax-splitter:hover,
+.ax-splitter:active { background: var(--ax-accent-soft); }
+.ax-splitter:focus-visible { outline: none; background: var(--ax-accent-soft); box-shadow: var(--ax-focus-ring); }
+
+/* ============================= ToolCallCard ============================= */
+
+.ax-tool {
+  border: 1px solid var(--ax-border);
+  border-radius: var(--ax-radius);
+  background: var(--ax-bg-panel);
+  overflow: hidden;
+}
+.ax-tool-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-space-2);
+  padding: var(--ax-space-2) var(--ax-space-3);
+  min-width: 0;
+}
+.ax-tool-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 0;
+  border-radius: var(--ax-radius-sm);
+  background: transparent;
+  color: var(--ax-text-faint);
+  cursor: pointer;
+  transition: transform var(--ax-motion-fast) var(--ax-ease), color var(--ax-motion-fast) var(--ax-ease);
+}
+.ax-tool-toggle.is-static { cursor: default; }
+.ax-tool-toggle:hover { color: var(--ax-text); }
+.ax-tool-toggle:focus-visible { outline: none; box-shadow: var(--ax-focus-ring); }
+.ax-tool.is-open .ax-tool-toggle { transform: rotate(90deg); }
+.ax-tool-icon { display: inline-flex; color: var(--ax-text-muted); flex: none; }
+.ax-tool-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.ax-tool-name {
+  display: flex;
+  align-items: center;
+  gap: var(--ax-space-1);
+  font-size: var(--ax-text-base);
+  font-weight: var(--ax-weight-medium);
+  color: var(--ax-text);
+}
+.ax-tool-group { font-size: var(--ax-text-xs); color: var(--ax-text-faint); font-variant-numeric: tabular-nums; }
+.ax-tool-target {
+  font-family: var(--ax-font-mono);
+  font-size: var(--ax-text-xs);
+  color: var(--ax-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ax-tool-state { flex: none; }
+.ax-tool-duration {
+  flex: none;
+  font-family: var(--ax-font-mono);
+  font-size: var(--ax-text-xs);
+  color: var(--ax-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* A failed call is unmistakable: error hue on the border, not the accent. */
+.ax-tool-failed { border-color: var(--ax-error-border); }
+.ax-tool-denied { border-color: var(--ax-warning); }
+.ax-tool-running { border-color: var(--ax-info); }
+
+.ax-tool-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ax-space-3);
+  padding: var(--ax-space-3);
+  border-top: 1px solid var(--ax-border-subtle);
+  background: var(--ax-bg-inset);
+}
+.ax-tool-section { display: flex; flex-direction: column; gap: var(--ax-space-1); min-width: 0; }
+.ax-tool-section h4 {
+  margin: 0;
+  font-size: var(--ax-text-xs);
+  font-weight: var(--ax-weight-medium);
+  letter-spacing: var(--ax-tracking-caps);
+  text-transform: uppercase;
+  color: var(--ax-text-faint);
+}
+.ax-tool-section pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--ax-space-2);
+  border: 1px solid var(--ax-border-subtle);
+  border-radius: var(--ax-radius-sm);
+  background: var(--ax-bg-panel);
+  color: var(--ax-text-muted);
+  font-family: var(--ax-font-mono);
+  font-size: var(--ax-text-xs);
+  line-height: var(--ax-leading);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ax-tool-section.is-error h4 { color: var(--ax-error-text); }
+.ax-tool-section.is-error pre { border-color: var(--ax-error-border); color: var(--ax-error-text); }

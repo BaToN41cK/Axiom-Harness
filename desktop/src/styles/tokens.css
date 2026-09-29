@@ -1,0 +1,140 @@
+/*
+ * AXIOM design tokens — the single source of truth for colour, spacing,
+ * radius, typography, elevation and motion.
+ *
+ * Rules enforced by this file:
+ *  - Accent is reserved for primary actions, selection and focus.
+ *  - Status colours (success / warning / info / error) are separate hues and
+ *    never borrow the accent.
+ *  - Git status colours are their own scale (modified=amber, added=green,
+ *    deleted=red) so a changed file never looks like a primary action.
+ *  - Elevation is borders + shadow only. No glow.
+ *
+ * `styles.css` maps its historical variable names onto these tokens, so the
+ * existing component CSS keeps working while the palette lives here.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- Surfaces: dark graphite, never pure black ---------- */
+  --ax-bg-app: #14161a;
+  --ax-bg-panel: #181b20;
+  --ax-bg-elevated: #1e2228;
+  --ax-bg-inset: #101215;
+  --ax-bg-hover: #22262d;
+  --ax-bg-active: #2a2f37;
+  --ax-bg-overlay: rgba(10, 11, 13, 0.62);
+
+  /* ---------- Borders ---------- */
+  --ax-border: #2a2f37;
+  --ax-border-subtle: #22262c;
+  --ax-border-strong: #3a414b;
+
+  /* ---------- Text ---------- */
+  --ax-text: #e6e8eb;
+  --ax-text-muted: #9aa1ab;
+  --ax-text-faint: #6d747e;
+  --ax-text-disabled: #4c535c;
+  --ax-text-on-accent: #160705;
+
+  /* ---------- Accent: primary action / selected / focus only ---------- */
+  --ax-accent: #ff5a4d;
+  --ax-accent-hover: #ff7064;
+  --ax-accent-active: #e6493d;
+  --ax-accent-soft: rgba(255, 90, 77, 0.14);
+  --ax-accent-softer: rgba(255, 90, 77, 0.08);
+  --ax-accent-border: rgba(255, 90, 77, 0.42);
+  /* Readable accent text on panel surfaces (WCAG AA at 13px+). */
+  --ax-accent-text: #ff8b80;
+
+  /* ---------- Status: distinct hues, always paired with icon + text ------ */
+  --ax-success: #3fb950;
+  --ax-success-text: #56d364;
+  --ax-success-soft: rgba(63, 185, 80, 0.14);
+  --ax-warning: #d29922;
+  --ax-warning-text: #e3b341;
+  --ax-warning-soft: rgba(210, 153, 34, 0.14);
+  --ax-info: #58a6ff;
+  --ax-info-text: #79b8ff;
+  --ax-info-soft: rgba(88, 166, 255, 0.14);
+  /* Crimson, deliberately cooler than the coral accent. */
+  --ax-error: #e8365a;
+  --ax-error-text: #ff6b8a;
+  --ax-error-soft: rgba(232, 54, 90, 0.14);
+  --ax-error-border: rgba(232, 54, 90, 0.45);
+
+  /* ---------- Git status: own scale, never the accent ---------- */
+  --ax-git-modified: var(--ax-warning-text);
+  --ax-git-added: var(--ax-success-text);
+  --ax-git-deleted: var(--ax-error-text);
+  --ax-git-renamed: var(--ax-info-text);
+  --ax-git-untracked: var(--ax-text-faint);
+  --ax-git-conflict: #ff9e64;
+
+  /* ---------- Spacing: 4 / 8 / 12 / 16 / 24 ---------- */
+  --ax-space-1: 4px;
+  --ax-space-2: 8px;
+  --ax-space-3: 12px;
+  --ax-space-4: 16px;
+  --ax-space-6: 24px;
+  --ax-space-8: 32px;
+
+  /* ---------- Radius ---------- */
+  --ax-radius-sm: 6px;
+  --ax-radius: 8px;
+  --ax-radius-lg: 10px;
+  --ax-radius-pill: 999px;
+
+  /* ---------- Typography ---------- */
+  --ax-font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ax-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --ax-text-xs: 11px;
+  --ax-text-sm: 12px;
+  --ax-text-base: 13px;
+  --ax-text-md: 14px;
+  --ax-text-lg: 16px;
+  --ax-text-xl: 20px;
+  --ax-leading-tight: 1.3;
+  --ax-leading: 1.5;
+  --ax-leading-loose: 1.65;
+  --ax-weight-regular: 400;
+  --ax-weight-medium: 500;
+  --ax-weight-semibold: 600;
+  --ax-tracking-caps: 0.08em;
+
+  /* ---------- Elevation: borders + shadow, no glow ---------- */
+  --ax-elev-1: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --ax-elev-2: 0 6px 16px rgba(0, 0, 0, 0.36);
+  --ax-elev-3: 0 16px 40px rgba(0, 0, 0, 0.46);
+
+  /* ---------- Motion: 120–180ms ---------- */
+  --ax-motion-fast: 120ms;
+  --ax-motion: 150ms;
+  --ax-motion-slow: 180ms;
+  --ax-ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  /* ---------- Focus ring ---------- */
+  --ax-focus-ring: 0 0 0 2px var(--ax-bg-app), 0 0 0 4px var(--ax-accent-border);
+  --ax-focus-outline: 1px solid var(--ax-accent);
+
+  /* ---------- Layout ---------- */
+  --ax-topbar-h: 46px;
+  --ax-statusbar-h: 26px;
+  --ax-rail-w: 52px;
+  --ax-z-panel: 10;
+  --ax-z-dropdown: 60;
+  --ax-z-overlay: 80;
+  --ax-z-modal: 100;
+  --ax-z-toast: 120;
+  --ax-z-tooltip: 140;
+}
+
+/* Honour the OS preference: no transitions, no animated indicators. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ax-motion-fast: 0ms;
+    --ax-motion: 0ms;
+    --ax-motion-slow: 0ms;
+  }
+}

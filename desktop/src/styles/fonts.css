@@ -1,0 +1,21 @@
+/*
+ * Local-first typography. Both families are bundled from node_modules by Vite
+ * (no CDN, no network at runtime). Only the weights the UI actually uses are
+ * imported, in latin + cyrillic subsets because the interface is Russian.
+ *
+ * Inter        — UI text
+ * JetBrains Mono — code blocks, diffs, terminal
+ */
+
+/* Inter: 400 body, 500 labels/chips, 600 headings and active states. */
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/cyrillic-400.css";
+@import "@fontsource/inter/cyrillic-500.css";
+@import "@fontsource/inter/cyrillic-600.css";
+
+/* JetBrains Mono: 400 code, 500 emphasis inside diffs/terminal. */
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "@fontsource/jetbrains-mono/latin-500.css";
+@import "@fontsource/jetbrains-mono/cyrillic-400.css";
