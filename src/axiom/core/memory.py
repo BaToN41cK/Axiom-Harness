@@ -1,13 +1,28 @@
 """Curated Memory — user-controlled durable facts, preferences, and decisions (W2.1).
 
-Memory items are stored in ``~/.axiom/memory.json`` (global) or ``.axiom/memory.json``
-(project). Each item has a scope, category, and content. The model accesses memory
-only through tools; banned content never reaches disk.
+Each item belongs to one of four scopes (W4.11 extends the original two):
+
+===========  =========================================================  ==========
+scope        lives in                                                   lifetime
+===========  =========================================================  ==========
+``global``   ``~/.axiom/memory.json``                                   forever
+``project``  ``<workspace>/.axiom/memory.json``                         per project
+``task``     ``~/.axiom/memory/tasks/<task_id>.json``                   one task
+``session``  ``~/.axiom/memory/sessions/<conversation_id>.json``        one chat
+===========  =========================================================  ==========
+
+Reads consult the stores in :data:`SCOPE_ORDER` (task → session → project →
+global), so a fact restated by a more specific scope shadows the broader copy.
+Only a budgeted slice ever reaches the model; the full store never enters
+context. Task memory is archived when its task completes, so one task's notes
+cannot leak into the next conversation. The model accesses memory only through
+tools; banned content never reaches disk.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -25,11 +40,23 @@ from axiom.core.tools.base import (
 
 _LOG = get_logger("memory")
 
-#: Memory scopes: global (all sessions), project (workspace-specific), conversation (future).
-MemoryScope = Literal["global", "project", "conversation"]
+#: Memory scopes: global (all projects), project (one workspace), task (one
+#: Task Runtime run), session (one conversation).
+MemoryScope = Literal["global", "project", "task", "session"]
+
+#: Read/write precedence, most specific first (W4.11 DoD: task → project →
+#: global; the current conversation is more specific than a whole project).
+SCOPE_ORDER: tuple[MemoryScope, ...] = ("task", "session", "project", "global")
+
+#: Scopes owned by one short-lived thing, so their memory is archived when the
+#: owner ends rather than kept as a live store.
+EPHEMERAL_SCOPES: tuple[MemoryScope, ...] = ("task", "session")
 
 #: Memory categories: normal (general facts), sensitive (user preferences), banned (never store).
 MemoryCategory = Literal["normal", "sensitive", "banned"]
+
+#: Task/session ids become file names, so they must never carry a path.
+_IDENT_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 @dataclass
@@ -56,18 +83,89 @@ class MemoryStore:
 
     Global memory: ``~/.axiom/memory.json``
     Project memory: ``<project>/.axiom/memory.json``
+    Task memory: ``~/.axiom/memory/tasks/<task_id>.json`` (W4.11)
+    Session memory: ``~/.axiom/memory/sessions/<conversation_id>.json`` (W4.11)
     """
 
-    def __init__(self, scope: MemoryScope = "global", project_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        scope: MemoryScope = "global",
+        project_root: Path | None = None,
+        task_id: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        if scope not in SCOPE_ORDER:
+            raise ValueError(f"Unknown memory scope: {scope}")
         self.scope = scope
         self.project_root = project_root
+        self.task_id = task_id
+        self.session_id = session_id
+        # Validate before any disk access: a scope that needs an owner id
+        # without one is a programming error, never a silent global store.
+        if scope == "project" and project_root is None:
+            raise ValueError("Project memory needs a project_root")
+        if scope == "task":
+            self._require_ident(task_id, "task_id")
+        if scope == "session":
+            self._require_ident(session_id, "session_id")
         self._items: dict[str, MemoryItem] = {}
         self._load()
+
+    @staticmethod
+    def _require_ident(value: str | None, label: str) -> str:
+        """Guard owner ids used as file names against any path traversal."""
+        if not isinstance(value, str) or not _IDENT_RE.fullmatch(value):
+            raise ValueError(f"Invalid memory {label}: {value!r}")
+        return value
 
     def _path(self) -> Path:
         if self.scope == "project" and self.project_root:
             return self.project_root / ".axiom" / "memory.json"
+        if self.scope == "task":
+            ident = self._require_ident(self.task_id, "task_id")
+            return axiom_home() / "memory" / "tasks" / f"{ident}.json"
+        if self.scope == "session":
+            ident = self._require_ident(self.session_id, "session_id")
+            return axiom_home() / "memory" / "sessions" / f"{ident}.json"
         return axiom_home() / "memory.json"
+
+    def archive_directory(self) -> Path:
+        """Where finished ephemeral stores are moved (W4.11)."""
+        return axiom_home() / "memory" / "archive"
+
+    def archive(self, *, reason: str = "completed") -> Path | None:
+        """Move this store's file into the archive and empty the live store.
+
+        Task memory is durable evidence for exactly one task; keeping it live
+        would let one task's notes steer a later, unrelated conversation. So a
+        finished owner's file is moved out of the live tree with a real
+        ``archived_at`` stamp instead of being deleted. Returns the archive
+        path, or ``None`` when there was nothing to archive.
+        """
+        path = self._path()
+        items = list(self._items.values())
+        self._items = {}
+        if not path.exists():
+            return None
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        ident = self.task_id or self.session_id or self.scope
+        archive_dir = self.archive_directory()
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        target = archive_dir / f"{self.scope}-{ident}-{reason}-{stamp}.json"
+        payload = {
+            "items": [item.to_dict() for item in items],
+            "archived_at": time.time(),
+            "archive_reason": reason,
+            "archived_scope": self.scope,
+        }
+        tmp = target.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(target)
+        path.unlink(missing_ok=True)
+        _LOG.info("Archived %s memory (%d items) to %s", self.scope, len(items), target)
+        return target
+
+
 
     def _load(self) -> None:
         """Load memory items from disk. A corrupt file never crashes the app."""
@@ -186,20 +284,29 @@ class MemoryTools:
     """Tool definitions and handlers for agent memory access.
 
     The model accesses memory only through these tools; direct store access
-    is reserved for UI/management commands. Reads merge the global store and
-    (when present) the current project store.
+    is reserved for UI/management commands. Reads walk every bound store in
+    :data:`SCOPE_ORDER` — task → session → project → global — so a more
+    specific scope shadows a broader one (W4.11).
     """
 
-    def __init__(self, store: MemoryStore, project_store: MemoryStore | None = None) -> None:
+    def __init__(
+        self,
+        store: MemoryStore,
+        project_store: MemoryStore | None = None,
+        task_store: MemoryStore | None = None,
+        session_store: MemoryStore | None = None,
+    ) -> None:
         self.store = store
         self.project_store = project_store
+        self.task_store = task_store
+        self.session_store = session_store
 
     # ------------------------------------------------------------------ utils
 
     def _stores(self) -> list[MemoryStore]:
-        """Stores a read must consult: project first (most specific), then global."""
+        """Stores a read must consult, most specific scope first (W4.11)."""
         seen: list[MemoryStore] = []
-        for candidate in (self.project_store, self.store):
+        for candidate in (self.task_store, self.session_store, self.project_store, self.store):
             if candidate is not None and all(candidate is not s for s in seen):
                 seen.append(candidate)
         return seen
@@ -208,19 +315,41 @@ class MemoryTools:
         """Public view of the backing stores (UI projections iterate this)."""
         return self._stores()
 
-    def _write_store(self, scope: str) -> MemoryStore:
+    def scope_rows(self) -> list[dict]:
+        """One honest row per bound store: scope, real path, item count."""
+        return [
+            {"scope": store.scope, "path": str(store._path()), "count": store.count()}
+            for store in self._stores()
+        ]
+
+    def write_store(self, scope: str) -> MemoryStore:
+        """Resolve where a write lands; an unbound scope falls back to global.
+
+        The tool result always reports the store that actually took the item,
+        so a fallback is visible to the model instead of silently relabelled.
+        """
+        if scope == "task" and self.task_store is not None:
+            return self.task_store
+        if scope == "session" and self.session_store is not None:
+            return self.session_store
         if scope == "project" and self.project_store is not None:
             return self.project_store
         return self.store
 
     def _merge(self, per_store: list[list[MemoryItem]], limit: int) -> list[MemoryItem]:
-        """Merge per-store results by id, newest first, capped at ``limit``."""
-        merged: dict[str, MemoryItem] = {}
-        for items in per_store:
+        """Merge per-store slices by scope precedence, then by recency.
+
+        ``per_store`` follows :meth:`_stores` order, so an item a more specific
+        scope also holds is kept once, at the higher rank — the task note
+        shadows the project copy instead of duplicating it.
+        """
+        merged: dict[str, tuple[int, MemoryItem]] = {}
+        for rank, items in enumerate(per_store):
             for item in items:
-                merged.setdefault(item.id, item)
-        result = sorted(merged.values(), key=lambda x: x.updated_at, reverse=True)
-        return result[:limit]
+                merged.setdefault(item.id, (rank, item))
+        ordered = sorted(merged.values(), key=lambda entry: (entry[0], -entry[1].updated_at))
+        return [item for _, item in ordered[:limit]]
+
 
     def relevant(self, query: str, budget: int = 5) -> list[MemoryItem]:
         """Budgeted slice for system-prompt injection (never the full store)."""
@@ -255,10 +384,13 @@ class MemoryTools:
                         },
                         "scope": {
                             "type": "string",
-                            "enum": ["global", "project"],
+                            "enum": ["global", "project", "task", "session"],
                             "description": (
                                 "Where to store: 'global' survives across projects, "
-                                "'project' belongs to the current workspace (default: global)."
+                                "'project' belongs to the current workspace, "
+                                "'task' is archived when the running task completes, "
+                                "'session' lives for this conversation only "
+                                "(default: global)."
                             ),
                         },
                         "tags": {
@@ -343,7 +475,7 @@ class MemoryTools:
             )
         if category not in ("normal", "sensitive"):
             category = "normal"
-        target = self._write_store(scope)
+        target = self.write_store(scope)
         item = MemoryItem(
             scope=target.scope,
             category=category,  # type: ignore[arg-type]

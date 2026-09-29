@@ -163,7 +163,8 @@ class TaskRunner:
                  trajectory: Trajectory, max_replans: int = 1, max_verification_repairs: int = 3,
                  workspace_root: Path | None = None, context_engine: ContextEngine | None = None,
                  context_max_tokens: int | None = None, cancel_token: CancelToken | None = None,
-                 skill_registry: object | None = None, hooks: object | None = None) -> None:
+                 skill_registry: object | None = None, hooks: object | None = None,
+                 context_summarizer: Callable[[str], Awaitable[str | None]] | None = None) -> None:
         self.store = store
         self.planner = planner
         self.execute = execute
@@ -188,6 +189,10 @@ class TaskRunner:
         #: W4.10 — lifecycle hook runner. ``None`` keeps the previous behaviour
         #: exactly; hooks are fail-open and never decide a task's outcome.
         self.hooks = hooks
+        #: W4.11 — optional model call used when a long task context is
+        #: compacted (the ``summarize`` role). ``None`` (the default) keeps
+        #: compaction exactly as before: structured state only, no extra call.
+        self.context_summarizer = context_summarizer
 
     def _snapshot_paths(self, task: Task, name: str, arguments: dict) -> None:
         if self.workspace_root is None:
@@ -507,6 +512,7 @@ class TaskRunner:
         result = await self.context_engine.compact_structured(
             self.context_messages, state, preserve_count=1,
             max_tokens=self.context_max_tokens, trajectory=self.trajectory,
+            summarizer=self.context_summarizer,
         )
         if result.compacted:
             self.context_messages = result.messages

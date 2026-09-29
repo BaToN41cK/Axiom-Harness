@@ -44,6 +44,8 @@ from axiom.core.events import (
     ToolResultEvent,
 )
 from axiom.core.history import Conversation, HistoryStore
+from axiom.core.logging import get_logger
+from axiom.core.memory import MemoryStore
 from axiom.core.mentions import expand_mentions, mentioned_files
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.ollama import OllamaClient
@@ -72,6 +74,8 @@ from axiom.core.workspace import ProjectInfo, WorkspaceManager, detect_project
 #: How many previous messages are sent back to the model by default.
 #: Overridable (and runtime-changeable) via ``Config.context_messages``.
 CONTEXT_MESSAGES = 20
+
+_LOG = get_logger("chat")
 
 #: Every tool that touches the workspace filesystem. Global Chat (no project)
 #: drops exactly these from the registry; :meth:`set_workspace` puts them back.
@@ -148,7 +152,16 @@ class ChatSession:
         self.memory_project_store = (
             MemoryStore(scope="project", project_root=project_root) if project_root else None
         )
-        self.memory_tools = MemoryTools(self.memory_store, self.memory_project_store)
+        # W4.11: two more scopes, each bound to a live owner. ``task`` memory
+        # follows the running task and is archived when it completes; ``session``
+        # memory follows the current conversation. A scope with no owner is
+        # simply not part of a read.
+        self.memory_task_store: MemoryStore | None = None
+        self.memory_session_store: MemoryStore | None = None
+        self.memory_tools = MemoryTools(
+            self.memory_store, self.memory_project_store,
+            task_store=None, session_store=None,
+        )
         self.memory_tools.register(self.tools)
         # W2.2 Knowledge Base: named local collections (SQLite/FTS5 + optional
         # Ollama embeddings). The model reaches them only through three tools.
@@ -218,6 +231,8 @@ class ChatSession:
             web_tool=self.web_tool,
         )
         self.conversation = Conversation(model=self.config.model)
+        # W4.11: session memory belongs to exactly this conversation.
+        self._bind_session_memory()
         self.active_model: ModelInfo | None = None
         self.last_metrics: dict = {}
         self._task: asyncio.Task | None = None
@@ -327,7 +342,7 @@ class ChatSession:
         self.provider_client = ProviderChatClient(
             self.provider_manager, self.router,
             default_provider="ollama", default_model=self.config.model,
-            ollama_client=self.client,
+            ollama_client=self.client, catalog=self.model_catalog,
         )
         self.agent._client = self.provider_client
 
@@ -343,7 +358,7 @@ class ChatSession:
 
     def _configure_router_from_config(self) -> None:
         """Собрать RouterConfig из Config (п.16-17): primary + fallback chain."""
-        from axiom.core.router import RouteTarget
+        from axiom.core.router import MODEL_ROLES, RouteTarget
 
         raw = getattr(self.config, "router_primary", None)
         primary = None
@@ -353,8 +368,32 @@ class ChatSession:
         for item in getattr(self.config, "router_fallbacks", None) or []:
             if isinstance(item, dict) and item.get("provider_id") and item.get("model"):
                 chain.append(RouteTarget(str(item["provider_id"]), str(item["model"]), "fallback"))
+        # W4.11: role rules. Неизвестная роль или кривая запись игнорируются с
+        # предупреждением — конфиг не должен уметь молча сломать маршрутизацию.
+        roles: dict[str, RouteTarget] = {}
+        capabilities: dict[str, str] = {}
+        for raw_role, raw_target in (getattr(self.config, "router_roles", None) or {}).items():
+            role = str(raw_role).strip().lower()
+            if role not in MODEL_ROLES:
+                _LOG.warning("Ignoring unknown router role %r (known: %s)",
+                             raw_role, ", ".join(MODEL_ROLES))
+                continue
+            if not isinstance(raw_target, dict):
+                _LOG.warning("Ignoring malformed router rule for role %r", role)
+                continue
+            provider_id = str(raw_target.get("provider_id") or "").strip()
+            model = str(raw_target.get("model") or "").strip()
+            capability = str(raw_target.get("capability") or "").strip().lower()
+            if provider_id and model:
+                roles[role] = RouteTarget(provider_id, model, f"role={role} configured")
+            elif capability:
+                capabilities[role] = capability
+            else:
+                _LOG.warning("Router rule for role %r needs provider_id+model or capability", role)
         self.router.config.primary = primary
         self.router.config.fallbacks = chain
+        self.router.config.roles = roles
+        self.router.config.role_capabilities = capabilities
         self.router.config.enabled = bool(getattr(self.config, "router_enabled", True))
         self.router.config.budget = str(getattr(self.config, "router_budget", "balanced"))
 
@@ -434,11 +473,7 @@ class ChatSession:
             return None
         if category not in ("normal", "sensitive"):
             category = "normal"
-        target = (
-            self.memory_project_store
-            if scope == "project" and self.memory_project_store is not None
-            else self.memory_store
-        )
+        target = self.memory_tools.write_store(scope)
         from axiom.core.memory import MemoryItem
 
         item = MemoryItem(
@@ -449,6 +484,67 @@ class ChatSession:
         if not target.add(item):
             return None
         return item.id
+
+    # ------------------------------------------------- memory scopes (W4.11)
+
+    def _bind_session_memory(self, conversation_id: str | None = None) -> None:
+        """Point session memory at one conversation (W4.11).
+
+        Session memory lives exactly as long as the chat it belongs to, so a
+        new, loaded or deleted conversation rebinds it — facts noted in one
+        conversation never steer another.
+        """
+        ident = conversation_id or (self.conversation.id if self.conversation else None)
+        store: MemoryStore | None = None
+        if ident:
+            try:
+                store = MemoryStore(scope="session", session_id=ident)
+            except (OSError, ValueError) as exc:
+                _LOG.warning("Session memory is unavailable: %s", exc)
+                store = None
+        self.memory_session_store = store
+        self.memory_tools.session_store = store
+
+    def _bind_task_memory(self, task_id: str) -> None:
+        """Give one task a memory store of its own for the duration of its run."""
+        store: MemoryStore | None = None
+        try:
+            store = MemoryStore(scope="task", task_id=task_id)
+        except (OSError, ValueError) as exc:
+            _LOG.warning("Task memory is unavailable: %s", exc)
+            store = None
+        self.memory_task_store = store
+        self.memory_tools.task_store = store
+
+    def _archive_task_memory(self, task_id: str) -> str | None:
+        """Move a finished task's memory out of every later read (W4.11).
+
+        Returns the real archive path, or ``None`` when the task noted nothing
+        to keep. The live task scope is unbound either way, so a later task or
+        chat turn can never retrieve these items.
+        """
+        store = self.memory_task_store
+        archived: str | None = None
+        if store is not None:
+            try:
+                path = store.archive(reason="completed")
+                archived = str(path) if path is not None else None
+            except OSError as exc:
+                _LOG.warning("Could not archive task memory for %s: %s", task_id, exc)
+        self.memory_task_store = None
+        self.memory_tools.task_store = None
+        if archived is not None and self.trajectory is not None:
+            try:
+                self.trajectory.append(
+                    "memory.archived", f"task {task_id} memory archived",
+                    data={"task_id": task_id, "archive": archived})
+            except Exception:
+                pass
+        return archived
+
+    def memory_scopes(self) -> list[dict]:
+        """Every bound memory scope with its real path and item count."""
+        return self.memory_tools.scope_rows()
 
     # ------------------------------------------------------ knowledge (W2.2)
 
@@ -664,6 +760,15 @@ class ChatSession:
         self.trajectory.append("mode.switch", mode, actor="system", data=info)
         return info
 
+    #: W4.11: specialists whose work is code editing answer to the ``coding``
+    #: routing role; every other specialist answers to ``subagent``.
+    CODING_AGENTS = frozenset({"coder", "frontend", "backend", "debugger"})
+
+    @classmethod
+    def role_for_agent(cls, agent_id: str) -> str:
+        """The model-routing role of one specialist id (W4.11)."""
+        return "coding" if str(agent_id) in cls.CODING_AGENTS else "subagent"
+
     def _worker_model(self, agent_id: str, task: str):
         """Resolve the exact model one specialist must call.
 
@@ -671,13 +776,19 @@ class ChatSession:
         external model to the Ollama default: every worker reuses the active
         session model object, so routing, capabilities and provider identity
         stay consistent from Desktop/TUI down to the provider call.
+
+        W4.11: an explicit role rule (``router_roles``) may pin another
+        provider/model for this specialist's role. Without such a rule the
+        resolution is exactly the session model, as before.
         """
         model = self.active_model
         if model is None:  # pragma: no cover - guarded by callers
             from axiom.core.models import ModelInfo
 
             return ModelInfo(name=self.config.model or "qwen3:8b")
-        target = self.router.config.primary
+        target = self.router.route_for_role(
+            self.role_for_agent(agent_id), task, self.model_catalog) \
+            or self.router.config.primary
         if (target is not None and target.provider_id != "ollama" and target.model
                 and model.name != target.model):
             from axiom.core.models import ModelInfo
@@ -844,6 +955,9 @@ class ChatSession:
             bus=EventBus(), trajectory=child_traj,
         )
         request_agent._client = self.provider_client
+        # W4.11: the worker answers to its routing role, so a configured rule
+        # picks its provider/model and the trajectory names the real choice.
+        request_agent.route_role = self.role_for_agent(agent_id)
         request_agent.attach_harness(
             trajectory=child_traj,
             router=deepcopy(self.router), catalog=deepcopy(self.model_catalog),
@@ -872,12 +986,18 @@ class ChatSession:
         worker_model = self._worker_model(agent_id, task)
         # Publish the exact model/provider this specialist will call before the
         # first token — the final reply arrives minutes later, the live feed
-        # must already say which model is actually working.
-        provider_id = self._active_provider_id()
+        # must already say which model is actually working. The role is named
+        # so the UI can tell a plain worker from a role-routed one (W4.11).
+        route_role = self.role_for_agent(agent_id)
+        role_target = self.router.route_for_role(route_role, task, self.model_catalog)
+        provider_id = (role_target.provider_id
+                       if role_target is not None and role_target.provider_id
+                       else self._active_provider_id())
         self._record_worker_tool(
             parent_traj, agent_id, "subagent.model",
             f"{provider_id}/{worker_model.name}",
-            data={"provider_id": provider_id, "model": worker_model.name},
+            data={"provider_id": provider_id, "model": worker_model.name,
+                  "role": route_role},
         )
 
         def _flush_pass() -> None:
@@ -1261,7 +1381,17 @@ class ChatSession:
             workspace_root=self.workspace_root, context_max_tokens=self._context_budget(),
             max_verification_repairs=self.config.max_retries,
             skill_registry=self.skills, hooks=self.hooks,
+            # W4.11: only an explicit ``summarize`` role adds a model call to
+            # context compaction; otherwise this stays None and compaction is
+            # exactly the structured-state path it always was.
+            context_summarizer=(
+                self._summarize_for_role if self.router.role_target("summarize") is not None
+                or self.router.role_capability("summarize") else None
+            ),
         )
+        # W4.11: the task gets a memory scope of its own, archived when it
+        # completes, so its notes never steer a later task or chat turn.
+        self._bind_task_memory(task.id)
         # W4.5: project constraints and procedures join the task only when
         # relevant — global/project rules always, directory rules only for
         # directories the task touches, skills only when selected by
@@ -1313,6 +1443,12 @@ class ChatSession:
                         self.permissions.drop_task_scope(task.id)
                     except Exception:
                         pass
+                # W4.11: a completed detached task archives its own memory.
+                if task.state == TaskState.COMPLETED:
+                    try:
+                        self._archive_task_memory(task.id)
+                    except Exception:
+                        pass
                 # Consume errors if the worker itself escaped its guard.
                 if not done.cancelled():
                     done.exception()
@@ -1338,6 +1474,62 @@ class ChatSession:
             self.permissions.drop_task_scope(task.id)
             self.active_task = None
             self.active_task_runner = None
+            # W4.11: a completed task's memory is archived and unbound, so it
+            # can never enter the context of a later task or chat turn.
+            if task.state == TaskState.COMPLETED:
+                self._archive_task_memory(task.id)
+
+    async def _summarize_for_role(self, prompt: str) -> str | None:
+        """One bounded call to the configured ``summarize`` model (W4.11).
+
+        Used only while compacting a long task context. Any failure returns
+        ``None``: compaction keeps the validated structured state instead of
+        inventing a summary.
+        """
+        if self.active_model is None:
+            return None
+        parts: list[str] = []
+        size = 0
+        try:
+            async for chunk in self.provider_client.chat(
+                self.active_model.name,
+                [{"role": "user", "content": prompt}],
+                tools=None, role="summarize",
+            ):
+                if chunk.content:
+                    size += len(chunk.content)
+                    if size > 8000:
+                        break
+                    parts.append(chunk.content)
+        except Exception as exc:
+            _LOG.warning("Context summarisation failed: %s", exc)
+            return None
+        summary = "".join(parts).strip()
+        return summary or None
+
+    # ------------------------------------------------------ role routing (W4.11)
+
+    def route_for_role(self, role: str, text: str = "") -> dict:
+        """The provider/model one role will really call, and why it was chosen."""
+        from axiom.core.router import MODEL_ROLES
+
+        clean = (role or "").strip().lower()
+        target = self.router.route_for_role(clean, text, self.model_catalog)
+        pinned = self.router.role_target(clean)
+        capability = self.router.role_capability(clean)
+        if target is None:
+            return {"role": clean, "provider_id": "", "model": "",
+                    "reason": "no route resolved", "known": clean in MODEL_ROLES,
+                    "configured": False}
+        return {"role": clean, "provider_id": target.provider_id, "model": target.model,
+                "reason": target.reason, "known": clean in MODEL_ROLES,
+                "configured": pinned is not None or bool(capability)}
+
+    def role_routes(self) -> list[dict]:
+        """Every routing role with its real current target (Desktop/TUI view)."""
+        from axiom.core.router import MODEL_ROLES
+
+        return [self.route_for_role(role) for role in MODEL_ROLES]
 
     async def run_orchestrated(self, text: str, *, limit: int = 4,
                                max_iterations: int = 3) -> dict:
@@ -1618,6 +1810,8 @@ class ChatSession:
         """Start a fresh conversation (the current one is already persisted)."""
         self._save_conversation()
         self.conversation = Conversation(model=self.active_model.name if self.active_model else None)
+        # W4.11: a new chat starts with empty session memory.
+        self._bind_session_memory()
         return self.conversation
 
     def load_conversation(self, conversation_id: str) -> Conversation | None:
@@ -1626,6 +1820,8 @@ class ChatSession:
         if loaded is None:
             return None
         self.conversation = loaded
+        # W4.11: opening a chat reopens exactly its own session memory.
+        self._bind_session_memory(loaded.id)
         return loaded
 
     def history(self) -> list[Conversation]:
@@ -1636,6 +1832,8 @@ class ChatSession:
             self.conversation = Conversation(
                 model=self.active_model.name if self.active_model else None
             )
+            # W4.11: the deleted chat's session scope is left behind.
+            self._bind_session_memory()
         return self.history_store.delete(conversation_id)
 
     def rename_conversation(self, conversation_id: str, title: str) -> bool:
@@ -1773,6 +1971,8 @@ class ChatSession:
         self._save_conversation()
         self.history_store.use_workspace(target)
         self.conversation = Conversation(model=self.active_model.name if self.active_model else None)
+        # W4.11: a project switch starts a new chat, so session memory restarts.
+        self._bind_session_memory()
         self._save_conversation()
         self.config.workspace_root = str(target)
         # Leaving Global Chat re-enables workspace tooling for the new project.
@@ -1873,6 +2073,8 @@ class ChatSession:
         self._save_conversation()
         self.history_store.use_workspace(None)
         self.conversation = Conversation(model=self.active_model.name if self.active_model else None)
+        # W4.11: Global Chat is another conversation with its own session memory.
+        self._bind_session_memory()
         self._save_conversation()
         self.config.workspace_root = None
         # Persist Global Chat across restarts: no workspace tools on boot.

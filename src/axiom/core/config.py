@@ -118,6 +118,11 @@ class Config(BaseModel):
     router_primary: dict | None = None
     #: Fallback chain [{"provider_id": "...", "model": "..."}, ...] (п.17)
     router_fallbacks: list[dict] = Field(default_factory=list)
+    #: W4.11 role routing: {"main"|"subagent"|"coding"|"search"|"summarize":
+    #: {"provider_id": "...", "model": "..."}}. A role with no entry keeps the
+    #: existing behaviour (task-type routing over primary + fallbacks), so
+    #: adding a rule never changes a model that the user did not pin.
+    router_roles: dict[str, dict] = Field(default_factory=dict)
     #: External MCP servers [{"name": "...", "command": ["npx", ...]}] (п.15)
     mcp_servers: list[dict] = Field(default_factory=list)
 

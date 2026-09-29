@@ -3,10 +3,22 @@
 Маршрут по типу задачи: simple/coding/reasoning/huge-context/vision/fast.
 Fallback: primary -> fallback -> fallback2 на 429/timeout/unavailable.
 Budget: performance / balanced / economy.
+
+Сверху лежит слой ролей (W4.11): main/subagent/coding/search/summarize. Роль
+резолвится сначала по явному правилу из конфига, затем по возможностям
+каталога, и только потом — по общей эвристике типа задачи. Ни одно имя
+провайдера здесь не зашито: смена провайдера или модели требует только
+изменения конфига.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+
+from axiom.core.providers.base import ModelProfile
+
+#: Роли, которые можно маршрутизировать независимо от типа задачи (W4.11).
+MODEL_ROLES: tuple[str, ...] = ("main", "subagent", "coding", "search", "summarize")
 
 
 @dataclass
@@ -22,6 +34,10 @@ class RouterConfig:
     budget: str = "balanced"
     primary: RouteTarget | None = None
     fallbacks: list[RouteTarget] = field(default_factory=list)
+    #: Явные цели по ролям: {"subagent": RouteTarget(...)} (W4.11).
+    roles: dict[str, RouteTarget] = field(default_factory=dict)
+    #: Правила по возможностям: {"summarize": "long_context"|"auto"} (W4.11).
+    role_capabilities: dict[str, str] = field(default_factory=dict)
 
     def chain(self) -> list[RouteTarget]:
         out: list[RouteTarget] = []
@@ -29,6 +45,7 @@ class RouterConfig:
             out.append(self.primary)
         out.extend(self.fallbacks)
         return out
+
 
 
 def classify_task(text: str) -> str:
@@ -58,11 +75,91 @@ def complexity_of(text: str) -> str:
     return "high"
 
 
+#: Возможность, которую роль просит в каталоге, когда правило записано как
+#: ``{"capability": "auto"}``. «main» подсказки не имеет: он идёт по общей
+#: эвристике типа задачи.
+ROLE_CAPABILITIES: dict[str, str] = {
+    "subagent": "tool_calling",
+    "coding": "coding",
+    "search": "fast",
+    "summarize": "long_context",
+}
+
+
+def _matches_role(model: ModelProfile, capability: str) -> bool:
+    """Одна проверка возможности каталога для роли (W4.11)."""
+    if capability == "fast":
+        return not model.reasoning
+    if capability == "coding":
+        return bool(model.coding or model.tool_calling)
+    if capability == "tool_calling":
+        return bool(model.tool_calling or model.coding)
+    return bool(getattr(model, capability, False))
+
+
+def order_by_budget(models: Iterable[ModelProfile], budget: str) -> list[ModelProfile]:
+    """Общий порядок «дорого/дёшево» для маршрутизатора задач и ролей."""
+    matches = list(models)
+    if budget == "economy":
+        matches.sort(key=lambda m: m.id.lower())
+    elif budget == "performance":
+        matches.sort(key=lambda m: (not m.reasoning, m.id.lower()))
+    return matches
+
+
 class ModelRouter:
     """Чистый роутер: без сети, только эвристики + каталог моделей."""
 
     def __init__(self, config: RouterConfig | None = None) -> None:
         self.config = config or RouterConfig()
+
+    def role_target(self, role: str | None) -> RouteTarget | None:
+        """Явно закреплённая цель роли (W4.11); None — роль не закреплена."""
+        if not role:
+            return None
+        return self.config.roles.get(str(role).strip().lower())
+
+    def role_capability(self, role: str | None) -> str | None:
+        """Возможность, которую роли предлагает конфиг (``capability``)."""
+        if not role:
+            return None
+        clean = str(role).strip().lower()
+        capability = self.config.role_capabilities.get(clean)
+        if not capability:
+            return None
+        if capability == "auto":
+            return ROLE_CAPABILITIES.get(clean)
+        return capability
+
+    def route_for_role(self, role: str, text: str = "", catalog=None) -> RouteTarget | None:
+        """Модель одной роли. Модель меняется ТОЛЬКО по явному правилу.
+
+        Порядок детерминированный, без единого зашитого имени провайдера:
+
+        1. ``router_roles[<role>] = {"provider_id", "model"}`` — явный пин;
+        2. ``{"capability": "<возможность|auto>"}`` — модель из каталога с этой
+           возможностью, отобранная тем же бюджетом;
+        3. ничего не настроено — общий маршрут (primary + fallback), то есть
+           ровно то поведение, которое было до W4.11.
+        """
+        clean = (role or "").strip().lower()
+        explicit = self.config.roles.get(clean)
+        if explicit is not None:
+            return RouteTarget(explicit.provider_id, explicit.model, f"role={clean} configured")
+        if not self.config.enabled:
+            return self.config.primary
+        capability = self.role_capability(clean)
+        models = list(catalog.all()) if catalog is not None else []
+        if capability and models:
+            matches = order_by_budget(
+                (m for m in models if _matches_role(m, capability)), self.config.budget)
+            if matches:
+                chosen = matches[0]
+                return RouteTarget(chosen.provider_id, chosen.id,
+                                   f"role={clean} capability={capability}")
+        # Каталог здесь намеренно не участвует: маршрут по типу задачи всегда
+        # решался над primary/chain, и роль не должна менять это молча.
+        return self.route(text, None)
 
     def route(self, text: str, catalog=None) -> RouteTarget | None:
         if not self.config.enabled:
@@ -77,14 +174,11 @@ class ModelRouter:
         if not models:
             return self.config.primary
 
-        def _pick(pred, fallback_idx: int = 0) -> RouteTarget | None:
-            matches = [m for m in models if pred(m)]
+        def _pick(pred: Callable[[ModelProfile], bool], fallback_idx: int = 0) -> RouteTarget | None:
+            matches = order_by_budget(
+                (m for m in models if pred(m)), self.config.budget)
             if not matches:
                 return None
-            if self.config.budget == "economy":
-                matches.sort(key=lambda m: m.id.lower())
-            elif self.config.budget == "performance":
-                matches.sort(key=lambda m: (not m.reasoning, m.id.lower()))
             chosen = matches[fallback_idx % len(matches)]
             return RouteTarget(chosen.provider_id, chosen.id,
                                reason=f"task={task} complexity={complexity}")

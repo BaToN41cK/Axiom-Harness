@@ -195,6 +195,13 @@ class Agent:
         #: W2.1 Curated Memory: :class:`~axiom.core.memory.MemoryTools` or None.
         #: The agent only ever sees a budgeted slice via ``relevant()``.
         self._memory = None
+        #: W4.11: the routing role of this agent — ``subagent``/``coding`` for a
+        #: specialist, None for the session's own pass. A role only changes
+        #: which configured provider/model answers, never what the agent does.
+        self.route_role: str | None = None
+        #: Role actually used for the current model pass (``search`` when the
+        #: pass consumed web search or pasted pages).
+        self._pass_role: str | None = None
         self.last_route: dict = {}
         self.last_verify: dict = {}
         self._max_rounds = MAX_TOOL_ROUNDS + (3 if config.workspace_tools_enabled else 0)
@@ -289,14 +296,21 @@ class Agent:
         """Model Router (п.16): какой маршрут выбран — для trajectory/UI."""
         if self._router is None:
             return {}
+        role = self._pass_role or self.route_role
         try:
-            target = self._router.route(user_text, self._catalog)
+            if role:
+                # W4.11: a specialist or a search pass is routed by role first.
+                target = self._router.route_for_role(role, user_text, self._catalog)
+            else:
+                target = self._router.route(user_text, self._catalog)
         except Exception:
             return {}
         if target is None:
             return {}
         info = {"provider_id": target.provider_id, "model": target.model,
                 "reason": target.reason}
+        if role:
+            info["role"] = role
         self.last_route = info
         if self._trajectory is not None:
             try:
@@ -383,14 +397,19 @@ class Agent:
         num_predict = getattr(self._config, "num_predict", None)
         if isinstance(num_predict, int):
             options["num_predict"] = num_predict
-        async for chunk in self._client.chat(
-            model.name,
-            messages,
-            think=think,
-            tools=tools,
-            options=options or None,
-            keep_alive=getattr(self._config, "keep_alive", None),
-        ):
+        call_kwargs: dict = {
+            "think": think,
+            "tools": tools,
+            "options": options or None,
+            "keep_alive": getattr(self._config, "keep_alive", None),
+        }
+        # W4.11: a role rule is only honoured by a client that resolves roles
+        # (ProviderChatClient). A plain OllamaClient keeps the exact call shape
+        # it always had, so existing adapters and tests are untouched.
+        role = self._pass_role or self.route_role
+        if role and getattr(self._client, "accepts_role", False):
+            call_kwargs["role"] = role
+        async for chunk in self._client.chat(model.name, messages, **call_kwargs):
             if first_token_at is None and (chunk.thinking or chunk.content or chunk.tool_calls):
                 first_token_at = time.perf_counter()
                 result.first_chunk_at = first_token_at
@@ -642,6 +661,8 @@ class Agent:
         self.last_metrics: dict = {}
         self.last_stop_reason = None
         self._pasted_pages = []
+        # W4.11: the routing role of this run until a search pass overrides it.
+        self._pass_role = self.route_role
         last_ttft: int | None = None
 
         from axiom.core.prompt_builder import (
@@ -735,6 +756,9 @@ class Agent:
                             search_failed = True
                     yield event
                 if search_block:
+                    # W4.11: a pass that answers from live search results is the
+                    # "search" role, so a cheap model can be pinned to it.
+                    self._pass_role = "search"
                     # Keep the configured system prompt and append the search
                     # context — a user's custom prompt must survive (same
                     # behaviour as the pasted-links branch below).
@@ -752,6 +776,9 @@ class Agent:
                 yield event
             pages = self._pasted_pages
             if pages:
+                # W4.11: reading pasted links is the same "search" role as a
+                # live search — the answer comes from fetched external text.
+                self._pass_role = "search"
                 # Keep the configured system prompt and append the real page
                 # content — a user's custom prompt must survive.
                 page_block = "\n\n".join(
