@@ -56,6 +56,13 @@
 .axiom-settings .settings-row-label { font-size: 12px; font-weight: 500; line-height: 1.45; }
 .axiom-settings .settings-row-hint { font-size: 11px; line-height: 1.5; color: var(--text-muted); margin-top: 3px; overflow-wrap: anywhere; }
 .axiom-settings .settings-row-control { min-width: 0; max-width: 52%; justify-content: flex-end; }
+/* Audition row: one small button per agent-event cue, wrapping on narrow panels. */
+.axiom-settings .sound-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ax-space-1);
+  justify-content: flex-end;
+}
 .axiom-settings .settings-row-control:has(textarea) { width: 100%; max-width: none; }
 .axiom-settings .settings-row:has(textarea) { flex-wrap: wrap; }
 .axiom-settings .settings-row-control :is(input, select, textarea) {

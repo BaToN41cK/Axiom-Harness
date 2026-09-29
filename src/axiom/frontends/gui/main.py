@@ -569,22 +569,21 @@ def _find_built_exe() -> Path | None:
     """Built shell worth launching, or ``None`` when the dev shell is better.
 
     A release build embeds the frontend, so it must be newer than both web and
-    native sources. A debug build gets its UI from its Rust-owned Vite server,
-    but its shell and bridge resources must still be current.
+    native sources. Debug builds are intentionally not returned here: they
+    point at the dev URL and must be launched through `tauri dev`.
     """
     newest_source = _newest_web_source()
     newest_native = _newest_native_source()
     release = _built_exe("release")
     if release is not None and release.stat().st_mtime >= max(newest_source, newest_native):
         return release
-    debug = _built_exe("debug")
-    if debug is not None and debug.stat().st_mtime >= newest_native:
-        return debug
+    # A debug Tauri binary points at devUrl (127.0.0.1:1420) and cannot be
+    # launched standalone: the Vite server is owned by `tauri dev` below.
     return None
 
 
 def _launch_exe(exe: Path) -> bool:
-    """Launch the GUI; debug shells own their Vite process in Rust."""
+    """Launch a release GUI with its frontend embedded in the binary."""
     _spawn_gui(exe)
     return True
 

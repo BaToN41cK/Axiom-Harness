@@ -13,7 +13,7 @@ import sys
 
 from axiom import __version__
 
-_HELP = f"""AXIOM {__version__} — Local Intelligence Terminal Workspace
+_HELP = f"""AXIOM {__version__} — Open Local AI Coding Workspace & Agent Harness
 
 Usage:
   axiom                     Start the TUI workspace

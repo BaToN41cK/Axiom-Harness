@@ -41,6 +41,17 @@ AGENT_TOOLS: dict[str, tuple[str, ...]] = {
     "architect": ("list_files", "read_file", "inspect_project", "web_search"),
     "security": ("read_file", "search_text", "git_diff"),
     "orchestrator": ("list_files", "read_file", "inspect_project"),
+    # W4.6 roles: Explorer is strictly read-only reconnaissance; Frontend
+    # and Backend own their editing/testing surface.
+    "explorer": ("list_files", "read_file", "search_text", "search_files",
+                 "inspect_project", "git_status", "git_diff", "git_log"),
+    "frontend": ("list_files", "read_file", "write_file", "edit_file",
+                 "apply_patch", "search_text", "search_files", "run_command",
+                 "run_tests", "verify_changes", "git_status", "git_diff"),
+    "backend": ("list_files", "read_file", "write_file", "edit_file",
+                "apply_patch", "search_text", "search_files", "run_command",
+                "run_tests", "run_linter", "verify_changes", "git_status",
+                "git_diff"),
 }
 
 def category_of(tool_name: str) -> str:

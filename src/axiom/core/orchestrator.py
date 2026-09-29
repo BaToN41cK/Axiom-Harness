@@ -10,7 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from axiom.core.agents import AgentRegistry
+from axiom.core.agents import AgentRegistry, compact_report
 from axiom.core.bus import (
     AGENT_CREATED,
     AGENT_FAILED,
@@ -84,6 +84,7 @@ class Orchestrator:
         else:
             mode = "chat"
             agents = ["analyst"]
+        agents = self._specialise(agents, lowered)
         agents = [a for a in agents if self.agents.get(a) is not None]
         tools = resolve_tools_for_task(text)
         done = [
@@ -103,15 +104,38 @@ class Orchestrator:
                                 task=text, context={"project": "", "files": []},
                                 definition_of_done=done, dependencies=dependencies)
 
+    @staticmethod
+    def _specialise(agents: list[str], lowered: str) -> list[str]:
+        """Swap the generalist coder for the surface a task explicitly names (W4.6).
+
+        Frontend and Backend are only chosen when the request actually names one
+        surface (word-boundary match, so "build" never means "ui"); a request that
+        names both stays with the generalist coder, which owns the whole change.
+        """
+        import re
+
+        def names(*words: str) -> bool:
+            return any(re.search(rf"\b{re.escape(word)}\b", lowered) for word in words)
+
+        frontend = names("frontend", "ui", "интерфейс", "компонент", "react", "vue",
+                         "svelte", "tsx", "css", "верстк")
+        backend = names("backend", "api", "endpoint", "server", "сервер", "миграц",
+                        "схема данных")
+        if frontend == backend or "coder" not in agents:
+            return list(agents)
+        replacement = "frontend" if frontend else "backend"
+        return [replacement if agent == "coder" else agent for agent in agents]
+
     def tools_for(self, agent_id: str, task: str = "") -> list[str]:
         base = list(tools_for_agent(agent_id)) or resolve_tools_for_task(task)
         # Agent receives only its scoped tools.
         return base
 
     def _review_task(self, text: str, results: list[dict], iteration: int) -> str:
+        # Only the compact report ever reaches the reviewer: internal worker
+        # transcripts stay in their own trajectories (W4.6).
         compact = "\n".join(
-            f"- {r.get('agent', 'unknown')}: {str(r.get('content') or r.get('error') or r.get('summary') or '')[:1200]}"
-            for r in results
+            f"- {r.get('agent', 'unknown')}:\n{self._render_report(r)}" for r in results
         )
         return (
             "Review the specialized agents below against the original task. "
@@ -123,6 +147,54 @@ class Orchestrator:
             "Reply with JSON only: "
             '{"approved": true/false, "reason": "...", "issues": [...], "required_changes": [...]}.'
         )
+
+    @staticmethod
+    def _render_report(result: dict) -> str:
+        """One worker outcome as its five-section compact report.
+
+        Sectioned reports (RESULT/FINDINGS/FILES/ERRORS/RECOMMENDATIONS) are
+        rendered verbatim; anything else is normalised by :func:`compact_report`
+        first, so a worker that ignored the contract still contributes bounded,
+        evidence-shaped text instead of a raw transcript dump.
+        """
+        report = result.get("report")
+        if not isinstance(report, dict) or not any(
+            str(value).strip() for value in report.values()
+        ):
+            report = compact_report(result)
+        lines: list[str] = []
+        for section in ("RESULT", "FINDINGS", "FILES", "ERRORS", "RECOMMENDATIONS"):
+            value = str(report.get(section) or "").strip()
+            if value:
+                lines.append(f"  {section}: {value[:600]}")
+        if result.get("budget_exhausted"):
+            lines.append(f"  BUDGET: partial result — {result['budget_exhausted']} limit reached")
+        return "\n".join(lines) or "  no result"
+
+    @staticmethod
+    def _collect_reports(results: list[dict]) -> list[dict]:
+        """Aggregate compact reports for Task State (W4.6).
+
+        Each entry keeps the agent id, the five-section report, the explicit
+        budget telemetry and the exhaustion reason, so a caller can render
+        evidence per specialist without holding any transcript.
+        """
+        reports: list[dict] = []
+        for result in results:
+            report = result.get("report")
+            if not isinstance(report, dict):
+                report = compact_report(result)
+            entry: dict = {"agent": str(result.get("agent") or "agent"),
+                           "status": str(result.get("status") or "done"),
+                           "report": report}
+            if result.get("budget") is not None:
+                entry["budget"] = result["budget"]
+            if result.get("budget_exhausted"):
+                entry["budget_exhausted"] = result["budget_exhausted"]
+            if result.get("error"):
+                entry["error"] = str(result["error"])[:600]
+            reports.append(entry)
+        return reports
 
     @staticmethod
     def _review_decision(report: dict) -> tuple[bool, str, dict]:
@@ -200,8 +272,17 @@ class Orchestrator:
         lines = ["## Что сделано", ""]
         for result in results:
             agent = str(result.get("agent") or "agent")
-            content = str(result.get("content") or result.get("summary") or result.get("error") or "").strip()
+            report = result.get("report")
+            if not isinstance(report, dict):
+                report = compact_report(result)
+            content = str(report.get("RESULT") or report.get("ERRORS")
+                          or result.get("error") or "").strip()
             lines.append(f"- **{agent}**: {content[:800] or 'результат не вернул текст'}")
+            findings = str(report.get("FINDINGS") or "").strip()
+            if findings:
+                lines.append(f"  - evidence: {findings[:400]}")
+            if result.get("budget_exhausted"):
+                lines.append(f"  - partial result: {result['budget_exhausted']} limit reached")
         lines += ["", "## Проверка", f"- Оркестратор: {review[:1200] or 'нет ответа reviewer'}",
                   "- Непроверенные факты не считаются выполненными.", "",
                   "## Что осталось", "Проверить пункты, которые reviewer или tester не смогли подтвердить."]
@@ -290,6 +371,9 @@ class Orchestrator:
                                "task": (f"REVIEW REQUEST:\n{review_text}\n\nIssues:\n{problems}\n\n"
                                         f"Required changes:\n{changes}\n\nOriginal task:\n{text}"),
                                "tools": self.tools_for(sub.agent, text),
+                               # Rework pass number is the worker's real retry
+                               # count: it feeds the retry ceiling (W4.6).
+                               "retries": iteration,
                                "trajectory": traj} for sub in workers]
                     pres = await run_parallel(rework, runner, limit=limit, trajectory=traj)
                     for result in pres.results:
@@ -322,6 +406,8 @@ class Orchestrator:
                     "results": worker_results, "merged": pres.merged, "review": review_text,
                     "approved": approved, "completed": completed,
                     "review_details": dict(review_data), "iterations": iterations,
+                    # Compact reports only — never worker transcripts (W4.6).
+                    "reports": self._collect_reports(worker_results),
                     "definition_of_done": plan.definition_of_done,
                     "dependencies": plan.dependencies,
                     "verification": verification,
@@ -337,7 +423,12 @@ class Orchestrator:
                     out = await runner(agent=sub.agent, task=sub.task,
                                        tools=self.tools_for(sub.agent, sub.task),
                                        trajectory=traj)
-                    sub.result = dict(out or {})
+                    payload = dict(out or {})
+                    if not isinstance(payload.get("report"), dict):
+                        # Custom runners may skip the contract; normalise here so
+                        # Task State always aggregates the same shape (W4.6).
+                        payload["report"] = compact_report(payload)
+                    sub.result = payload
                 else:
                     sub.result = {"agent": sub.agent, "task": sub.task,
                                   "tools": self.tools_for(sub.agent, sub.task),
@@ -379,6 +470,8 @@ class Orchestrator:
                 "results": results, "review": review_text, "approved": approved,
                 "completed": bool(approved), "review_details": dict(review_data_seq),
                 "iterations": iterations,
+                # Compact reports only — never worker transcripts (W4.6).
+                "reports": self._collect_reports(results),
                 "definition_of_done": plan.definition_of_done,
                 "dependencies": plan.dependencies,
                 "duration_ms": duration_ms, "trajectory": traj}

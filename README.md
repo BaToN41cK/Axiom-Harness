@@ -1,4 +1,4 @@
-# AXIOM — Open Local AI Agent Harness
+# AXIOM — Open Local AI Coding Workspace & Agent Harness
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Ollama](https://img.shields.io/badge/Ollama-supported-111111?logo=ollama&logoColor=white)](https://ollama.com/)
@@ -172,12 +172,169 @@ Registry/Project  Manager      Store / Bus
 ## Установка
 
 ```bash
-git clone https://github.com/BaToN41cK/Axiom.git
-cd Axiom
+git clone https://github.com/BaToN41cK/Axiom-Harness.git
+cd Axiom-Harness
 python -m pip install -e ".[dev]"
 ```
 
 Для запуска без dev-зависимостей: `python -m pip install -e .`.
+
+### Установка из ZIP-архива (без Git)
+
+Если проект скачан кнопкой **Code → Download ZIP**, а не через `git clone`.
+
+**Шаг 0. Проверьте, что Python установлен по-настоящему.** Сначала выполните
+две команды:
+
+```powershell
+where python
+python --version
+```
+
+Ожидаемый результат: путь вида `C:\Users\<имя>\AppData\Local\Programs\Python\Python311\python.exe`
+и строка `Python 3.11.x` или новее.
+
+Признаки, что Python работать не будет:
+
+| Что вы видите | Причина и что делать |
+|---|---|
+| `where python` находит `...\WindowsApps\python.exe` | Это заглушка Microsoft Store, а не интерпретатор. Любая команда вроде `python -m venv .venv` тихо завершится, ничего не создав. Установите Python с [python.org](https://www.python.org/downloads/windows/) и снимите «Диспетчер приложений» → «Псевдонимы выполнения приложения» → выключите `python.exe` и `python3.exe` |
+| `python` печатает одно слово и сразу возвращает приглашение | Тот же случай: в `PATH` не настоящий интерпретатор. Проверьте вывод `where python` — там будет `WindowsApps` |
+| `"python" не является внутренней или внешней командой` | Python не установлен или не добавлен в `PATH` |
+
+При установке с python.org обязательно отметьте галочку **Add python.exe to
+PATH** на первом экране. После установки закройте и откройте терминал заново —
+`PATH` в уже открытом окне не обновляется.
+
+Node.js нужен только для desktop-приложения (шаг 6). Для TUI он не требуется.
+
+**Шаг 1. Распакуйте архив.** Правый клик по скачанному `.zip` → «Извлечь все».
+Выберите папку без пробелов и кириллицы в пути — например, распаковка на рабочий
+стол даёт `C:\Users\<имя>\Desktop\Axiom-Harness-master`.
+
+Внутри архива GitHub создаёт одну вложенную папку, и её имя зависит от ветки:
+`Axiom-Harness-main` или `Axiom-Harness-master`. Убедитесь, что вы попали именно
+в неё: рядом должны лежать `pyproject.toml`, `README.md` и каталоги `src`,
+`desktop`, `docs`, `tests`.
+
+**Шаг 2. Перейдите в папку проекта.** Откройте PowerShell (Win+X →
+«Терминал») и выполните `cd` на свой путь из шага 1 — не копируйте путь из
+примера ниже, у вас он другой:
+
+```powershell
+cd "C:\Users\<имя>\Desktop\Axiom-Harness-master"
+dir pyproject.toml   # проверка: файл должен найтись
+```
+
+Надёжный способ получить путь: откройте папку в проводнике, щёлкните по адресной
+строке, скопируйте путь и вставьте его после `cd` в кавычках. Если видите
+`Системе не удается найти указанный путь` — путь набран не тот; проверьте имя
+папки (`-main` или `-master`) и что архив действительно распакован, а не открыт
+внутри `.zip`.
+
+**Шаг 3. Создайте виртуальное окружение в корне проекта.** Создавайте его
+именно здесь: desktop-оболочка ищет Python в `.venv`/`venv` рядом с
+`pyproject.toml`, поэтому окружение в другом месте она не найдёт (обойти можно
+переменной `AXIOM_PYTHON`).
+
+```powershell
+python -m venv .venv
+dir .venv\Scripts\python.exe   # проверка: файл должен существовать
+.\.venv\Scripts\Activate.ps1
+```
+
+Имя пишется без обратного слэша на конце: `python -m venv .venv`, не `.venv\`.
+
+Если `dir` не находит `python.exe`, окружение не создано — вернитесь к шагу 0,
+интерпретатор в `PATH` нерабочий. Настоящий Python при этой команде либо молча
+создаёт папку, либо печатает понятную ошибку; он никогда не выводит одно слово
+«Python» и не завершается без результата.
+
+Если PowerShell отказывается выполнять скрипт активации, разрешите её для
+текущего пользователя: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+В `cmd.exe` вместо этого: `.venv\Scripts\activate.bat`.
+
+После активации в начале строки появится `(.venv)`. Проверьте, что активен
+именно интерпретатор окружения:
+
+```powershell
+python --version
+where python   # первым должен идти путь внутри .venv\Scripts
+```
+
+**Шаг 4. Установите AXIOM.** Точка в конце команды обязательна, это путь к
+текущей папке:
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+Только для запуска, без инструментов разработки: `python -m pip install -e .`.
+Флаг `-e` ставит проект из этой папки, поэтому не перемещайте и не удаляйте её
+после установки.
+
+Успешная установка заканчивается строкой `Successfully installed axiom-1.0.0`.
+Проверьте результат:
+
+```powershell
+axiom --version
+```
+
+Должно напечатать `AXIOM 1.0.0`. Если вместо этого пусто или ошибка — установка
+не прошла, смотрите последние строки вывода `pip` (а не первые).
+
+**Шаг 5. Установите Ollama и модель** — без запущенного Ollama чат работать не
+будет. Скачайте [Ollama](https://ollama.com/download), затем:
+
+```powershell
+ollama pull qwen3:4b
+```
+
+**Шаг 6. Запустите.** TUI в терминале:
+
+```powershell
+axiom
+```
+
+Если команда `axiom` не найдена, окружение из шага 3 не активировано — либо
+активируйте его снова, либо запускайте как модуль: `python -m axiom`.
+
+Desktop-приложение — отдельный шаг и отдельные требования: Node.js 20+ и Rust
+(см. «Требования»). Для TUI из шага выше они не нужны.
+
+Проверьте, что Node.js установлен:
+
+```powershell
+node --version
+npm --version
+```
+
+Если видите `"npm" не является внутренней или внешней командой`, Node.js не
+установлен — скачайте LTS-версию с [nodejs.org](https://nodejs.org/) и откройте
+терминал заново.
+
+Команда `cd desktop` работает **только из корня проекта**. Если выполнить её из
+домашней папки `C:\Users\<имя>`, вы попадёте в `C:\Users\<имя>\Desktop`, то есть
+на рабочий стол, где никакого `package.json` нет. Убедитесь в пути перед
+запуском:
+
+```powershell
+cd "C:\Users\<имя>\Desktop\Axiom-Harness-master\desktop"
+dir package.json   # проверка: файл должен найтись
+npm install
+npm run tauri dev
+```
+
+При новом сеансе терминала окружение нужно активировать заново
+(`.\.venv\Scripts\Activate.ps1` из корня проекта).
+
+Обновление до новой версии из ZIP: распакуйте новый архив в отдельную папку и
+повторите шаги 2–4. Настройки TUI лежат в `~/.axiom/` вне проекта и сохранятся,
+**но desktop, запущенный из распакованной папки, держит свои данные в
+`desktop/data/` внутри неё** — скопируйте этот каталог в новую версию, иначе
+история и настройки GUI начнутся с нуля. Чтобы данные не зависели от папки,
+задайте общий путь: `$env:AXIOM_HOME = "D:\axiom-data"`.
 
 ## Настройка Ollama
 
@@ -237,8 +394,8 @@ Desktop bridge использует тот же Python core, поэтому за
 В Windows Tauri запускается как GUI-приложение. Python 3.11 bridge и другие
 backend-процессы работают без консольных окон; повторный запуск активирует
 один экземпляр AXIOM, а закрытие главного окна завершает дерево процессов core.
-По умолчанию используется `C:\Users\user\AppData\Local\Programs\Python\Python311\python.exe`;
-путь можно явно переопределить через `AXIOM_PYTHON`.
+Python для bridge автоматически ищется в локальном `.venv`/`venv` и системном `PATH`;
+при необходимости путь можно явно переопределить через `AXIOM_PYTHON`.
 
 ## Slash-команды TUI
 
@@ -316,9 +473,10 @@ AXIOM не оптимизирует скорость «на глаз». В runti
 - thinking/answer token counts, durations и throughput;
 - tools, context messages, tool latency и AXIOM overhead.
 
-Неизвестные значения остаются `None`, а не оцениваются. Полный headless benchmark
-runner с повторными cold/warm runs и JSON-отчётами является следующим этапом;
-текущий foundation не меняет streaming path и не создаёт параллельную metric system.
+Неизвестные значения остаются `None`, а не оцениваются. Headless benchmark runner
+с повторными cold/warm runs и JSON-отчётами уже реализован в `axiom.core.benchmark`;
+его можно запустить через `--benchmark` или из TUI командой `/benchmark`. Runner
+использует тот же реальный runtime и не создаёт параллельную metric system.
 
 ## Разработка и проверка
 

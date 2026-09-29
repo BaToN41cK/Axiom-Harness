@@ -1,10 +1,26 @@
 """Skills — инструкции+tools+знания по стеку (п.14).
 
 Skill: instructions, tools, knowledge, commands, validation.
+
+W4.5: skills can also live on disk. Project skills come from
+``<workspace>/.axiom/skills/*.md`` and global skills from
+``<AXIOM_HOME>/skills/*.md``. File format::
+
+    ---
+    id: my-skill            # optional; default = file stem
+    label: My Skill         # optional
+    triggers: alembic, migrations   # optional, comma-separated
+    tools: run_command, read_file   # optional, comma-separated
+    ---
+    Instructions written in Markdown. They reach the prompt only when the
+    skill is selected by relevance (trigger words, markers or a @mention).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+from axiom.core.config import axiom_home
 
 
 @dataclass
@@ -16,6 +32,8 @@ class Skill:
     knowledge: tuple[str, ...] = ()
     commands: tuple[str, ...] = ()
     validation: tuple[str, ...] = ()
+    triggers: tuple[str, ...] = ()
+    source: str = "builtin"   # builtin | global | project | plugin
 
     def prompt_block(self) -> str:
         lines = [f"Skill: {self.label or self.id}", self.instructions.strip()]
@@ -24,6 +42,68 @@ class Skill:
         if self.validation:
             lines.append("Validate: " + ", ".join(self.validation))
         return "\n".join(line for line in lines if line)
+
+
+def _split_list(raw: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in raw.replace(";", ",").split(",") if part.strip())
+
+
+def parse_skill_file(path: Path, *, source: str) -> Skill | None:
+    """Parse one ``*.md`` skill file; ``None`` when the file is unusable.
+
+    An optional ``---`` fenced YAML-style header carries ``id``/``label``/
+    ``triggers``/``tools``; everything after it is the instruction body.
+    A file without instructions is not a skill.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    meta: dict[str, str] = {}
+    body = text
+    stripped = text.lstrip()
+    if stripped.startswith("---"):
+        lines = stripped.splitlines()
+        end = None
+        for index in range(1, len(lines)):
+            if lines[index].strip() == "---":
+                end = index
+                break
+        if end is not None:
+            for line in lines[1:end]:
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    meta[key.strip().casefold()] = value.strip()
+            body = "\n".join(lines[end + 1:])
+    instructions = body.strip()
+    if not instructions:
+        return None
+    skill_id = meta.get("id") or path.stem
+    if not skill_id or any(ch in skill_id for ch in "/\\ "):
+        skill_id = path.stem.replace(" ", "-")
+    return Skill(
+        id=skill_id,
+        label=meta.get("label", ""),
+        instructions=instructions[:4000],
+        tools=_split_list(meta.get("tools", "")),
+        triggers=_split_list(meta.get("triggers", "")),
+        source=source,
+    )
+
+
+def load_skill_directory(directory: Path, *, source: str) -> list[Skill]:
+    """Load every valid ``*.md`` skill from one directory (sorted, stable)."""
+    skills: list[Skill] = []
+    try:
+        files = sorted(directory.glob("*.md"))
+    except OSError:
+        return skills
+    for path in files:
+        skill = parse_skill_file(path, source=source)
+        if skill is not None:
+            skills.append(skill)
+    return skills
+
 
 
 BUILTIN_SKILLS: tuple[Skill, ...] = (
@@ -77,6 +157,7 @@ class SkillRegistry:
     def __init__(self) -> None:
         self._skills: dict[str, Skill] = {s.id: s for s in BUILTIN_SKILLS}
         self._pin_sources: dict[str, set[str]] = {}
+        self._workspace_root: Path | None = None
 
     def register(self, skill: Skill) -> None:
         self._skills[skill.id] = skill
@@ -92,6 +173,36 @@ class SkillRegistry:
     def all(self) -> list[Skill]:
         return list(self._skills.values())
 
+    # ------------------------------------------------------- disk (W4.5)
+
+    def load_workspace_skills(self, workspace_root: Path | str | None) -> list[str]:
+        """(Re)load global and project skills from disk for *workspace_root*.
+
+        Previously loaded disk skills are dropped first so removed/renamed
+        files never linger; a workspace switch rebinds the project set.
+        Returns the ids that were registered.
+        """
+        for skill_id, skill in list(self._skills.items()):
+            if skill.source in ("global", "project"):
+                self.remove(skill_id)
+        root: Path | None = None
+        if workspace_root:
+            try:
+                root = Path(workspace_root).expanduser().resolve()
+            except OSError:
+                root = None
+        self._workspace_root = root
+        loaded: list[str] = []
+        for skill in load_skill_directory(axiom_home() / "skills", source="global"):
+            self.register(skill)
+            loaded.append(skill.id)
+        if root is not None:
+            for skill in load_skill_directory(root / ".axiom" / "skills",
+                                              source="project"):
+                self.register(skill)
+                loaded.append(skill.id)
+        return loaded
+
     def resolve_for_task(self, text: str) -> list[Skill]:
         lowered = (text or "").lower()
         out: list[Skill] = []
@@ -99,6 +210,12 @@ class SkillRegistry:
             if any(m in lowered for m in markers):
                 skill = self._skills.get(skill_id)
                 if skill is not None and skill not in out:
+                    out.append(skill)
+        # W4.5: disk skills are selected by their own declared triggers.
+        for skill in self._skills.values():
+            if skill.source in ("global", "project") and skill not in out:
+                disk_markers = [t.casefold() for t in skill.triggers] or [skill.id.casefold()]
+                if any(m and m in lowered for m in disk_markers):
                     out.append(skill)
         # Pinned skills (плагины/пресеты) доступны всегда — независимо от маркеров.
         for skill_id in self._pin_sources:

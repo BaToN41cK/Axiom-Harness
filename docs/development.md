@@ -3,8 +3,8 @@
 ## Окружение
 
 ```bash
-git clone https://github.com/BaToN41cK/Axiom.git
-cd Axiom
+git clone https://github.com/BaToN41cK/Axiom-Harness.git
+cd Axiom-Harness
 pip install -e ".[dev]"
 ```
 

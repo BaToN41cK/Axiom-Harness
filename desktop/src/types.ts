@@ -116,8 +116,16 @@ export interface StoredMessage {
 }
 
 export type Density = "compact" | "comfortable" | "spacious";
-export type AccentPreset = "garnet" | "blue" | "teal" | "violet";
-export type ThemePreset = "obsidian" | "light" | "midnight" | "terminal" | "solarized";
+export type AccentPreset = "garnet" | "blue" | "teal" | "violet" | "slate" | "rose" | "amber";
+export type ThemePreset =
+  | "obsidian"
+  | "light"
+  | "midnight"
+  | "terminal"
+  | "solarized"
+  | "graphite"
+  | "rosewood"
+  | "nord";
 
 export interface AxiomConfig {
   ollama_url: string;

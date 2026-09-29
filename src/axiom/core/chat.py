@@ -270,6 +270,24 @@ class ChatSession:
         self._loaded_plugin_skills: dict[str, set[str]] = {}
         # --- Harness (п.14-22): skills, router, mcp, plugins, presets ---
         self.skills = SkillRegistry()
+        from axiom.core.rules import RuleManager
+
+        self.rules = RuleManager(
+            Path(self.config.workspace_root).expanduser()
+            if self.config.workspace_root else None
+        )
+        # W4.10: lifecycle hooks. Built from config + global/project hook files;
+        # the tool registry runs the tool-scoped events, the Task Runtime runs
+        # TaskStart/TaskComplete/ContextCompact.
+        from axiom.core.hooks import build_hook_runner
+
+        self.hooks = build_hook_runner(
+            self.config,
+            workspace_root=Path(self.config.workspace_root).expanduser()
+            if self.config.workspace_root else None,
+            bus=self.bus, trajectory=self.trajectory,
+        )
+        self.tools.hooks = self.hooks
         self.router = ModelRouter(RouterConfig())
         self._configure_router_from_config()
         self.mcp = MCPManager()
@@ -291,13 +309,16 @@ class ChatSession:
             root = self.config.workspace_root
             if root:
                 self._project_memory = ProjectMemory(_Path(root).expanduser())
+            # W4.5: load global/project disk skills for the boot workspace.
+            self.skills.load_workspace_skills(
+                _Path(root).expanduser() if root else None)
         except Exception:
             self._project_memory = None
         self.agent.attach_harness(bus=self.bus, trajectory=self.trajectory,
                                   router=self.router, catalog=self.model_catalog,
                                   sandbox=self.sandbox, skills=self.skills,
                                   verifier=self.verifier, permissions=self.permissions,
-                                  memory=self.memory_tools)
+                                  memory=self.memory_tools, rules=self.rules)
         # All providers expose the same normalized stream to Agent.  Ollama
         # remains the default, while a configured router_primary selects the
         # external provider for the real chat path.
@@ -741,7 +762,13 @@ class ChatSession:
         )
 
     async def _subagent_runner(self, **kwargs) -> dict:
-        """Execute one isolated specialist with real model and scoped tools."""
+        """Execute one isolated specialist with real model and scoped tools.
+
+        W4.6: the worker's full transcript stays in its own trajectory; only the
+        compact five-section report (plus explicit budget telemetry) is returned
+        to the caller, so specialists can never flood the main context.
+        """
+        from axiom.core.agents import SubagentBudget
         from axiom.core.permissions import PermissionManager
         from axiom.core.sandbox import Sandbox
         from axiom.core.trajectory import Trajectory
@@ -763,12 +790,31 @@ class ChatSession:
             "reviewer": "Review worker results. Return APPROVED or structured REWORK with issues and required_changes.",
             "researcher": "Research only when external facts are required; cite sources.",
             "security": "Review security risks without changing unrelated code.",
+            # W4.6 roles with scoped tools.
+            "explorer": "Explore the workspace read-only. Never edit files; report paths and structure.",
+            "frontend": "Implement frontend changes (UI/TypeScript) with minimal local edits.",
+            "backend": "Implement backend changes (Python/API) with minimal local edits.",
         }
+        # W4.6 report contract: only these five sections ever reach the main
+        # context; the full transcript stays in this worker's trajectory.
+        report_contract = (
+            "Finish with EXACTLY these five sections (omit nothing; write \"none\" "
+            "when a section does not apply):\n"
+            "RESULT: <what you accomplished>\n"
+            "FINDINGS: <evidence you observed>\n"
+            "FILES: <workspace-relative paths you touched or inspected>\n"
+            "ERRORS: <real failures encountered, or none>\n"
+            "RECOMMENDATIONS: <concrete next steps, or none>"
+        )
         from axiom.core.agent import DEFAULT_SYSTEM_PROMPT
         base_prompt = request_config.system_prompt or DEFAULT_SYSTEM_PROMPT
+        # The reviewer speaks the APPROVED/REWORK verdict contract instead —
+        # five report sections would only dilute it.
+        role_line = role_prompts.get(agent_id, "Complete the assigned task.")
+        extras = "" if agent_id == "reviewer" else f"\n\n{report_contract}"
         request_config.system_prompt = (
             f"{base_prompt}\n\nSpecialist role: {agent_id}. "
-            f"{role_prompts.get(agent_id, 'Complete the assigned task.')}"
+            f"{role_line}{extras}"
         ).strip()
         request_registry = self.tools.subset(allowed)
         if self.active_task_runner is not None:
@@ -811,6 +857,18 @@ class ChatSession:
         tool_calls = 0
         tool_ok = 0
         tool_failed = 0
+        # W4.6 budgets: one specialist never exceeds time/token/tool ceilings;
+        # exhaustion is explicit and returns the partial result it managed to
+        # produce (``budget.exhausted`` names the reason).
+        budget = kwargs.get("budget")
+        if not isinstance(budget, SubagentBudget):
+            budget = SubagentBudget()
+        started_at = time.perf_counter()
+        exhausted: str | None = None
+        produced_chars = 0
+        # Re-tries are real rework passes the orchestrator asked for (iteration
+        # number), never a guess derived from failed tools.
+        retries_used = max(0, int(kwargs.get("retries") or 0))
         worker_model = self._worker_model(agent_id, task)
         # Publish the exact model/provider this specialist will call before the
         # first token — the final reply arrives minutes later, the live feed
@@ -836,9 +894,11 @@ class ChatSession:
                     kwargs["on_event"](event)
                 if isinstance(event, ReasoningChunk):
                     pass_thinking.append(event.text)
+                    produced_chars += len(event.text)
                 elif isinstance(event, ContentChunk):
                     parts.append(event.text)
                     pass_content.append(event.text)
+                    produced_chars += len(event.text)
                 elif isinstance(event, ToolCallEvent):
                     _flush_pass()
                     tool_calls += 1
@@ -865,10 +925,30 @@ class ChatSession:
                               "duration_ms": event.duration_ms,
                               "error": event.error},
                     )
+                # W4.6: ceilings are checked after every event, so a runaway
+                # specialist stops with an explicit reason and a partial result
+                # instead of hanging or silently truncating its work.
+                exhausted = budget.check(
+                    elapsed=time.perf_counter() - started_at,
+                    tokens=produced_chars // 4, tool_calls=tool_calls,
+                    retries=retries_used,
+                )
+                if exhausted:
+                    self._record_worker_tool(
+                        parent_traj, agent_id, "subagent.budget",
+                        f"budget exhausted: {exhausted}",
+                        data={"reason": exhausted, "tool_calls": tool_calls,
+                              "tokens": produced_chars // 4},
+                    )
+                    break
         except Exception as exc:
             _flush_pass()
             self._merge_child_trajectory(parent_traj, child_traj, agent_id)
-            return {"agent": agent_id, "error": f"{type(exc).__name__}: {exc}"}
+            return self._finalize_worker_result(
+                {"agent": agent_id, "content": "".join(parts).strip()[:4000],
+                 "error": f"{type(exc).__name__}: {exc}"},
+                budget, started_at, produced_chars, tool_calls, retries_used, exhausted,
+            )
         _flush_pass()
         self._merge_child_trajectory(parent_traj, child_traj, agent_id)
         route = dict(getattr(self.provider_client, "last_route", {}) or {})
@@ -883,7 +963,32 @@ class ChatSession:
         }
         if not result["content"]:
             result["error"] = "empty model response"
-        return result
+        return self._finalize_worker_result(
+            result, budget, started_at, produced_chars, tool_calls, retries_used, exhausted,
+        )
+
+    @staticmethod
+    def _finalize_worker_result(result: dict, budget, started_at: float,
+                                produced_chars: int, tool_calls: int,
+                                retries: int, exhausted: str | None) -> dict:
+        """Attach the compact report and explicit budget telemetry (W4.6).
+
+        Only ``report`` may be re-shown to the main context; ``content`` stays
+        for the caller's own checks and the UI feed. Exhaustion never erases the
+        partial result — it names the reason instead of pretending success.
+        """
+        from axiom.core.agents import compact_report
+
+        finalized = dict(result)
+        if exhausted:
+            finalized["budget_exhausted"] = exhausted
+        finalized["report"] = compact_report(finalized)
+        finalized["budget"] = budget.as_dict(
+            elapsed=time.perf_counter() - started_at,
+            tokens=produced_chars // 4, tool_calls=tool_calls,
+            retries=retries, exhausted=exhausted,
+        )
+        return finalized
 
     @property
     def task_store(self) -> TaskStore:
@@ -1155,7 +1260,34 @@ class ChatSession:
             bus=self.bus, trajectory=self.trajectory,
             workspace_root=self.workspace_root, context_max_tokens=self._context_budget(),
             max_verification_repairs=self.config.max_retries,
+            skill_registry=self.skills, hooks=self.hooks,
         )
+        # W4.5: project constraints and procedures join the task only when
+        # relevant — global/project rules always, directory rules only for
+        # directories the task touches, skills only when selected by
+        # relevance. User @-mentioned rule files (task scope) win conflicts.
+        if self.workspace_root is not None:
+            task.task_paths = sorted(
+                set(task.task_paths) | set(mentioned_files(task.goal, self.workspace_root)))
+            rules_block = self.rules.merged_rules(
+                task.goal, task_paths=task.task_paths, include_static=True)
+            if rules_block:
+                task.context_rules = rules_block
+            task.active_skills = [
+                s.id for s in self.skills.resolve_for_task(task.goal)][:3]
+            if self.trajectory is not None:
+                try:
+                    self.trajectory.append(
+                        "task.rules",
+                        f"rules={len(self.rules.last_report.included)} "
+                        f"skipped={len(self.rules.last_report.skipped)} "
+                        f"skills={','.join(task.active_skills) or '-'}",
+                        data={"rules": [s.rel or s.path for s in self.rules.last_report.included],
+                              "skipped": list(self.rules.last_report.skipped),
+                              "skills": list(task.active_skills)},
+                    )
+                except Exception:
+                    pass
         self.active_task = task
         self.active_task_runner = runner
         # W4.9: task-scoped approvals live exactly as long as this run.
@@ -1696,6 +1828,26 @@ class ChatSession:
                 self.trajectory.append("project.index",
                                        f"{target.name}: {','.join(index_obj.languages[:4])}",
                                        actor="architect", data=index_obj.to_json())
+        except Exception:
+            pass
+        # W4.5: rebind rules and disk skills to the NEW workspace; rules or
+        # skills from the previous project must never leak into this one.
+        try:
+            self.rules.set_workspace(target)
+            loaded = self.skills.load_workspace_skills(target)
+            if loaded:
+                self.trajectory.append("skills.workspace", ", ".join(loaded),
+                                       actor="system", data={"skills": loaded})
+        except Exception:
+            pass
+        # W4.10: rebind hooks too — a previous project's hook commands must
+        # never run against the new workspace.
+        try:
+            from axiom.core.hooks import build_hook_runner as _build_hooks
+
+            self.hooks = _build_hooks(self.config, workspace_root=target,
+                                      bus=self.bus, trajectory=self.trajectory)
+            self.tools.hooks = self.hooks
         except Exception:
             pass
         # W2.1: project-scoped memory follows the workspace switch.

@@ -181,7 +181,8 @@ Desktop-слой — тонкий адаптер над core, но два мод
   `src/styles/boot.css` и `src/styles/orchestration.css`, правила виртуализации
   — в `src/styles/virtualization.css`. `main.tsx` импортирует их в исходном
   порядке следования, поэтому каскад и внешний вид не изменились ни в одной
-  теме (obsidian/light/midnight/terminal/solarized и акценты W1.1).
+  теме (obsidian/graphite/rosewood/nord/midnight/terminal/solarized/light и
+  акценты garnet/blue/teal/violet/slate/rose/amber).
 * **Хук состояния**: чистые pure-функции (`liveAssistant`/`updateLive`,
   подписи и статусы тулов, `resolveModel`, `orchestrationProgress` и др.)
   вынесены из `useAxiom.ts` в `useAxiom.helpers.ts`; хук держит только state и
@@ -226,6 +227,62 @@ is persisted in `Task.context_snapshot` before continuation. A
 new runner restores that snapshot without replaying completed steps. The older
 `ContextEngine.compress()` contract remains available for its existing callers.
 
+## Rules and skills (W4.5)
+
+`axiom.core.rules` discovers workspace constraints from four scopes and merges
+them with a deterministic precedence (`global → project → directory → task`;
+a higher scope shadows a lower one's conflicting Markdown section). Global
+rules live in `~/.axiom/AXIOM.md`, project rules in `<workspace>/AXIOM.md` or
+`<workspace>/.axiom/project.md`, and directory rules in any nested `AXIOM.md`.
+Global + project rules join the protected `project_rules` prompt layer of
+every workspace request; directory rules attach only when the task touches a
+path under their directory (never irrelevant ones); rules a user explicitly
+requests with an `@mention` always win. `RuleManager` is re-discovered on
+every workspace switch so constraints never leak between projects.
+
+`axiom.core.skills` additionally loads skills from disk:
+`~/.axiom/skills/*.md` (global) and `<workspace>/.axiom/skills/*.md`
+(project). A skill file is Markdown with an optional `---` header
+(`id`/`label`/`triggers`/`tools`); it reaches the prompt only when its
+trigger words (or its id) match the task text — or when pinned by a
+plugin/preset. At task start `ChatSession` records the merged rules and the
+selected skill ids in Task State (`context_rules`, `active_skills`,
+`task_paths`) and `TaskRunner` injects them into every step prompt, so a
+restarted/resumed task keeps exactly the same constraints.
+
+## Isolated subagents and compact reports (W4.6)
+
+Every specialist runs in its own runtime context: a private config copy, event
+bus, state machine, trajectory, router/catalog, sandbox and permission cache;
+only the model transport and stateless tool handlers are shared. The registry
+(`axiom.core.agents`) covers Orchestrator, Analyst, Coder, Debugger, Reviewer,
+Researcher, Tester, Architect, Security, Explorer (strictly read-only: no
+writer, no `run_command`), Frontend and Backend; `core/tools/meta.py` gives each
+role only its own tool surface.
+
+A worker never returns a transcript. Its reply is normalised by
+`compact_report` into the five-section contract — `RESULT`, `FINDINGS`,
+`FILES`, `ERRORS`, `RECOMMENDATIONS` (600 chars per section, 2400 total, RESULT
+gives way last) — and unsectioned prose becomes a single RESULT line while a
+real failure is always appended to ERRORS. The full stream (reasoning, answer
+passes, tool calls and results) stays in the worker's trajectory and is merged
+into the orchestration trace, so the UI can replay the real work without ever
+putting it in the main context.
+
+`SubagentBudget` (time / tokens / tool calls / retries, a zero ceiling disables
+that axis) is checked after every streamed event. Exhaustion is explicit: the
+worker stops with the reason in `budget.exhausted`, records a `subagent.budget`
+event and returns the partial result it already produced. The orchestrator
+renders reviewer input and the final summary from compact reports only,
+aggregates `reports` in the run result (normalising any runner that ignored the
+contract) and passes its rework iteration as the worker retry count. Planning
+swaps the generalist `coder` for `frontend`/`backend` only when the request
+names one surface with a word boundary (naming both keeps the generalist, and
+look-alikes like "build" never mean "ui"). `TaskRunner`
+collects the reports into the persisted `Task.subagent_reports` (one entry per
+step id, replaced on repair/rework, `task.report` trajectory event), so
+specialist evidence survives a restart.
+
 ## Verification truthfulness (W4.8)
 
 `VerificationTools` preserves subprocess `exit_code` through the verification
@@ -254,6 +311,44 @@ in auto mode (no cached/"always" approval), and rejects empty/all/directory/
 escaping paths. `git_commit` and `git_push` remain absent from the agent registry;
 the existing GUI user workflow stays available while reviewed-diff consent is
 not yet enforceable.
+
+## Lifecycle hooks (W4.10)
+
+`axiom/core/hooks.py` даёт настраиваемые lifecycle-действия вокруг агентного
+цикла. Hook — это реальная внешняя команда, а не встроенная логика: проект может
+форматировать, тестировать или аудировать изменения, не патча ядро.
+
+События: `TaskStart`, `TaskComplete`, `PreToolUse`, `PostToolUse`, `PreEdit`,
+`PostEdit`, `PreCommit`, `PostCommit`, `ContextCompact`.
+
+Три правила, из-за которых hooks не ломают цикл:
+
+* **Последовательность и таймаут.** Hooks одного события выполняются в порядке
+  объявления, каждый со своим таймаутом (максимум 600 с). Параллельного запуска нет.
+* **Fail-open.** Упавший, зависший или отсутствующий hook становится
+  предупреждением в `Task.hook_results`, а задача продолжается. Hooks —
+  автоматизация, а не gate: `TaskError` они не создают.
+* **Проверка прав.** Команда каждого hook классифицируется политикой W4.9.
+  Всё выше `hooks_max_risk` (по умолчанию `MEDIUM`) отклоняется до запуска, поэтому
+  файл проекта не может протащить `curl … | sh`.
+
+Команды задаются списком argv и запускаются без shell, поэтому аргументы hook не
+могут дописать вторую команду.
+
+Источники определений сливаются детерминированно: `builtin` → `<AXIOM_HOME>/hooks/*.json`
+→ `<workspace>/.axiom/hooks/*.json` → `config.hooks`. Встроенные определения
+поставляются **выключенными**; запись `{"id": "ruff-format-python", "enabled": true}`
+включает их, не повторяя команду. Конфигурация: `hooks_enabled`, `hooks`,
+`hooks_max_risk`; `hooks_enabled=false` полностью возвращает прежнее поведение —
+ни один процесс hook не запускается.
+
+Точки интеграции: `ToolRegistry.execute()` — единственное место исполнения
+инструментов, поэтому tool-события видят реальные вызовы (`PostEdit` только после
+успешной записи файла); `TaskRunner` вызывает `TaskStart`, `TaskComplete` и
+`ContextCompact` и публикует результаты как `task.hooks`. Hook получает контекст
+через окружение: `AXIOM_HOOK_EVENT`, `AXIOM_TASK_ID`, `AXIOM_TOOL_NAME`,
+`AXIOM_FILE_PATH`, `AXIOM_WORKSPACE`. Переключение workspace перепривязывает hooks,
+чтобы команды прошлого проекта не выполнялись в новом.
 
 ## TUI package (W2.8)
 

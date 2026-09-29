@@ -73,9 +73,11 @@ class Config(BaseModel):
     #: Whether the reasoning block starts expanded
     reasoning_expanded: bool = False
     #: UI colour scheme; kept separate from the shared accent preset.
-    theme: Literal["obsidian", "light", "midnight", "terminal", "solarized"] = "obsidian"
+    theme: Literal[
+        "obsidian", "light", "midnight", "terminal", "solarized", "graphite", "rosewood", "nord"
+    ] = "obsidian"
     #: Accessible accent shared by Desktop and TUI.
-    accent: Literal["garnet", "blue", "teal", "violet"] = "garnet"
+    accent: Literal["garnet", "blue", "teal", "violet", "slate", "rose", "amber"] = "garnet"
     #: Highlight interactive panel/list rows while the pointer is over them.
     panel_hover: bool = True
     #: Subtle animations (spinners, splash, transitions)
@@ -94,6 +96,18 @@ class Config(BaseModel):
     knowledge_embed_model: str | None = None
     #: Refuse covered external network paths (search, page fetch, embeddings).
     local_only: bool = False
+
+    # ---------------------------------------------------------------- hooks
+    #: Master switch for lifecycle hooks (W4.10). Disabling restores the
+    #: previous behaviour exactly: no hook command is ever started.
+    hooks_enabled: bool = True
+    #: Declared hooks. Each entry is {"id", "event", "command", "tools",
+    #: "paths", "timeout", "enabled"}; an entry with only {"id", "enabled"}
+    #: toggles a builtin/global/project definition in place.
+    hooks: list[dict] = Field(default_factory=list)
+    #: Highest command risk tier a hook may run (W4.9 tiers). HIGH/CRITICAL
+    #: hook commands are refused before execution at the default MEDIUM.
+    hooks_max_risk: Literal["SAFE", "LOW", "MEDIUM", "HIGH"] = "MEDIUM"
 
     # ------------------------------------------------------- harness routing
     #: Enable the Model Router (п.16): pick provider/model per task type

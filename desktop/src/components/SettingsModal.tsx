@@ -29,6 +29,7 @@ import type {
 } from "../types";
 import type { SettingsSection } from "../hooks/useAxiom";
 import { isSoundEnabled, playUiSound, setSoundEnabled } from "../lib/sound";
+import type { UiSound } from "../lib/sound";
 import "../styles/settings.css";
 
 interface Props {
@@ -912,6 +913,20 @@ function KnowledgeSection({
 
 const RowLabel = createContext<string | undefined>(undefined);
 
+/**
+ * Cues the user can audition from Appearance → «Проверить звуки».
+ *
+ * Only the cues tied to a real agent event are listed: a finished answer, a
+ * failure, a blocked tool call and a user stop. UI chrome sounds (panels,
+ * settings) are intentionally not previewable — they are heard while clicking.
+ */
+const SOUND_PREVIEWS: { kind: UiSound; label: string }[] = [
+  { kind: "complete", label: "Ответ готов" },
+  { kind: "error", label: "Ошибка" },
+  { kind: "permission", label: "Запрос разрешения" },
+  { kind: "stopped", label: "Остановлено" },
+];
+
 function GroupTitle({ children }: { children: ReactNode }) {
   return <h4 className="settings-group-title">{children}</h4>;
 }
@@ -1264,6 +1279,9 @@ const ACCENT_LABELS: Record<AxiomConfig["accent"], string> = {
   blue: "Синий",
   teal: "Бирюзовый",
   violet: "Фиолетовый",
+  slate: "Серый",
+  rose: "Розовый",
+  amber: "Янтарный",
 };
 
 function AppearanceSection({ draft, set }: SectionProps) {
@@ -1277,10 +1295,13 @@ function AppearanceSection({ draft, set }: SectionProps) {
           onChange={(e) => set("theme", e.target.value as AxiomConfig["theme"])}
         >
           <option value="obsidian">AXIOM Dark</option>
-          <option value="light">AXIOM Light</option>
+          <option value="graphite">Graphite Grey</option>
+          <option value="rosewood">Rose Noir</option>
+          <option value="nord">Nord Frost</option>
           <option value="midnight">Midnight Blue</option>
           <option value="terminal">Terminal Green</option>
           <option value="solarized">Solarized Dark</option>
+          <option value="light">AXIOM Light</option>
         </select>
       </Row>
       <Row label="Акцент" hint="Общий проверенный цвет для Desktop и TUI">
@@ -1309,6 +1330,24 @@ function AppearanceSection({ draft, set }: SectionProps) {
             setSoundEnabled(value);
           }}
         />
+      </Row>
+      {/* Each event has its own cue; the only honest way to show that is to
+          let the user hear them. Enabled only while sounds are on. */}
+      <Row label="Проверить звуки" hint="Ответ готов, ошибка, запрос разрешения и остановка звучат по-разному.">
+        <div className="sound-preview">
+          {SOUND_PREVIEWS.map((preview) => (
+            <button
+              key={preview.kind}
+              type="button"
+              className="mini-btn"
+              disabled={!soundEnabled}
+              title={soundEnabled ? `Проиграть: ${preview.label}` : "Сначала включите UI-звуки"}
+              onClick={() => playUiSound(preview.kind)}
+            >
+              {preview.label}
+            </button>
+          ))}
+        </div>
       </Row>
       <GroupTitle>Плотность и панели</GroupTitle>
       <Row label="Плотность" hint="Отступы сообщений и списков">

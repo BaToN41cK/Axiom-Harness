@@ -1,12 +1,19 @@
-"""AXIOM — Local Intelligence Terminal Workspace.
+"""AXIOM — Open Local AI Coding Workspace & Agent Harness.
 
-A premium terminal AI client powered by a local Ollama backend.
+A local-first AI coding workspace and agent harness powered by Ollama, with a
+Textual TUI and a Tauri/React desktop client sharing the same core.
 
 Public API surface. Frontends should depend only on what is exported here
 and on :mod:`axiom.core` / :mod:`axiom.shared` modules.
 """
 
-from axiom.core.agents import AgentProfile, AgentRegistry
+from axiom.core.agents import (
+    REPORT_SECTIONS,
+    AgentProfile,
+    AgentRegistry,
+    SubagentBudget,
+    compact_report,
+)
 from axiom.core.bus import EventBus
 from axiom.core.cancellation import CancelToken
 from axiom.core.chat import ChatSession
@@ -31,6 +38,14 @@ from axiom.core.events import (
     StatusChange,
     ToolCallEvent,
     ToolResultEvent,
+)
+from axiom.core.hooks import (
+    HOOK_EVENTS,
+    Hook,
+    HookResult,
+    HookRunner,
+    build_hook_runner,
+    load_hooks,
 )
 from axiom.core.knowledge import KnowledgeHit, KnowledgeManager, KnowledgeStore, KnowledgeTools
 from axiom.core.mcp import MCPClient, MCPManager, MCPServer
@@ -65,8 +80,9 @@ from axiom.core.providers import (
 )
 from axiom.core.ptc import parse_program, run_program
 from axiom.core.router import ModelRouter, RouterConfig, RouteTarget
+from axiom.core.rules import RuleManager, RuleReport, RuleSource
 from axiom.core.sandbox import Sandbox
-from axiom.core.skills import Skill, SkillRegistry
+from axiom.core.skills import Skill, SkillRegistry, load_skill_directory, parse_skill_file
 from axiom.core.state import GenerationState
 from axiom.core.state_machine import GenerationStateMachine
 from axiom.core.tasks import Task, TaskError, TaskEvent, TaskState, TaskStore
@@ -90,6 +106,9 @@ __all__ = [
     "ProviderManager",
     "AgentProfile",
     "AgentRegistry",
+    "SubagentBudget",
+    "compact_report",
+    "REPORT_SECTIONS",
     "AnthropicProvider",
     "ChatMessage",
     "KnownProvider",
@@ -120,6 +139,17 @@ __all__ = [
     "Sandbox",
     "Skill",
     "SkillRegistry",
+    "load_skill_directory",
+    "parse_skill_file",
+    "RuleManager",
+    "RuleReport",
+    "RuleSource",
+    "HOOK_EVENTS",
+    "Hook",
+    "HookResult",
+    "HookRunner",
+    "build_hook_runner",
+    "load_hooks",
     "ModelRouter",
     "RouteTarget",
     "RouterConfig",

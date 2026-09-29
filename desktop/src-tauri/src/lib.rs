@@ -7,14 +7,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::{BufRead, BufReader, Read, Write};
-#[cfg(debug_assertions)]
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(debug_assertions)]
-use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -243,117 +239,15 @@ fn find_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// A debug build gets Vite from its own GUI process. Starting its JS entrypoint
-/// directly avoids npm's `cmd.exe /c` script launcher on Windows.
-#[cfg(debug_assertions)]
-fn start_dev_server() -> Result<Option<BridgeProcess>, String> {
-    let dev_addr = SocketAddr::from(([127, 0, 0, 1], 1420));
-    if dev_server_answers(&dev_addr) {
-        // A developer may already have a Vite server running. Do not claim or
-        // terminate a process this GUI did not start.
-        return Ok(None);
-    }
-
-    let desktop = find_root().join("desktop");
-    let vite = desktop.join("node_modules/vite/bin/vite.js");
-    if !vite.is_file() {
-        return Err(format!("Vite entrypoint is missing: {}", vite.display()));
-    }
-    let log_path = desktop.join("vite_dev.log");
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|err| format!("could not open {}: {err}", log_path.display()))?;
-    let stderr = log
-        .try_clone()
-        .map_err(|err| format!("could not duplicate Vite log handle: {err}"))?;
-
-    let mut command = Command::new(if cfg!(windows) { "node.exe" } else { "node" });
-    command
-        .arg(&vite)
-        .current_dir(&desktop)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr));
-    #[cfg(windows)]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    #[cfg(not(windows))]
-    command.env("NODE_NO_WARNINGS", "1");
-
-    let child = command
-        .spawn()
-        .map_err(|err| format!("could not start Vite directly with node.exe: {err}"))?;
-    #[cfg(windows)]
-    let mut job = windows_process::Job::new().ok();
-    #[cfg(windows)]
-    if job.as_ref().is_some_and(|group| group.assign(&child).is_err()) {
-        job = None;
-    }
-    let mut server = BridgeProcess {
-        child,
-        #[cfg(windows)]
-        job,
-    };
-
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        if dev_server_answers(&dev_addr) {
-            return Ok(Some(server));
-        }
-        if let Some(status) = server.child.try_wait().map_err(|err| {
-            format!("could not check Vite process status: {err}")
-        })? {
-            return Err(format!(
-                "Vite exited before its dev server became ready ({status}); see {}",
-                log_path.display()
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(format!(
-        "Vite did not open 127.0.0.1:1420 within 30 seconds; see {}",
-        log_path.display()
-    ))
-}
-
-#[cfg(debug_assertions)]
-fn dev_server_answers(address: &SocketAddr) -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(address, Duration::from_millis(200)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
-    if stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .is_err()
-    {
-        return false;
-    }
-    let mut response = [0u8; 128];
-    let Ok(size) = stream.read(&mut response) else {
-        return false;
-    };
-    String::from_utf8_lossy(&response[..size])
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|status| status.parse::<u16>().ok())
-        .is_some_and(|status| status == 200)
-}
-
 fn find_python() -> String {
     if let Ok(py) = std::env::var("AXIOM_PYTHON") {
         if !py.trim().is_empty() {
             return py;
         }
     }
-    // Prefer the user's production Python 3.11 installation. The repository
-    // virtualenv remains a fallback for development machines without it.
-    let configured = r"C:\Users\user\AppData\Local\Programs\Python\Python311\python.exe";
-    if PathBuf::from(configured).is_file() {
-        return configured.to_string();
-    }
+    // Prefer project-local environments so clones remain portable. A globally
+    // installed interpreter is resolved below through PATH; no user-specific
+    // filesystem path is embedded in the desktop shell.
     let root = find_root();
     for rel in [
         ".venv/Scripts/python.exe",
@@ -632,20 +526,10 @@ pub fn run() {
             return;
         }
     };
-    #[cfg(debug_assertions)]
-    let _dev_server = match start_dev_server() {
-        Ok(server) => server,
-        Err(err) => {
-            let message = format!(
-                "Не удалось запустить frontend AXIOM.\n\n{err}\n\nПодробности: desktop/vite_dev.log"
-            );
-            #[cfg(windows)]
-            windows_process::show_error(&message);
-            #[cfg(not(windows))]
-            eprintln!("{message}");
-            return;
-        }
-    };
+    // In development, Tauri's `beforeDevCommand` owns the single Vite
+    // process. Starting another server here deadlocks Tauri's own readiness
+    // wait and can also race for port 1420. The production build embeds the
+    // frontend and does not need a dev server.
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {

@@ -8,14 +8,19 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-AccentPreset = Literal["garnet", "blue", "teal", "violet"]
+AccentPreset = Literal["garnet", "blue", "teal", "violet", "slate", "rose", "amber"]
 
-#: Shared accent values used by Desktop and the TUI.
+#: Shared accent values used by Desktop and the TUI. ``accent`` is the on-dark
+#: foreground, ``light`` the on-white one; ``fill``/``deep``/``dim`` are filled
+#: surfaces that always carry white text.
 ACCENT_PRESETS: dict[AccentPreset, dict[str, str]] = {
     "garnet": {"accent": "#D27882", "light": "#9F3542", "fill": "#702630", "deep": "#4D1820", "dim": "#381118"},
     "blue": {"accent": "#6B9BFF", "light": "#1F58DB", "fill": "#1642A8", "deep": "#12327D", "dim": "#0C2154"},
     "teal": {"accent": "#56B8AE", "light": "#0D6D66", "fill": "#0A514C", "deep": "#073B38", "dim": "#052A29"},
     "violet": {"accent": "#B18CFF", "light": "#7434DF", "fill": "#5B26B5", "deep": "#401A80", "dim": "#2A1155"},
+    "slate": {"accent": "#B6BCC6", "light": "#4B5563", "fill": "#3C4450", "deep": "#2C333C", "dim": "#1E232A"},
+    "rose": {"accent": "#F0A0BC", "light": "#B01A57", "fill": "#8C1244", "deep": "#660C31", "dim": "#450820"},
+    "amber": {"accent": "#E2A94A", "light": "#8A5209", "fill": "#6E4207", "deep": "#503005", "dim": "#372103"},
 }
 
 

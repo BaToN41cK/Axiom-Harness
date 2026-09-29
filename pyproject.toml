@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "axiom"
 version = "1.0.0"
-description = "AXIOM — Local Intelligence Terminal Workspace. A premium TUI AI client powered by Ollama."
+description = "AXIOM — Open Local AI Coding Workspace and Agent Harness."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -40,7 +40,7 @@ dev = [
 axiom = "axiom.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/BaToN41cK/Axiom"
+Homepage = "https://github.com/BaToN41cK/Axiom-Harness"
 
 [tool.setuptools.packages.find]
 where = ["src"]

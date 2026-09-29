@@ -19,7 +19,7 @@ from axiom.core.search.provider import SearchProvider, SearchResult
 
 _API = "https://en.wikipedia.org/w/api.php"
 _TAG_RE = re.compile(r"<[^>]+>")
-_USER_AGENT = "AXIOM/1.0 (local AI workspace; +https://github.com/BaToN41cK/Axiom)"
+_USER_AGENT = "AXIOM/1.0 (local AI workspace; +https://github.com/BaToN41cK/Axiom-Harness)"
 
 
 class WikipediaProvider(SearchProvider):

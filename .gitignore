@@ -39,3 +39,9 @@ Thumbs.db
 .tmp/
 desktop/temp-ps.txt
 
+# Secrets. The YooKassa secret key is full authority over the shop and belongs
+# in the owner's server environment, never in the repository.
+.env
+.env.*
+!.env.example
+

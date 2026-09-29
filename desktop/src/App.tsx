@@ -14,6 +14,7 @@ import Presence from "./components/Presence";
 import { installSoundActivation, playUiSound } from "./lib/sound";
 import { clampRightPanelWidth } from "./lib/panelSize";
 import TaskExecution from "./components/TaskExecution";
+import Balance from "./components/Balance";
 
 import Explorer from "./components/Explorer";
 import GitPanel from "./components/GitPanel";
@@ -23,13 +24,18 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import type { AxiomStore } from "./hooks/useAxiom";
 import type { ThemePreset } from "./types";
 
-const THEME_ORDER: ThemePreset[] = ["obsidian", "light", "midnight", "terminal", "solarized"];
+const THEME_ORDER: ThemePreset[] = [
+  "obsidian", "graphite", "rosewood", "nord", "midnight", "terminal", "solarized", "light",
+];
 const THEME_LABELS: Record<ThemePreset, string> = {
   obsidian: "AXIOM Dark",
-  light: "AXIOM Light",
+  graphite: "Graphite Grey",
+  rosewood: "Rose Noir",
+  nord: "Nord Frost",
   midnight: "Midnight Blue",
   terminal: "Terminal Green",
   solarized: "Solarized Dark",
+  light: "AXIOM Light",
 };
 
 function WorkbenchSide({ store: s }: { store: AxiomStore }) {
@@ -302,6 +308,7 @@ export default function App() {
             <span className="topbar-tools">{s.activeModelInfo?.capabilities.includes("tools") ? "Tools включены" : "Только текст"}</span>
           </div>
           <div className="access-dot" title={s.accessTitle}>{s.accessLabel}</div>
+          <Balance />
           <button
             className="icon-btn"
             title={`Тема: ${THEME_LABELS[theme]} · Переключить на ${THEME_LABELS[nextTheme]}`}

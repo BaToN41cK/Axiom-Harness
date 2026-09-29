@@ -210,25 +210,152 @@
   --ax-info-soft: rgba(38, 139, 210, 0.16);
 }
 
-/* The legacy accent preference remains available for the two AXIOM-branded
-   palettes. Presets are opt-in; the default is always AXIOM Red. */
-:root[data-theme="obsidian"][data-accent="blue"] {
+/* Graphite Grey — a fully neutral dark theme. The accent is a light steel grey,
+   so every status hue keeps its default value: nothing competes with it. */
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+  --ax-bg-app: #17181A;
+  --ax-bg-panel: #1C1E21;
+  --ax-bg-inset: #121315;
+  --ax-bg-elevated: #23262A;
+  --ax-bg-hover: #292D32;
+  --ax-bg-active: #32363C;
+  --ax-bg-overlay: rgba(8, 9, 10, 0.66);
+  --ax-border: rgba(255, 255, 255, 0.11);
+  --ax-border-subtle: rgba(255, 255, 255, 0.06);
+  --ax-border-strong: rgba(255, 255, 255, 0.2);
+  --ax-text: #E8E9EA;
+  --ax-text-muted: #A9ADB3;
+  --ax-text-faint: #7C8188;
+  --ax-text-disabled: #55595F;
+  --ax-text-on-accent: #15171A;
+  --ax-accent: #C3C8CF;
+  --ax-accent-hover: #D6DAE0;
+  --ax-accent-active: #A9AEB6;
+  --ax-accent-soft: rgba(195, 200, 207, 0.12);
+  --ax-accent-softer: rgba(195, 200, 207, 0.06);
+  --ax-accent-border: rgba(195, 200, 207, 0.34);
+  --ax-accent-text: #D0D4DA;
+}
+
+/* Rose Noir — near-black with a dusty rose accent. Because the accent owns the
+   pink end of red, error moves to vermilion and warning to yellow so a failure
+   can never be mistaken for a primary action. */
+:root[data-theme="rosewood"] {
+  color-scheme: dark;
+  --ax-bg-app: #0B0709;
+  --ax-bg-panel: #120C0F;
+  --ax-bg-inset: #060405;
+  --ax-bg-elevated: #1A1216;
+  --ax-bg-hover: #201519;
+  --ax-bg-active: #291B20;
+  --ax-bg-overlay: rgba(6, 3, 4, 0.72);
+  --ax-border: rgba(255, 190, 205, 0.12);
+  --ax-border-subtle: rgba(255, 190, 205, 0.07);
+  --ax-border-strong: rgba(255, 190, 205, 0.22);
+  --ax-text: #F5EAEE;
+  --ax-text-muted: #C0A8B0;
+  --ax-text-faint: #8E7780;
+  --ax-text-disabled: #5E4D54;
+  --ax-text-on-accent: #2B0713;
+  --ax-accent: #F2789F;
+  --ax-accent-hover: #FF92B2;
+  --ax-accent-active: #D55C83;
+  --ax-accent-soft: rgba(242, 120, 159, 0.13);
+  --ax-accent-softer: rgba(242, 120, 159, 0.07);
+  --ax-accent-border: rgba(242, 120, 159, 0.4);
+  --ax-accent-text: #FF9CB8;
+  --ax-error: #FF5340;
+  --ax-error-text: #FF7A68;
+  --ax-error-soft: rgba(255, 83, 64, 0.15);
+  --ax-error-border: rgba(255, 83, 64, 0.46);
+  --ax-warning: #E0A92E;
+  --ax-warning-text: #F0C153;
+  --ax-warning-soft: rgba(224, 169, 46, 0.15);
+  --ax-git-conflict: #FF9E64;
+}
+
+/* Nord Frost — cool slate surfaces with an icy blue accent. Info shifts to a
+   pale mint so it stays separable from the accent at small sizes. */
+:root[data-theme="nord"] {
+  color-scheme: dark;
+  --ax-bg-app: #2E3440;
+  --ax-bg-panel: #333A48;
+  --ax-bg-inset: #272C36;
+  --ax-bg-elevated: #3B4252;
+  --ax-bg-hover: #434C5E;
+  --ax-bg-active: #4C566A;
+  --ax-bg-overlay: rgba(20, 24, 31, 0.64);
+  --ax-border: rgba(216, 222, 233, 0.14);
+  --ax-border-subtle: rgba(216, 222, 233, 0.08);
+  --ax-border-strong: rgba(216, 222, 233, 0.26);
+  --ax-text: #ECEFF4;
+  --ax-text-muted: #C3CAD6;
+  --ax-text-faint: #909CB0;
+  --ax-text-disabled: #667085;
+  --ax-text-on-accent: #10202C;
+  --ax-accent: #88C0D0;
+  --ax-accent-hover: #A3D4E2;
+  --ax-accent-active: #6FA8B8;
+  --ax-accent-soft: rgba(136, 192, 208, 0.14);
+  --ax-accent-softer: rgba(136, 192, 208, 0.07);
+  --ax-accent-border: rgba(136, 192, 208, 0.4);
+  --ax-accent-text: #A3D4E2;
+  --ax-success: #A3BE8C;
+  --ax-success-text: #B5CC9F;
+  --ax-success-soft: rgba(163, 190, 140, 0.16);
+  --ax-warning: #EBCB8B;
+  --ax-warning-text: #F2D89F;
+  --ax-warning-soft: rgba(235, 203, 139, 0.16);
+  --ax-error: #BF616A;
+  --ax-error-text: #D98A91;
+  --ax-error-soft: rgba(191, 97, 106, 0.18);
+  --ax-error-border: rgba(191, 97, 106, 0.48);
+  --ax-info: #8FBCBB;
+  --ax-info-text: #A8CFCE;
+  --ax-info-soft: rgba(143, 188, 187, 0.16);
+  --ax-git-conflict: #D08770;
+}
+
+/* The legacy accent preference remains available for the neutral palettes.
+   Presets are opt-in; the default is always AXIOM Red. */
+:is(:root[data-theme="obsidian"], :root[data-theme="graphite"])[data-accent="blue"] {
   --ax-accent: #58A6FF; --ax-accent-hover: #79B8FF; --ax-accent-active: #388BDE;
   --ax-accent-soft: rgba(88, 166, 255, 0.13); --ax-accent-softer: rgba(88, 166, 255, 0.07);
   --ax-accent-border: rgba(88, 166, 255, 0.38); --ax-accent-text: #79B8FF;
   --ax-text-on-accent: #04101F;
 }
-:root[data-theme="obsidian"][data-accent="teal"] {
+:is(:root[data-theme="obsidian"], :root[data-theme="graphite"])[data-accent="teal"] {
   --ax-accent: #2DD4BF; --ax-accent-hover: #5EEAD4; --ax-accent-active: #14B8A6;
   --ax-accent-soft: rgba(45, 212, 191, 0.13); --ax-accent-softer: rgba(45, 212, 191, 0.07);
   --ax-accent-border: rgba(45, 212, 191, 0.38); --ax-accent-text: #5EEAD4;
   --ax-text-on-accent: #032420;
 }
-:root[data-theme="obsidian"][data-accent="violet"] {
+:is(:root[data-theme="obsidian"], :root[data-theme="graphite"])[data-accent="violet"] {
   --ax-accent: #A78BFA; --ax-accent-hover: #C4B5FD; --ax-accent-active: #8B5CF6;
   --ax-accent-soft: rgba(167, 139, 250, 0.13); --ax-accent-softer: rgba(167, 139, 250, 0.07);
   --ax-accent-border: rgba(167, 139, 250, 0.38); --ax-accent-text: #C4B5FD;
   --ax-text-on-accent: #150B2E;
+}
+/* Slate — a colourless accent for anyone who wants status hues to be the only
+   colour on screen. Deliberately light so filled buttons take dark text. */
+:is(:root[data-theme="obsidian"], :root[data-theme="graphite"])[data-accent="slate"] {
+  --ax-accent: #C3C8CF; --ax-accent-hover: #D9DDE3; --ax-accent-active: #A6ABB3;
+  --ax-accent-soft: rgba(195, 200, 207, 0.12); --ax-accent-softer: rgba(195, 200, 207, 0.06);
+  --ax-accent-border: rgba(195, 200, 207, 0.34); --ax-accent-text: #D0D4DA;
+  --ax-text-on-accent: #14161A;
+}
+:is(:root[data-theme="obsidian"], :root[data-theme="graphite"])[data-accent="rose"] {
+  --ax-accent: #F2789F; --ax-accent-hover: #FF92B2; --ax-accent-active: #D55C83;
+  --ax-accent-soft: rgba(242, 120, 159, 0.13); --ax-accent-softer: rgba(242, 120, 159, 0.07);
+  --ax-accent-border: rgba(242, 120, 159, 0.4); --ax-accent-text: #FF9CB8;
+  --ax-text-on-accent: #2B0713;
+}
+:is(:root[data-theme="obsidian"], :root[data-theme="graphite"])[data-accent="amber"] {
+  --ax-accent: #F0A93C; --ax-accent-hover: #FFC05E; --ax-accent-active: #D28F22;
+  --ax-accent-soft: rgba(240, 169, 60, 0.13); --ax-accent-softer: rgba(240, 169, 60, 0.07);
+  --ax-accent-border: rgba(240, 169, 60, 0.4); --ax-accent-text: #FFC05E;
+  --ax-text-on-accent: #241300;
 }
 :root[data-theme="light"][data-accent="blue"] {
   --ax-accent: #2563EB; --ax-accent-hover: #1D4ED8; --ax-accent-active: #1E40AF;
@@ -246,6 +373,26 @@
   --ax-accent: #6D28D9; --ax-accent-hover: #5B21B6; --ax-accent-active: #4C1D95;
   --ax-accent-soft: rgba(109, 40, 217, 0.10); --ax-accent-softer: rgba(109, 40, 217, 0.05);
   --ax-accent-border: rgba(109, 40, 217, 0.35); --ax-accent-text: #5B21B6;
+  --ax-text-on-accent: #FFFFFF;
+}
+/* On paper the three new accents need dark values: the dark-theme versions are
+   chosen for contrast against black and would fail AA on white. */
+:root[data-theme="light"][data-accent="slate"] {
+  --ax-accent: #4B5563; --ax-accent-hover: #3C4450; --ax-accent-active: #2D343D;
+  --ax-accent-soft: rgba(75, 85, 99, 0.10); --ax-accent-softer: rgba(75, 85, 99, 0.05);
+  --ax-accent-border: rgba(75, 85, 99, 0.35); --ax-accent-text: #3C4450;
+  --ax-text-on-accent: #FFFFFF;
+}
+:root[data-theme="light"][data-accent="rose"] {
+  --ax-accent: #BE185D; --ax-accent-hover: #9D174D; --ax-accent-active: #831843;
+  --ax-accent-soft: rgba(190, 24, 93, 0.10); --ax-accent-softer: rgba(190, 24, 93, 0.05);
+  --ax-accent-border: rgba(190, 24, 93, 0.35); --ax-accent-text: #9D174D;
+  --ax-text-on-accent: #FFFFFF;
+}
+:root[data-theme="light"][data-accent="amber"] {
+  --ax-accent: #96590C; --ax-accent-hover: #7C4A09; --ax-accent-active: #653C07;
+  --ax-accent-soft: rgba(150, 89, 12, 0.10); --ax-accent-softer: rgba(150, 89, 12, 0.05);
+  --ax-accent-border: rgba(150, 89, 12, 0.35); --ax-accent-text: #7C4A09;
   --ax-text-on-accent: #FFFFFF;
 }
 

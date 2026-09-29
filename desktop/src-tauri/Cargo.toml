@@ -1,7 +1,7 @@
 [package]
 name = "axiom-desktop"
 version = "1.0.0"
-description = "AXIOM — Local Intelligence Terminal Workspace (desktop shell)"
+description = "AXIOM — Open Local AI Coding Workspace & Agent Harness (desktop shell)"
 edition = "2021"
 
 [lib]

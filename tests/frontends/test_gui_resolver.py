@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -11,6 +12,24 @@ from pathlib import Path
 import pytest
 
 import axiom.frontends.gui.main as gui
+
+
+def test_exactly_one_component_starts_the_vite_dev_server() -> None:
+    """Tauri's CLI owns the single dev server; Rust must not start a second one.
+
+    Two launchers used to race for port 1420 (`Port 1420 is already in use`),
+    and removing the CLI command instead deadlocked Tauri's readiness wait.
+    """
+    root = gui._project_root()
+    config = json.loads(
+        (root / "desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    )
+    before_dev = config["build"]["beforeDevCommand"]
+    assert "vite" in before_dev and "1420" in before_dev
+    assert config["build"]["devUrl"] == "http://127.0.0.1:1420"
+
+    shell = (root / "desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+    assert "start_dev_server()" not in shell
 
 # --------------------------------------------------------------- _desktop_dirs
 
@@ -55,6 +74,20 @@ def test_finds_fresh_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     exe = _make_exe(desktop)
     os.utime(exe, (time.time() + 5, time.time() + 5))  # newer than any source
     assert gui._find_built_exe() == exe
+
+
+def test_debug_exe_is_never_launched_without_vite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate(tmp_path, monkeypatch)
+    desktop = tmp_path / "desktop"
+    (desktop / "src").mkdir(parents=True)
+    (desktop / "src-tauri").mkdir(parents=True)
+    debug = desktop / "src-tauri" / "target" / "debug" / "axiom-desktop.exe"
+    debug.parent.mkdir(parents=True, exist_ok=True)
+    debug.write_bytes(b"MZ")
+    os.utime(debug, (time.time() + 5, time.time() + 5))
+    assert gui._find_built_exe() is None
 
 
 def test_stale_exe_is_not_used_when_sources_are_newer(

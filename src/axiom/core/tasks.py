@@ -74,6 +74,22 @@ class Task(BaseModel):
     revision: int = 0
     replans: int = 0
     planning: bool | None = None
+    #: W4.5 — rules/skills attached to this task (persisted for resume).
+    #: Rules relevant to the task paths (global+project+directory+task scopes,
+    #: already precedence-merged); survives restart so resumed execution sees
+    #: exactly the same constraints.
+    context_rules: str = Field(default="", max_length=8000)
+    #: Skill ids selected by relevance for this task's goal (max 3).
+    active_skills: list[str] = Field(default_factory=list, max_length=8)
+    #: Workspace paths the task explicitly touches (@-mentions etc.).
+    task_paths: list[str] = Field(default_factory=list, max_length=32)
+    #: W4.10 — real lifecycle hook outcomes for this task (newest last, capped).
+    #: A failing hook appears here as a warning; it never fails the task.
+    hook_results: list[dict] = Field(default_factory=list, max_length=200)
+    #: W4.6 — compact specialist reports (agent, status, five-section report,
+    #: budget telemetry, exhaustion reason). Full worker transcripts never land
+    #: here; they stay in their own trajectories.
+    subagent_reports: list[dict] = Field(default_factory=list, max_length=64)
 
 
 class TaskEvent(BaseModel):
@@ -81,7 +97,7 @@ class TaskEvent(BaseModel):
     kind: Literal[
         "task.started", "task.resumed", "task.state", "task.planned", "task.replanned",
         "task.step", "task.tool", "task.completed", "task.failed", "task.cancelled",
-        "task.permission", "task.process", "task.review",
+        "task.permission", "task.process", "task.review", "task.hooks",
     ]
     task_id: str
     timestamp: float
@@ -146,7 +162,8 @@ class TaskRunner:
                  verify: Callable[[], Awaitable[dict]], tools: list[str], bus: EventBus,
                  trajectory: Trajectory, max_replans: int = 1, max_verification_repairs: int = 3,
                  workspace_root: Path | None = None, context_engine: ContextEngine | None = None,
-                 context_max_tokens: int | None = None, cancel_token: CancelToken | None = None) -> None:
+                 context_max_tokens: int | None = None, cancel_token: CancelToken | None = None,
+                 skill_registry: object | None = None, hooks: object | None = None) -> None:
         self.store = store
         self.planner = planner
         self.execute = execute
@@ -163,6 +180,14 @@ class TaskRunner:
         self.context_messages: list[dict] = []
         self._permission_previous_state: TaskState | None = None
         self._permission_tool_name: str | None = None
+        #: W4.5 — registry used to render persisted ``task.active_skills``
+        #: blocks into step prompts (``SkillRegistry``; duck-typed for tests).
+        self._skill_registry = skill_registry
+        if skill_registry is not None and not callable(getattr(skill_registry, "get", None)):
+            raise TypeError("skill_registry must expose get(skill_id)")
+        #: W4.10 — lifecycle hook runner. ``None`` keeps the previous behaviour
+        #: exactly; hooks are fail-open and never decide a task's outcome.
+        self.hooks = hooks
 
     def _snapshot_paths(self, task: Task, name: str, arguments: dict) -> None:
         if self.workspace_root is None:
@@ -288,6 +313,52 @@ class TaskRunner:
         } else "task.state"
         self.publish(task, kind)
 
+    async def _run_hooks(self, event: str, task: Task, *, step_id: str = "") -> None:
+        """Run lifecycle hooks and record their real results in Task State (W4.10).
+
+        Hooks are fail-open: a failing or refused hook is stored as a warning and
+        published, and the task keeps running.
+        """
+        runner = self.hooks
+        if runner is None:
+            return
+        run = getattr(runner, "run_event", None)
+        if not callable(run):
+            return
+        try:
+            results = await run(event, task_id=task.id, step_id=step_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+        # These results are recorded here, so drop them from the runner's
+        # pending buffer: the per-step drain must not duplicate them.
+        drain = getattr(runner, "drain", None)
+        if callable(drain):
+            try:
+                drain()
+            except Exception:
+                pass
+        recorded = [r.to_json() if hasattr(r, "to_json") else dict(r) for r in results or []]
+        if not recorded:
+            return
+        task.hook_results = (task.hook_results + recorded)[-200:]
+        self.publish(task, "task.hooks")
+
+    def _collect_tool_hook_results(self, task: Task) -> None:
+        """Move tool-hook results recorded by the registry into Task State."""
+        runner = self.hooks
+        drain = getattr(runner, "drain", None) if runner is not None else None
+        if not callable(drain):
+            return
+        try:
+            results = drain()
+        except Exception:
+            return
+        recorded = [r.to_json() if hasattr(r, "to_json") else dict(r) for r in results or []]
+        if recorded:
+            task.hook_results = (task.hook_results + recorded)[-200:]
+
     def request_cancel(self) -> None:
         """Signal cooperative cancellation; the run stops at its next checkpoint (W4.14)."""
         self.cancel_token.cancel()
@@ -392,6 +463,33 @@ class TaskRunner:
             return
         self.publish(task, "task.tool")
 
+    def _record_subagent_report(self, task: Task, step: PlanStep, result: dict) -> None:
+        """Aggregate one step's compact worker report into Task State (W4.6).
+
+        Only the five-section report and the explicit budget telemetry are kept;
+        the worker transcript itself stays in its own trajectory. One entry per
+        step id — a repeated step (repair/rework) replaces its previous report
+        instead of duplicating it — and the newest 64 entries are retained.
+        """
+        report = result.get("report")
+        if not isinstance(report, dict):
+            return
+        entry: dict = {"step_id": step.id,
+                       "agent": str(result.get("agent") or "coder"),
+                       "report": report}
+        if result.get("budget") is not None:
+            entry["budget"] = result["budget"]
+        if result.get("budget_exhausted"):
+            entry["budget_exhausted"] = result["budget_exhausted"]
+        kept = [r for r in task.subagent_reports if r.get("step_id") != step.id]
+        kept.append(entry)
+        task.subagent_reports = kept[-64:]
+        self.trajectory.append("task.report", f"{entry['agent']} report for {step.id}",
+                               actor=entry["agent"],
+                               data={"task_id": task.id, "step_id": step.id,
+                                     "report": report, "budget": result.get("budget"),
+                                     "budget_exhausted": result.get("budget_exhausted")})
+
     async def _compact_task_context(self, task: Task) -> None:
         """Compact accumulated step context while retaining durable task facts."""
         if not self.context_messages or self.context_max_tokens is None:
@@ -414,6 +512,7 @@ class TaskRunner:
             self.context_messages = result.messages
             task.context_snapshot = result.state
             self.publish(task, "task.state")
+            await self._run_hooks("ContextCompact", task)
 
     async def run(self, task: Task, *, resume: bool = False, acknowledge: bool = False) -> Task:
         try:
@@ -432,6 +531,7 @@ class TaskRunner:
                     "role": "system",
                     "content": "[Structured context compaction]\n" + task.context_snapshot.model_dump_json(indent=2),
                 }]
+            await self._run_hooks("TaskStart", task)
             self.transition(task, TaskState.ANALYZING)
             if task.plan is None:
                 self.transition(task, TaskState.PLANNING)
@@ -456,6 +556,21 @@ class TaskRunner:
                           f"Completed work (do not repeat): {json.dumps(completed, ensure_ascii=False)}\n"
                           f"Known changed files: {json.dumps(task.changed_files)}\n"
                           "Inspect actual workspace state before editing; a previous attempt may have applied changes.")
+                # W4.5: the rules/skills attached at task start (persisted in
+                # Task State) shape every step; resumed runs reuse exactly the
+                # same constraints instead of re-discovering them.
+                if task.context_rules:
+                    prompt += "\nProject rules (follow them):\n" + task.context_rules[:4000]
+                if task.active_skills and self._skill_registry is not None:
+                    skill_blocks: list[str] = []
+                    for skill_id in task.active_skills[:3]:
+                        skill = self._skill_registry.get(skill_id)  # type: ignore[attr-defined]
+                        if skill is not None:
+                            block = skill.prompt_block()
+                            if block:
+                                skill_blocks.append(block[:1500])
+                    if skill_blocks:
+                        prompt += "\nRelevant skills (apply them):\n" + "\n\n".join(skill_blocks)
                 if task.errors:
                     prompt += "\nCurrent errors:\n" + "\n".join(e.message[:1000] for e in task.errors[-5:])
                 if self.workspace_root is not None:
@@ -481,6 +596,7 @@ class TaskRunner:
                 self.context_messages.append({"role": "user", "content": prompt})
                 result = await self._run_model_step(task, step, prompt)
                 step.result = str(result.get("content") or "")[:8000]
+                self._record_subagent_report(task, step, result)
                 self.context_messages.append({"role": "assistant", "content": step.result})
                 error = result.get("error") or ("Tool calls failed" if result.get("tools_failed") else None)
                 if not step.result and not error:
@@ -499,6 +615,9 @@ class TaskRunner:
                     self.publish(task, "task.replanned")
                     continue
                 step.state = "completed"
+                # Tool hooks ran inside the registry during this step; surface
+                # their real results in Task State with the step that caused them.
+                self._collect_tool_hook_results(task)
                 self.publish(task, "task.step")
             self.transition(task, TaskState.VERIFYING)
             for attempt in range(self.max_verification_repairs + 1):
@@ -513,6 +632,7 @@ class TaskRunner:
                     summary = str(report.get("summary") or "Verification passed")
                     self.transition(task, TaskState.COMPLETED, summary)
                     self._publish_verification(task, "verification.completed", attempt, summary=summary)
+                    await self._run_hooks("TaskComplete", task)
                     break
                 message = str(report.get("error") or report.get("summary") or "Verification unavailable")
                 self._publish_verification(task, "verification.failed", attempt, error=message)
@@ -552,6 +672,7 @@ class TaskRunner:
                           "Do not claim success. Make a focused fix; the verifier will run again.")
                 result = await self._run_model_step(task, repair, prompt)
                 repair.result = str(result.get("content") or "")[:8000]
+                self._record_subagent_report(task, repair, result)
                 if result.get("error") or result.get("tools_failed"):
                     task.errors.append(TaskError(type="verification_repair",
                         message=str(result.get("error") or "Repair tool failed"), step_id=repair.id))

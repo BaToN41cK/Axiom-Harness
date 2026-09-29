@@ -189,6 +189,7 @@ class Agent:
         self._catalog = None
         self._sandbox = None
         self._skills = None
+        self._rules = None  # W4.5: RuleManager or None
         self._verifier = None
         self._permissions = None
         #: W2.1 Curated Memory: :class:`~axiom.core.memory.MemoryTools` or None.
@@ -600,7 +601,7 @@ class Agent:
 
     def attach_harness(self, bus=None, trajectory=None, router=None, catalog=None,
                        sandbox=None, skills=None, verifier=None, permissions=None,
-                       memory=None) -> None:
+                       memory=None, rules=None) -> None:
         """Подключить EventBus + Trajectory + Router + Sandbox + Skills (п.6/10/13/14/16)."""
         self._bus = bus if bus is not None else self._bus
         self._trajectory = trajectory if trajectory is not None else self._trajectory
@@ -612,6 +613,10 @@ class Agent:
             self._sandbox = sandbox
         if skills is not None:
             self._skills = skills
+        if rules is not None:
+            # W4.5: workspace rule manager — global/project rules join the
+            # base system prompt, directory/task rules join per task.
+            self._rules = rules
         if verifier is not None:
             self._verifier = verifier
         if permissions is not None:
@@ -686,11 +691,21 @@ class Agent:
                     )
             rules = WORKSPACE_RULES if self._config.workspace_tools_enabled else ""
             workspace_text = f"{rules}\n\n{block}".strip() if (rules or block) else ""
+            # W4.5: static workspace rules (global + project AXIOM.md). They
+            # occupy the protected project_rules layer — never dropped by the
+            # budget fight; directory/task rules join per task instead.
+            project_rules_text = ""
+            if self._rules is not None and self._config.workspace_tools_enabled:
+                try:
+                    project_rules_text = self._rules.project_rules_block()
+                except Exception:
+                    project_rules_text = ""
             base_layers = PromptLayers(
                 user_text=user_seed,
                 variant=variant,
                 budget_chars=(MINI_BUDGET_CHARS if variant == "mini" else 12000),
                 workspace=workspace_text,
+                project_rules=project_rules_text,
                 memory=memory_block,
                 skill_blocks=self._skill_blocks(user_seed),
             )
@@ -748,6 +763,26 @@ class Agent:
         messages = self._build_messages(history, system)
         think = self._think_param(model, history)
         user_text = self._last_user_text(history)
+        # W4.5: task-relevant rule delta (directory rules for touched paths +
+        # user @-mentioned rule files). Global/project rules are already in
+        # the base system prompt; an explicit mention can shadow them (task
+        # scope wins conflicts deterministically).
+        if self._rules is not None and not self._config.system_prompt \
+                and self._config.workspace_tools_enabled:
+            try:
+                rules_delta = self._rules.merged_rules(user_text or "")
+            except Exception:
+                rules_delta = ""
+            if rules_delta:
+                system = f"{system}\n\nRules relevant to this task:\n{rules_delta}"
+                messages = self._build_messages(history, system)
+                if self._trajectory is not None:
+                    try:
+                        self._trajectory.append(
+                            "context.rules", "Task-relevant rules attached",
+                            data={"chars": len(rules_delta)})
+                    except Exception:
+                        pass
         # Performance Engine: quick (one pass, no tools) vs agent (tool loop).
         # Deterministic, recorded in the trajectory — never a hidden guess.
         mode = classify_mode(user_text or "")

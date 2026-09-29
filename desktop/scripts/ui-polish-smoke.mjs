@@ -66,6 +66,8 @@ const shim = `(() => {
       case 'task_delete': task=null; sessionStorage.removeItem('smoke.task'); return {deleted:true};
       case 'task_review': task.review_status = args.decision === 'accept' ? 'accepted' : 'rejected'; publish(task.state,'task.reviewed'); return structuredClone(task);
       case 'health': return { available: true, version: 'test', url: config.ollama_url };
+      case 'payment_wallet': return { balance_minor: 12500, currency: 'RUB', available: false,
+        message: 'Пополнение выполняется на сервере владельца AXIOM.', payment: null };
       case 'get_config': return config;
       case 'set_config': window.__patches.push(args.patch); Object.assign(config, args.patch); return config;
       case 'models': return [model];
@@ -151,6 +153,12 @@ try {
   await send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/` });
   for (let i = 0; i < 80; i++) { if (await evaluate("!!document.querySelector('.topbar')")) break; await sleep(100); }
   check("app booted with isolated IPC", await evaluate("!!document.querySelector('.topbar')"));
+  check("compact balance pill is always visible", await evaluate("document.querySelector('.balance-pill strong').textContent.includes('125')"));
+  await click('.balance-pill');
+  check("balance opens a compact top-up dialog", await evaluate("document.querySelector('.payment-dialog h2').textContent === 'Пополнение баланса'"));
+  check("top-up stays fail-closed until provider is connected", await evaluate("document.querySelector('.payment-dialog .primary').disabled === true && !!document.querySelector('.payment-unavailable')"));
+  await click('.payment-dialog .icon-btn');
+  check("top-up dialog closes without affecting chat", await evaluate("!document.querySelector('.payment-dialog') && !!document.querySelector('.chat-scroll')"));
   check("boot is silent", await evaluate("window.__audioStarts === 0"));
   await click('.side-action[title^="Настройки"]');
   check("settings has a separate navigation/content grid", await evaluate("getComputedStyle(document.querySelector('.axiom-settings-workspace')).display === 'grid'"));
@@ -293,7 +301,7 @@ try {
   check('confirmed delete uses same task id', await evaluate("window.__calls.some(c=>c.cmd==='task_delete' && c.args.id==='smoke-task')"));
   check('deleting opened task returns to chat', await evaluate("!document.querySelector('.task-execution') && !!document.querySelector('.chat-scroll')"));
   check('deleted task disappears from task list', await evaluate("!document.querySelector('.task-summary')"));
-  for (const theme of ['obsidian', 'light', 'midnight', 'terminal', 'solarized']) {
+  for (const theme of ['obsidian', 'light', 'midnight', 'terminal', 'solarized', 'graphite', 'rosewood', 'nord']) {
     await evaluate(`document.documentElement.dataset.theme = '${theme}'`);
     check(`theme ${theme} has semantic surfaces`, await evaluate("getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)'"));
   }

@@ -29,6 +29,7 @@ from axiom.core.permissions import PermissionManager, PermissionMode
 from axiom.core.planner import Planner, PlanStep, TaskPlan
 from axiom.core.profiles import ProfileManager
 from axiom.core.retry import RetryResult, retry_async
+from axiom.core.rules import RuleManager, RuleSource
 from axiom.core.state import GenerationState
 from axiom.core.state_machine import GenerationStateMachine
 from axiom.core.tasks import Task, TaskError, TaskEvent, TaskState, TaskStore
@@ -64,6 +65,8 @@ __all__ = [
     "ProfileManager",
     "ReasoningChunk",
     "RetryResult",
+    "RuleManager",
+    "RuleSource",
     "SearchUnavailableError",
     "StructuredCompaction",
     "Task",

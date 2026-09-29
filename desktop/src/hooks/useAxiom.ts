@@ -772,7 +772,14 @@ export function useAxiom() {
     setStatusText(null);
     setLiveState(metrics.state);
     setLastMetrics(metrics);
-    if (wasGenerating && metrics.state === "completed") playUiSound("complete");
+    // Each terminal state gets its own cue: a rising chime for a finished
+    // answer, a low falling tone for a failure, a soft slide when the user
+    // stopped it. Silence for anything else rather than a misleading sound.
+    if (wasGenerating) {
+      if (metrics.state === "completed") playUiSound("complete");
+      else if (metrics.state === "error") playUiSound("error");
+      else if (metrics.state === "cancelled") playUiSound("stopped");
+    }
     notifyAnswerReady(metrics);
     void refreshChats();
   }
@@ -902,6 +909,8 @@ export function useAxiom() {
           // W2.4: the blocked tool call waits for a real answer from this dialog.
           setPendingPermission(event);
           setStatusText(`Ожидает разрешения: ${event.tool}`);
+          // A distinct nudge: the run is blocked until the user decides.
+          playUiSound("permission");
           break;
         case "error":
           setMessages((list) =>

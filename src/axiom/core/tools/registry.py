@@ -38,6 +38,10 @@ class ToolRegistry:
         #: tool execution starts; already-running tools keep their own
         #: process-tree cleanup on asyncio cancellation.
         self.cancel_token: CancelToken | None = None
+        #: Optional lifecycle hook runner (W4.10). Every tool execution passes
+        #: through here, so Pre/PostToolUse, Pre/PostEdit and Pre/PostCommit
+        #: hooks observe real calls. Hooks are fail-open and never gate a tool.
+        self.hooks: object | None = None
 
     def register(
         self,
@@ -85,6 +89,9 @@ class ToolRegistry:
                 deepcopy(entry[0]), handler,
                 permission_for=_clone_bound_callable(classifier) if classifier else None,
             )
+        # Scoped subagent registries keep the same lifecycle hooks (W4.10);
+        # a formatter must also run for edits made by a worker.
+        selected.hooks = self.hooks
         return selected
 
     @property
@@ -163,6 +170,7 @@ class ToolRegistry:
             )
             self.audit.record(name, arguments or {}, False, 0)
             return result
+        await self._run_hooks("pre", name, arguments)
         try:
             call = handler(**(arguments or {}))
             timeout = definition.timeout
@@ -197,4 +205,23 @@ class ToolRegistry:
         result.meta = {**result.meta, "risk": definition.risk,
                        "timeout": definition.timeout, "cancellable": definition.cancellable}
         self.audit.record(name, arguments or {}, result.ok, result.duration_ms)
+        # W4.10: post hooks observe the real outcome. A successful edit is
+        # formatted/linted here, after the tool wrote the file.
+        if result.ok:
+            await self._run_hooks("post", name, arguments)
         return result
+
+    async def _run_hooks(self, phase: str, name: str, arguments: dict | None) -> None:
+        """Run tool lifecycle hooks; a hook failure never affects the tool result."""
+        runner = self.hooks
+        if runner is None:
+            return
+        run = getattr(runner, "run_tool_hooks", None)
+        if not callable(run):
+            return
+        try:
+            await run(phase, name, arguments or {})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return

@@ -17,25 +17,28 @@
 :root {
   color-scheme: dark;
 
-  /* ---------- Surfaces: dark graphite, never pure black ---------- */
-  --ax-bg-app: #14161a;
-  --ax-bg-panel: #181b20;
-  --ax-bg-elevated: #1e2228;
-  --ax-bg-inset: #101215;
-  --ax-bg-hover: #22262d;
-  --ax-bg-active: #2a2f37;
-  --ax-bg-overlay: rgba(10, 11, 13, 0.62);
+  /* ---------- Surfaces: true black obsidian ----------
+     The app sits on near-black; hierarchy is built by lifting panels a few
+     steps at a time, so the depth still reads without any surface going grey.
+     Shadows barely register on black, which is why borders carry elevation. */
+  --ax-bg-app: #050506;
+  --ax-bg-panel: #0a0a0c;
+  --ax-bg-elevated: #121216;
+  --ax-bg-inset: #000000;
+  --ax-bg-hover: #17171c;
+  --ax-bg-active: #1f1f25;
+  --ax-bg-overlay: rgba(0, 0, 0, 0.72);
 
   /* ---------- Borders ---------- */
-  --ax-border: #2a2f37;
-  --ax-border-subtle: #22262c;
-  --ax-border-strong: #3a414b;
+  --ax-border: #1f1f25;
+  --ax-border-subtle: #141418;
+  --ax-border-strong: #2e2e36;
 
   /* ---------- Text ---------- */
-  --ax-text: #e6e8eb;
-  --ax-text-muted: #9aa1ab;
-  --ax-text-faint: #6d747e;
-  --ax-text-disabled: #4c535c;
+  --ax-text: #ececf0;
+  --ax-text-muted: #9a9aa6;
+  --ax-text-faint: #6c6c78;
+  --ax-text-disabled: #47474f;
   --ax-text-on-accent: #160705;
 
   /* ---------- Accent: primary action / selected / focus only ---------- */
@@ -104,9 +107,9 @@
   --ax-tracking-caps: 0.08em;
 
   /* ---------- Elevation: borders + shadow, no glow ---------- */
-  --ax-elev-1: 0 1px 2px rgba(0, 0, 0, 0.32);
-  --ax-elev-2: 0 6px 16px rgba(0, 0, 0, 0.36);
-  --ax-elev-3: 0 16px 40px rgba(0, 0, 0, 0.46);
+  --ax-elev-1: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --ax-elev-2: 0 6px 16px rgba(0, 0, 0, 0.68);
+  --ax-elev-3: 0 16px 40px rgba(0, 0, 0, 0.78);
 
   /* ---------- Motion: 120–180ms ---------- */
   --ax-motion-fast: 120ms;
