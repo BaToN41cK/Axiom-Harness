@@ -1,6 +1,4 @@
-/** QR Model 2, version 10-L, byte mode (UTF-8 HTTPS URL, at most 271 bytes).
- * Fixed mask 0 is valid for every payload. No network, image assets or dependencies.
- */
+/** QR Model 2, version 10-L, byte mode (UTF-8 HTTPS URL, at most 271 bytes). */
 export function paymentQr(url: string): boolean[][] {
   const bytes = new TextEncoder().encode(url);
   if (bytes.length > 271 || !url.startsWith("https://")) throw new Error("Некорректная ссылка для QR");
@@ -64,7 +62,6 @@ export function paymentQr(url: string): boolean[][] {
     for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++)
       set(x + dx, y + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
   }
-  // Format: L (01), mask 000; BCH(15,5) and fixed XOR mask.
   let rem = 8 << 10;
   while (rem >= 1 << 10) rem ^= 0x537 << (Math.floor(Math.log2(rem)) - 10);
   const format = (8 << 10 | rem) ^ 0x5412;

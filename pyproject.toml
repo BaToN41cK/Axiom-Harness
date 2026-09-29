@@ -55,7 +55,7 @@ axiom = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = ["tests", "payment-backend"]
 markers = [
     "ollama: live checks against a real Ollama server (opt-in: AXIOM_LIVE_OLLAMA=1)",
 ]

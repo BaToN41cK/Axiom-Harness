@@ -1,120 +1,157 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Clock3, ExternalLink, Loader2, Plus, Wallet as WalletIcon, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import { createPortal } from "react-dom";
+import { Check, Crown, ExternalLink, Loader2, Plus, Wallet, X } from "lucide-react";
 import { openExternal } from "../bridge";
-import { usePayments } from "../hooks/usePayments";
-import { parseAmount, rubles } from "../lib/payments";
-import { paymentQr } from "../lib/paymentQr";
 import Presence from "./Presence";
+import { usePayments } from "../hooks/usePayments";
+import { formatExpiry, parseAmount, paymentBackendConfigured, paymentToken, rubles } from "../lib/payments";
+import type { Payment } from "../lib/payments";
+import { paymentQr } from "../lib/paymentQr";
 import "../styles/payments.css";
 
-type Store = ReturnType<typeof usePayments>;
-
-function PaymentDialog({ store: s, onClose }: { store: Store; onClose: () => void }) {
-  const [amount, setAmount] = useState("300");
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useRef(onClose); close.current = onClose;
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const node = ref.current!;
-    node.focus();
-    const key = (e: KeyboardEvent) => {
-      if (node.closest("[inert]")) return;
-      if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); close.current(); }
-      if (e.key === "Tab") {
-        const items = Array.from(node.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])"));
-        const first = items[0], last = items[items.length - 1];
-        if (!node.contains(document.activeElement) || document.activeElement === node ||
-          (e.shiftKey && document.activeElement === first) || (!e.shiftKey && document.activeElement === last)) {
-          e.preventDefault(); (e.shiftKey ? last : first)?.focus();
-        }
-      }
-    };
-    window.addEventListener("keydown", key, true);
-    return () => { window.removeEventListener("keydown", key, true); previous?.focus(); };
-  }, []);
-  const p = s.payment;
-  const qr = useMemo(() => {
-    if (!p?.payment_url || p.status !== "pending") return null;
-    try { return paymentQr(p.payment_url); } catch { return null; }
-  }, [p?.payment_url, p?.status]);
-  const amountMinor = parseAmount(amount);
-  const success = p?.status === "paid";
-  const terminal = p && ["cancelled", "expired", "error"].includes(p.status);
-  const waiting = s.active;
-  const pendingAmount = p?.amount_minor ?? s.retryAmount ?? amountMinor;
-  const open = async () => {
-    if (!p?.payment_url || !qr) return;
-    try { setLinkError(null); await openExternal(p.payment_url); }
-    catch { setLinkError("Не удалось открыть браузер. Попробуйте ещё раз или отсканируйте QR."); }
-  };
-  return <div className="modal-backdrop payment-backdrop" onClick={onClose}>
-    <div ref={ref} className="modal payment-dialog" role="dialog" aria-modal="true" aria-labelledby="payment-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
-      <div className="modal-head">
-        <h2 id="payment-title">Пополнение баланса</h2>
-        <button className="icon-btn" aria-label="Закрыть пополнение" onClick={onClose}><X size={16} /></button>
-      </div>
-      <div className="modal-body">
-        <div className="payment-balance"><span>Баланс AXIOM</span><strong>{s.wallet ? rubles(s.wallet.balance_minor) : "—"}</strong></div>
-        {success ? <div className="payment-result payment-success" role="status">
-          <span className="payment-result-icon"><Check size={24} /></span>
-          <strong>Оплата получена</strong><div className="payment-amount">+{rubles(p.amount_minor)}</div>
-          <span>Баланс: {s.wallet ? rubles(s.wallet.balance_minor) : "—"}</span>
-        </div> : terminal ? <div className="payment-result" role="status">
-          <Clock3 size={24} /><strong>{p.status === "expired" ? "Срок платежа истёк" : p.status === "cancelled" ? "Платёж отменён" : "Платёж не выполнен"}</strong>
-          <span>Баланс не изменён. Можно создать новый платёж.</span>
-        </div> : waiting || s.busy ? <div className="payment-result" role="status">
-          <div className="payment-amount">{pendingAmount ? rubles(pendingAmount) : ""}</div>
-          <span className="payment-status"><Loader2 className="spin" size={14} />{s.busy || p?.status === "creating" ? "Обрабатываем платёж…" : "Ожидание оплаты"}</span>
-          {qr && <svg className="payment-qr" viewBox="0 0 65 65" role="img" aria-label="QR-код страницы оплаты" shapeRendering="crispEdges">
-            <rect width="65" height="65" fill="white" />
-            <path fill="black" d={qr.flatMap((row, y) => row.map((v, x) => v ? `M${x + 4},${y + 4}h1v1h-1z` : "")).join("")} />
-          </svg>}
-          {p?.status === "pending" && !qr && <span>Не удалось сформировать QR. Проверьте статус платежа.</span>}
-          {qr && <button className="btn primary payment-open" onClick={() => void open()}><ExternalLink size={14} />Открыть страницу оплаты</button>}
-          <span className="payment-note">{s.wallet?.automatic_confirmation ? "Баланс обновится после подтверждения банком." : "Автоматическая проверка не подключена. Это окно не подтверждает поступление денег."} Окно можно закрыть.</span>
-        </div> : <>
-          <div className="field-label">Пополнить баланс</div>
-          <div className="payment-presets" role="group" aria-label="Сумма пополнения">
-            {[100, 300, 500, 1000].map((v) => <button key={v} className={"btn" + (amountMinor === v * 100 ? " selected" : "")} disabled={!!s.retryAmount} aria-pressed={amountMinor === v * 100} onClick={() => setAmount(String(v))}>{rubles(v * 100)}</button>)}
-          </div>
-          <label className="field"><span className="field-label">Своя сумма, ₽</span>
-            <input inputMode="decimal" value={amount} disabled={!!s.retryAmount} aria-describedby="payment-range" aria-invalid={amountMinor === null} onChange={(e) => setAmount(e.target.value)} />
-          </label>
-          <span className="payment-note" id="payment-range">От 100 до 100 000 ₽ · Без сохранения данных карты</span>
-          {s.wallet?.message && <p className="payment-note payment-unavailable">{s.wallet.message}</p>}
-        </>}
-        {(s.error || linkError) && <div className="payment-error" role="status">{s.error || linkError}</div>}
-      </div>
-      <div className="modal-foot">
-        {waiting ? <>
-          <button className="btn ghost" disabled={s.busy} onClick={() => void s.cancel()}>Отменить платёж</button>
-          <button className="btn" disabled={s.busy} onClick={() => void s.check()}>Проверить</button>
-        </> : success || terminal ? <>
-          <button className="btn ghost" onClick={s.reset}>Новое пополнение</button>
-          <button className="btn primary" onClick={onClose}>Готово</button>
-        </> : <>
-          <button className="btn ghost" onClick={onClose}>Отмена</button>
-          {!s.wallet ? <button className="btn" onClick={() => void s.refresh()}>Повторить подключение</button> :
-            <button className="btn primary" disabled={s.busy || !amountMinor || !s.wallet.available} onClick={() => amountMinor && void s.create(amountMinor)}>
-              {s.busy ? "Создание…" : s.retryAmount ? "Повторить запрос" : "Продолжить"}
-            </button>}
-        </>}
-      </div>
-    </div>
-  </div>;
+function paymentMessage(payment: Payment | null): string {
+  if (!payment) return "";
+  if (payment.status === "paid") return payment.type === "pro" ? "AXIOM PRO активирован" : "Баланс обновлён";
+  if (payment.status === "expired") return "Платёж истёк";
+  if (payment.status === "failed") {
+    if (payment.failure_reason === "below_minimum") return "Поступило меньше 100 ₽. Баланс не изменён; платёж записан для сверки.";
+    if (payment.failure_reason === "late_payment") return "Платёж поступил после срока заказа. Свяжитесь с поддержкой для сверки.";
+    if (payment.failure_reason === "order_not_pending") return "Заказ уже обработан. Баланс не изменён повторно.";
+    return "Сумма не совпала с заказом. Баланс и AXIOM PRO не изменены.";
+  }
+  return "Ожидание оплаты";
 }
 
 export default function Balance() {
   const s = usePayments();
   const [open, setOpen] = useState(false);
-  const value = s.wallet ? rubles(s.wallet.balance_minor) : "— ₽";
+  const [amount, setAmount] = useState("300");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [createAccount, setCreateAccount] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const amountMinor = parseAmount(amount);
+  const qr = useMemo(() => {
+    if (s.payment?.status !== "pending" || !s.payment.payment_url) return null;
+    try { return paymentQr(s.payment.payment_url); } catch { return null; }
+  }, [s.payment?.id, s.payment?.status, s.payment?.payment_url]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const submitAuth = (event: FormEvent) => {
+    event.preventDefault();
+    void s.authenticate(username, password, createAccount);
+  };
+  const openPayment = async () => {
+    const url = s.payment?.payment_url;
+    if (!url || !url.startsWith("https://")) return;
+    try { setLinkError(null); await openExternal(url); }
+    catch { setLinkError("Не удалось открыть браузер. Отсканируйте QR-код или попробуйте ещё раз."); }
+  };
+  const createTopup = () => {
+    if (!amountMinor || s.active || !s.account?.payments_available) return;
+    void s.createTopup((amountMinor / 100).toFixed(2));
+  };
+  const createPro = () => {
+    if (!s.active && s.account?.payments_available) void s.buyPro();
+  };
+  const balanceLabel = s.account ? rubles(s.account.balance_minor) : "— ₽";
+  const pending = s.payment?.status === "pending";
+
   return <>
-    <button className={"balance-pill" + (s.payment?.status === "paid" ? " balance-paid" : "")} title={`Баланс ${value} · Пополнить`} aria-label={`Баланс ${value}. Пополнить баланс`} aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(true); if (!s.wallet) void s.refresh(); }}>
-      <WalletIcon size={14} /><span className="balance-label">Баланс</span><strong>{value}</strong><span className="balance-plus"><Plus size={13} /></span>
-      {s.active && <span className="balance-pending" aria-label="Ожидание оплаты" />}
+    <button
+      className={"balance-pill" + (s.account?.pro_active ? " balance-pro" : "")}
+      title={`Баланс ${balanceLabel} · AXIOM PRO`}
+      aria-label={`Баланс ${balanceLabel}. Открыть баланс и AXIOM PRO`}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      onClick={() => { setOpen(true); if (paymentToken.get()) void s.refresh(); }}
+    >
+      <Wallet size={14} /><span className="balance-label">Баланс</span><strong>{balanceLabel}</strong>
+      {s.account?.pro_active && <Crown size={13} className="balance-crown" aria-label="AXIOM PRO" />}
+      <span className="balance-plus"><Plus size={13} /></span>
+      {pending && <span className="balance-pending" aria-label="Ожидание оплаты" />}
     </button>
-    {createPortal(<Presence open={open}><PaymentDialog store={s} onClose={() => setOpen(false)} /></Presence>, document.body)}
+    {createPortal(<Presence open={open}>
+      <div className="modal-backdrop payment-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+        <section className="modal payment-dialog" role="dialog" aria-modal="true" aria-labelledby="payment-title">
+          <div className="modal-head">
+            <h2 id="payment-title">Баланс и AXIOM PRO</h2>
+            <button className="icon-btn" aria-label="Закрыть платежи" onClick={() => setOpen(false)}><X size={16} /></button>
+          </div>
+          {!paymentBackendConfigured ? <div className="modal-body">
+            <p className="payment-note payment-unavailable">Платёжный сервер не настроен в этой сборке AXIOM.</p>
+          </div> : !s.account ? <div className="modal-body">
+            <p className="payment-note">Баланс и подписка привязаны к аккаунту AXIOM. Создайте аккаунт или войдите, чтобы продолжить.</p>
+            <form className="payment-auth" onSubmit={submitAuth}>
+              <label className="field"><span className="field-label">Имя пользователя</span>
+                <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required minLength={3} maxLength={48} />
+              </label>
+              <label className="field"><span className="field-label">Пароль</span>
+                <input type="password" autoComplete={createAccount ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={12} maxLength={256} />
+              </label>
+              {createAccount && <span className="payment-note">Пароль должен содержать не менее 12 символов. Сохраните его: восстановление пароля пока не подключено.</span>}
+              <button className="btn primary" disabled={s.busy}>
+                {s.busy ? <><Loader2 size={14} className="spin" /> Подождите…</> : createAccount ? "Создать аккаунт" : "Войти"}
+              </button>
+            </form>
+            <button className="payment-text-button" onClick={() => setCreateAccount(!createAccount)}>
+              {createAccount ? "Уже есть аккаунт? Войти" : "Создать аккаунт AXIOM"}
+            </button>
+          </div> : <div className="modal-body">
+            <div className="payment-balance">
+              <span>Баланс AXIOM</span><strong>{balanceLabel}</strong>
+              <span className="payment-account">Аккаунт: {s.account.username}</span>
+            </div>
+            <section className="payment-section">
+              <div className="payment-section-head"><div><span className="payment-kicker">ПОДПИСКА</span><h3>AXIOM PRO</h3></div><strong className="payment-pro-price">990 ₽</strong></div>
+              <p className="payment-note">30 дней. {s.account.pro_active ? `Активна до ${formatExpiry(s.account.pro_expires_at)}.` : "После оплаты подписка включится автоматически."}</p>
+              <button className="btn primary" disabled={s.busy || s.active || !s.account.payments_available} onClick={createPro}>
+                {s.busy ? "Создание…" : s.account.pro_active ? "Продлить AXIOM PRO" : "Купить PRO · 990 ₽"}
+              </button>
+            </section>
+            <section className="payment-section">
+              <div className="payment-section-head"><div><span className="payment-kicker">БАЛАНС</span><h3>Пополнить баланс</h3></div></div>
+              <div className="payment-presets" role="group" aria-label="Быстрая сумма пополнения">
+                {[100, 250, 500, 1000].map((value) => <button key={value} className={"btn" + (amountMinor === value * 100 ? " selected" : "")} disabled={s.active} aria-pressed={amountMinor === value * 100} onClick={() => setAmount(String(value))}>{rubles(value * 100)}</button>)}
+              </div>
+              <label className="field"><span className="field-label">Сумма к зачислению, ₽</span>
+                <input inputMode="decimal" value={amount} disabled={s.active} aria-describedby="payment-range" aria-invalid={amountMinor === null} onChange={(event) => setAmount(event.target.value)} />
+              </label>
+              <span className="payment-note" id="payment-range">От 100 до 100 000 ₽. Страница ЮMoney покажет сумму к оплате для выбранного способа.</span>
+              <button className="btn primary" disabled={s.busy || s.active || !amountMinor || !s.account.payments_available} onClick={createTopup}>
+                {s.busy ? "Создание…" : "Пополнить"}
+              </button>
+            </section>
+            {s.account.payments_message && <p className="payment-note payment-unavailable">{s.account.payments_message}</p>}
+            {s.payment && <section className={"payment-result" + (s.payment.status === "paid" ? " payment-success" : "")} role="status">
+              {s.payment.status === "paid" ? <Check size={20} /> : s.payment.status === "pending" ? <Loader2 size={16} className="spin" /> : null}
+              <strong>{paymentMessage(s.payment)}</strong>
+              {s.payment.status === "paid" && <span>{s.payment.type === "pro" ? `Подписка до ${formatExpiry(s.account.pro_expires_at)}` : `Зачислено ${rubles(s.payment.amount_minor)}`}</span>}
+              {pending && <>
+                <span>{s.payment.type === "pro" ? "AXIOM PRO · 990 ₽" : `Зачисление · ${rubles(s.payment.amount_minor)}`}</span>
+                {qr && <svg className="payment-qr" viewBox="0 0 65 65" role="img" aria-label="QR-код страницы оплаты YooMoney" shapeRendering="crispEdges">
+                  <rect width="65" height="65" fill="white" />
+                  <path fill="black" d={qr.flatMap((row, y) => row.map((value, x) => value ? `M${x + 4},${y + 4}h1v1h-1z` : "")).join("")} />
+                </svg>}
+                <button className="btn payment-open" disabled={!s.payment.payment_url} onClick={() => void openPayment()}><ExternalLink size={14} />Открыть страницу оплаты</button>
+                <span className="payment-note">Баланс обновится после проверки подписанного уведомления ЮMoney. Возврат из браузера сам по себе не подтверждает оплату.</span>
+              </>}
+            </section>}
+            {(s.error || linkError) && <div className="payment-error" role="alert">{s.error || linkError}</div>}
+            <div className="payment-account-row"><span>Сессия аккаунта хранится на этом устройстве.</span><button className="payment-text-button" onClick={s.signOut}>Выйти</button></div>
+          </div>}
+          {!s.account && s.error && <div className="payment-error payment-auth-error" role="alert">{s.error}</div>}
+        </section>
+      </div>
+    </Presence>, document.body)}
   </>;
 }

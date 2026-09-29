@@ -375,10 +375,6 @@ async def _watch_orchestration(session: ChatSession, baseline: int,
 
 
 async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
-    if cmd.startswith("payment_"):
-        from axiom.payments.desktop import handle_payment
-
-        return await handle_payment(cmd, args)
     if cmd in {"set_workspace", "clear_workspace"}:
         # A workspace belongs to the whole ChatSession. Switching it during a
         # response would let that response continue with a different project
