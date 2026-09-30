@@ -1,5 +1,8 @@
 import html
+import json
+import logging
 import os
+import re
 import time
 from collections import defaultdict, deque
 from typing import Annotated
@@ -10,6 +13,61 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
+_WEBHOOK_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "notification_type",
+        "operation_id",
+        "amount",
+        "withdraw_amount",
+        "currency",
+        "datetime",
+        "sender",
+        "codepro",
+        "label",
+        "unaccepted",
+        "test_notification",
+        "sha1_hash",
+        "sign",
+    }
+)
+_WEBHOOK_REQUIRED_FIELDS = ("operation_id", "amount", "withdraw_amount", "notification_type", "currency")
+
+
+def _log_webhook_diagnostic(
+    request: Request,
+    reason: str,
+    *,
+    fields: dict[str, str] | None = None,
+    field_names: set[str] | None = None,
+    signature_valid: bool | None = None,
+) -> None:
+    if fields is not None:
+        field_names = set(fields)
+    safe_names = sorted((_WEBHOOK_DIAGNOSTIC_FIELDS & field_names) if field_names is not None else ())
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if not re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", media_type):
+        media_type = "invalid"
+    if fields is not None:
+        signature_present = bool(fields.get("sign"))
+    elif field_names is not None:
+        signature_present = "sign" in field_names
+    else:
+        signature_present = None
+    diagnostic = {
+        "content_type": media_type[:128],
+        "received_field_names": safe_names if field_names is not None else None,
+        "required_fields_present": (
+            {name: name in field_names for name in _WEBHOOK_REQUIRED_FIELDS} if field_names is not None else None
+        ),
+        "label_present": "label" in field_names if field_names is not None else None,
+        "label_nonempty": bool(fields.get("label")) if fields is not None and "label" in fields else None,
+        "signature_present": signature_present,
+        "signature_valid": signature_valid,
+        "validation_reason": reason,
+    }
+    logger.warning("yoomoney_webhook_validation %s", json.dumps(diagnostic, separators=(",", ":")))
 
 
 class AuthRequest(BaseModel):
@@ -154,6 +212,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             != "application/x-www-form-urlencoded"
         ):
+            _log_webhook_diagnostic(request, "unsupported_content_type")
             raise HTTPException(status_code=415, detail="Ожидался form-urlencoded запрос ЮMoney.")
         raw_body = await request.body()
         if len(raw_body) > 65_536:
@@ -161,17 +220,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             pairs = parse_qsl(raw_body.decode("utf-8"), keep_blank_values=True, strict_parsing=True)
         except UnicodeDecodeError as exc:
+            _log_webhook_diagnostic(request, "invalid_form_encoding")
             raise HTTPException(status_code=400, detail="invalid_form_encoding") from exc
         except ValueError as exc:
+            _log_webhook_diagnostic(request, "malformed_form_body")
             raise HTTPException(status_code=400, detail="malformed_form_body") from exc
         fields: dict[str, str] = {}
+        received_field_names = {key for key, _ in pairs}
         for key, value in pairs:
             if key in fields:
+                _log_webhook_diagnostic(
+                    request,
+                    "duplicate_form_field",
+                    field_names=received_field_names,
+                )
                 raise HTTPException(status_code=400, detail="duplicate_form_field")
             fields[key] = value
         if not fields.get("sign"):
+            _log_webhook_diagnostic(request, "missing_signature", fields=fields, signature_valid=False)
             raise HTTPException(status_code=401, detail="missing_signature")
-        if not verify_notification(fields, settings.notification_secret):
+        signature_valid = verify_notification(fields, settings.notification_secret)
+        if not signature_valid:
+            _log_webhook_diagnostic(request, "invalid_signature", fields=fields, signature_valid=False)
             raise HTTPException(status_code=401, detail="invalid_signature")
         try:
             result = store.process_notification(fields)
@@ -188,6 +258,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
             if reason not in safe_reasons:
                 reason = "invalid_notification"
+            _log_webhook_diagnostic(request, reason, fields=fields, signature_valid=signature_valid)
             raise HTTPException(status_code=400, detail=reason) from exc
         return JSONResponse(result)
 

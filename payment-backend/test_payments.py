@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from datetime import timedelta
@@ -429,6 +430,43 @@ async def test_webhook_returns_safe_reason_for_duplicate_form_field(client):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "duplicate_form_field"
+
+
+@pytest.mark.asyncio
+async def test_webhook_diagnostic_log_omits_field_values_and_signature(client, caplog):
+    fields = payment_fields("private-operation-id-for-test", "AX1-private-label-for-test")
+    fields["amount"] = "not-an-amount"
+    fields["sign"] = notification_signature(fields, SECRET)
+    response = await client.post(
+        "/v1/webhooks/yoomoney",
+        content=urlencode(fields),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == 400
+    diagnostic_message = next(
+        record.getMessage()
+        for record in caplog.records
+        if "yoomoney_webhook_validation" in record.getMessage()
+    )
+    diagnostic = json.loads(diagnostic_message.removeprefix("yoomoney_webhook_validation "))
+    assert diagnostic["content_type"] == "application/x-www-form-urlencoded"
+    assert diagnostic["received_field_names"] == sorted(fields)
+    assert diagnostic["required_fields_present"] == {
+        "operation_id": True,
+        "amount": True,
+        "withdraw_amount": True,
+        "notification_type": True,
+        "currency": True,
+    }
+    assert diagnostic["signature_present"] is True
+    assert diagnostic["signature_valid"] is True
+    assert diagnostic["validation_reason"] == "invalid_amount"
+    assert "private-operation-id-for-test" not in diagnostic_message
+    assert "AX1-private-label-for-test" not in diagnostic_message
+    assert "not-an-amount" not in diagnostic_message
+    assert fields["sign"] not in diagnostic_message
+    assert SECRET not in diagnostic_message
 
 
 @pytest.mark.asyncio
