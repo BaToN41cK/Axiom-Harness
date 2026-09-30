@@ -423,16 +423,25 @@ class PaymentStore:
         """Apply a signature-verified notification atomically and idempotently."""
         operation_id = fields.get("operation_id", "")
         label = fields.get("label", "")
-        if not operation_id or len(operation_id) > 128 or not label or len(label) > 64:
-            raise ValueError("invalid_notification")
+        if not operation_id:
+            raise ValueError("missing_operation_id")
+        if len(operation_id) > 128:
+            raise ValueError("invalid_operation_id")
+        if len(label) > 64:
+            raise ValueError("invalid_label")
         try:
             amount_minor = rubles_to_minor(fields.get("amount", ""))
+        except ValueError as exc:
+            raise ValueError("invalid_amount") from exc
+        try:
             withdraw_minor = rubles_to_minor(fields.get("withdraw_amount", ""))
         except ValueError as exc:
-            raise ValueError("invalid_notification") from exc
+            raise ValueError("invalid_withdraw_amount") from exc
         notification_type = fields.get("notification_type", "")
-        if notification_type not in {"p2p-incoming", "card-incoming"} or fields.get("currency") != "643":
-            raise ValueError("invalid_notification")
+        if notification_type not in {"p2p-incoming", "card-incoming"}:
+            raise ValueError("invalid_notification_type")
+        if fields.get("currency") != "643":
+            raise ValueError("invalid_currency")
         safe_payload = {
             key: fields.get(key, "")
             for key in (

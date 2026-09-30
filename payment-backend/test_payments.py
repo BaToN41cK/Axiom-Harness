@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -81,7 +82,6 @@ def payment_fields(operation_id, label, *, notification_type="p2p-incoming", amo
         "sender": "41003188981230",
         "codepro": "false",
         "label": label,
-        "test_notification": "false",
         "unaccepted": "false",
     }
 
@@ -164,6 +164,47 @@ async def test_yoomoney_webhook_uses_render_secret_file(monkeypatch, tmp_path):
             content=urlencode(fields),
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "unknown_order"
+
+
+@pytest.mark.asyncio
+async def test_yoomoney_webhook_accepts_official_documented_notification(settings):
+    official_fields = {
+        "notification_type": "p2p-incoming",
+        "operation_id": "441361714955017004",
+        "amount": "98.00",
+        "withdraw_amount": "100.00",
+        "currency": "643",
+        "datetime": "2013-12-26T08:28:34Z",
+        "sender": "41000000000",
+        "codepro": "false",
+        "label": "ML23045",
+        "unaccepted": "false",
+        "sha1_hash": "ac13833bd6ba9eff1fa9e4bed76f3d6ebb57f6c0",
+    }
+    official_signature = "a452af731650e2c5b39abcdc7c28dd27db7b3b654c2230ad2c386e64afb98605"
+    assert notification_signature(official_fields, "secret123") == official_signature
+
+    app = create_app(replace(settings, notification_secret="secret123"))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as official_client:
+        response = await official_client.post(
+            "/v1/webhooks/yoomoney",
+            content=urlencode({**official_fields, "sign": official_signature}),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "unknown_order"
+
+
+@pytest.mark.asyncio
+async def test_yoomoney_webhook_acknowledges_signed_notification_without_label(client):
+    fields = payment_fields("unlabeled-operation", "")
+    response = await notify(client, fields)
 
     assert response.status_code == 200
     assert response.json()["status"] == "unknown_order"
@@ -343,6 +384,51 @@ async def test_invalid_notification_shape_is_rejected(client):
     fields = {"operation_id": "bad", "label": "bad", "amount": "100.00", "withdraw_amount": "100.00", "currency": "643"}
     response = await notify(client, fields)
     assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_notification_type"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"amount": "not-an-amount"}, "invalid_amount"),
+        ({"withdraw_amount": "not-an-amount"}, "invalid_withdraw_amount"),
+        ({"notification_type": "unknown-type"}, "invalid_notification_type"),
+        ({"currency": "840"}, "invalid_currency"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_webhook_returns_safe_validation_reason(client, overrides, reason):
+    fields = payment_fields("invalid-shape-operation", "AX1-test-label")
+    fields.update(overrides)
+    response = await notify(client, fields)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == reason
+    assert "not-an-amount" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_webhook_returns_safe_reason_for_malformed_form(client):
+    response = await client.post(
+        "/v1/webhooks/yoomoney",
+        content="not-a-form-field",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "malformed_form_body"
+
+
+@pytest.mark.asyncio
+async def test_webhook_returns_safe_reason_for_duplicate_form_field(client):
+    response = await client.post(
+        "/v1/webhooks/yoomoney",
+        content="operation_id=first&operation_id=second",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "duplicate_form_field"
 
 
 @pytest.mark.asyncio

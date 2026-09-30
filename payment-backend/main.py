@@ -160,19 +160,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=413, detail="Уведомление слишком большое.")
         try:
             pairs = parse_qsl(raw_body.decode("utf-8"), keep_blank_values=True, strict_parsing=True)
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Некорректное уведомление.") from exc
+        except UnicodeDecodeError as exc:
+            raise HTTPException(status_code=400, detail="invalid_form_encoding") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="malformed_form_body") from exc
         fields: dict[str, str] = {}
         for key, value in pairs:
             if key in fields:
-                raise HTTPException(status_code=400, detail="В уведомлении повторяется поле.")
+                raise HTTPException(status_code=400, detail="duplicate_form_field")
             fields[key] = value
+        if not fields.get("sign"):
+            raise HTTPException(status_code=401, detail="missing_signature")
         if not verify_notification(fields, settings.notification_secret):
-            raise HTTPException(status_code=401, detail="Подпись уведомления не прошла проверку.")
+            raise HTTPException(status_code=401, detail="invalid_signature")
         try:
             result = store.process_notification(fields)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Поля уведомления некорректны.") from exc
+            reason = str(exc)
+            safe_reasons = {
+                "missing_operation_id",
+                "invalid_operation_id",
+                "invalid_label",
+                "invalid_amount",
+                "invalid_withdraw_amount",
+                "invalid_notification_type",
+                "invalid_currency",
+            }
+            if reason not in safe_reasons:
+                reason = "invalid_notification"
+            raise HTTPException(status_code=400, detail=reason) from exc
         return JSONResponse(result)
 
     @app.get("/checkout/{order_id}", response_class=HTMLResponse)
