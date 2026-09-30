@@ -1643,6 +1643,26 @@ export function useAxiom() {
       return task;
     } catch (err) {
       notify(errorText(err), "error");
+      await refreshTasks();
+      void loadTree();
+      void loadGit();
+      return null;
+    }
+  }
+
+  async function recoverReview(id: string): Promise<Task | null> {
+    try {
+      const task = await request<Task>("task_recover_review", { id });
+      setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
+      void loadTree();
+      void loadGit();
+      notify("Восстановление ревью завершено; решение по задаче можно принять заново", "ok");
+      return task;
+    } catch (err) {
+      notify(errorText(err), "error");
+      await refreshTasks();
+      void loadTree();
+      void loadGit();
       return null;
     }
   }
@@ -2353,13 +2373,16 @@ export function useAxiom() {
   }
 
   async function openWorkspaceFile(path: string) {
+    const captured = workspaceSeqRef.current;
     try {
       const data = await request<{ ok: boolean; content?: string; error?: string }>("workspace_file", { path });
+      if (captured !== workspaceSeqRef.current) return;
       if (!data.ok) {
         notify(data.error ?? "Не удалось прочитать файл", "error");
         return;
       }
       setOpenFile({ path, content: data.content ?? "" });
+      setRightPanelOpen(true);
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -2541,6 +2564,7 @@ export function useAxiom() {
     saveTask,
     deleteTask,
     reviewTask,
+    recoverReview,
     phase,
     bootSteps,
     bootError,

@@ -301,6 +301,9 @@ export interface Task {
   unknown_baselines: string[];
   diffs: Record<string, string>;
   review_status: "pending" | "accepted" | "rejected";
+  review_recovery?: string | null;
+  review_recovery_detail?: string | null;
+  review_recovery_paths?: string[];
   detail: string;
   created_at: number;
   updated_at: number;

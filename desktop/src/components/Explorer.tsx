@@ -1,41 +1,5 @@
 import { useMemo, useState } from "react";
-import hljsCore from "highlight.js/lib/core";
-import python from "highlight.js/lib/languages/python";
-import typescript from "highlight.js/lib/languages/typescript";
-import javascript from "highlight.js/lib/languages/javascript";
-import rust from "highlight.js/lib/languages/rust";
-import go from "highlight.js/lib/languages/go";
-import java from "highlight.js/lib/languages/java";
-import c from "highlight.js/lib/languages/c";
-import cpp from "highlight.js/lib/languages/cpp";
-import csharp from "highlight.js/lib/languages/csharp";
-import ruby from "highlight.js/lib/languages/ruby";
-import php from "highlight.js/lib/languages/php";
-import swift from "highlight.js/lib/languages/swift";
-import bash from "highlight.js/lib/languages/bash";
-import powershell from "highlight.js/lib/languages/powershell";
-import cssLang from "highlight.js/lib/languages/css";
-import scss from "highlight.js/lib/languages/scss";
-import xml from "highlight.js/lib/languages/xml";
-import sql from "highlight.js/lib/languages/sql";
-import json from "highlight.js/lib/languages/json";
-import yaml from "highlight.js/lib/languages/yaml";
-import ini from "highlight.js/lib/languages/ini";
-import markdown from "highlight.js/lib/languages/markdown";
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-
-// Register only the languages the file preview actually serves — the full
-// highlight.js bundle would add ~1 MB to the bundle for languages a code
-// workspace rarely opens in a preview pane. Tree-shaking keeps only these.
-const LANGS: Record<string, unknown> = {
-  python, typescript, javascript, rust, go, java, c, cpp, csharp,
-  ruby, php, swift, bash, powershell, css: cssLang, scss, xml, sql,
-  json, yaml, ini, markdown, dockerfile,
-};
-for (const [name, def] of Object.entries(LANGS)) {
-  hljsCore.registerLanguage(name, def as never);
-}
-const hljs = hljsCore;
+import { highlightSource, hljs } from "../lib/syntaxHighlight";
 import {
   ChevronDown,
   ChevronRight,
@@ -88,31 +52,9 @@ function fileIcon(name: string, dir: boolean) {
   return <FileText size={14} strokeWidth={1.7} className="ex-icon" />;
 }
 
-/** Map of highlight.js language name by file extension. */
-const HLJS_LANG: Record<string, string> = {
-  py: "python", ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
-  rs: "rust", go: "go", java: "java", c: "c", h: "c", cpp: "cpp", cs: "csharp",
-  rb: "ruby", php: "php", swift: "swift", sh: "bash", ps1: "powershell",
-  css: "css", scss: "scss", html: "xml", vue: "xml", sql: "sql",
-  json: "json", yaml: "yaml", yml: "yaml", toml: "ini", ini: "ini",
-  md: "markdown", xml: "xml", dockerfile: "dockerfile",
-};
-
 /** Determine if a name looks like a Markdown file for preview. */
 function isMarkdown(name: string): boolean {
   return name.toLowerCase().endsWith(".md") || name.toLowerCase().endsWith(".mdx");
-}
-
-/** Syntax highlighting via highlight.js — returns HTML. */
-function highlighted(text: string, ext: string): { html: string; lang: string } {
-  const lang = HLJS_LANG[ext] || "";
-  if (!lang) return { html: "", lang: "" };
-  try {
-    const result = hljs.highlight(text, { language: lang, ignoreIllegals: true });
-    return { html: result.value, lang };
-  } catch {
-    return { html: "", lang: "" };
-  }
 }
 
 /**
@@ -245,8 +187,7 @@ function FilePreview({
   content: string;
   onClose: () => void;
 }) {
-  const ext = path.includes(".") ? path.split(".").pop()!.toLowerCase() : "";
-  const { html, lang } = useMemo(() => highlighted(content, ext), [content, ext]);
+  const { html, language: lang } = useMemo(() => highlightSource(content, path), [content, path]);
   const isMD = isMarkdown(path);
 
   return (

@@ -50,6 +50,7 @@ from axiom.core.mentions import expand_mentions, mentioned_files
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.ollama import OllamaClient
 from axiom.core.profiles import ProfileManager
+from axiom.core.review import ReviewJournal, ReviewTransaction, review_lock
 from axiom.core.search.multi import build_search_provider
 from axiom.core.search.provider import SearchProvider
 from axiom.core.state import GenerationState
@@ -1321,44 +1322,131 @@ class ChatSession:
         return self.task_store.load(task_id)
 
     def task_review(self, task_id: str, decision: str) -> Task:
-        """Accept a task result or restore its captured text-file baseline."""
+        """Accept a task or execute/recover its durable reject transaction."""
         import time
-        task = self.task_store.load(task_id)
-        if task is None:
-            raise ValueError("Task not found")
-        if decision not in {"accept", "reject"}:
-            raise ValueError("Review decision must be accept or reject")
-        if task.state != TaskState.COMPLETED:
-            raise ValueError("Only a completed task can be reviewed")
-        if decision == "reject":
-            if self.workspace_root is None or task.scope != str(self.workspace_root):
-                raise ValueError("Open the task's original workspace before rejecting it")
-            if task.unknown_baselines:
-                raise ValueError("Cannot safely reject: original binary/unreadable files were changed")
-            for relative, original in task.file_baselines.items():
-                path = (self.workspace_root / relative).resolve()
+
+        store = self.task_store
+        with review_lock(store.directory):
+            if any(p != store.transaction_path(task_id) for p in store.directory.glob("*.review.json")):
+                raise ValueError("Recover the workspace's unfinished review before another review")
+            task = store.load(task_id)
+            if task is None:
+                raise ValueError("Task not found")
+            if decision not in {"accept", "reject"}:
+                raise ValueError("Review decision must be accept or reject")
+            if task.state != TaskState.COMPLETED:
+                raise ValueError("Only a completed task can be reviewed")
+            if self.busy:
+                raise ValueError("Stop the running generation before reviewing changes")
+            root = self.workspace_root.resolve() if self.workspace_root is not None else None
+            transaction = None
+            if store.transaction_path(task_id).exists():
+                if root is None or task.scope != str(root):
+                    raise ValueError("Open the task's original workspace before recovery")
+                transaction = ReviewTransaction.load(store, task, root)
+                if transaction is not None and task.review_status == "pending":
+                    if decision != "reject":
+                        raise ValueError("Interrupted reject requires recovery: retry Reject first")
+                    transaction.recover()
+                    raise ValueError("Interrupted reject recovered; pre-review file contents restored. Review again.")
+            if task.review_status == "rejected" and decision == "reject":
+                if transaction is not None:
+                    transaction.cleanup()
+                task.review_recovery = None
+                task.review_recovery_detail = None
+                task.review_recovery_paths = []
+                return task
+            if task.review_status == "accepted" and decision == "accept":
+                return task
+            if task.review_status != "pending":
+                raise ValueError("Task has already been reviewed")
+            if decision == "accept":
+                task.review_status = "accepted"
+                task.updated_at = time.time()
+                task.revision += 1
+                store.save_review(task)
+            else:
+                if root is None or task.scope != str(root):
+                    raise ValueError("Open the task's original workspace before rejecting it")
+                if transaction is None:
+                    transaction = ReviewTransaction.prepare(store, task, root)
                 try:
-                    path.relative_to(self.workspace_root.resolve())
-                except ValueError as exc:
-                    raise ValueError("Task contains a path outside its workspace") from exc
-                if original is None:
-                    if path.is_file():
-                        path.unlink()
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    temp = path.with_name(path.name + ".axiom-review-tmp")
-                    temp.write_text(original, encoding="utf-8")
-                    temp.replace(path)
-            task.review_status = "rejected"
-        else:
-            task.review_status = "accepted"
-        task.updated_at = time.time()
-        task.revision += 1
-        self.task_store.save(task)
-        payload = {"type": "task", "kind": "task.review", "task_id": task.id,
-                   "timestamp": task.updated_at, "task": task.model_dump(mode="json")}
-        self.bus.emit("task.event", payload)
-        return task
+                    transaction.stage()
+                    transaction.apply()
+                    task.review_status = "rejected"
+                    task.review_recovery = None
+                    task.review_recovery_detail = None
+                    task.review_recovery_paths = []
+                    task.updated_at = time.time()
+                    task.revision += 1
+                    store.save_review(task)  # Authoritative durable commit point.
+                except (OSError, ValueError) as exc:
+                    persisted = store.load(task_id)
+                    if persisted is not None and persisted.review_status == "rejected":
+                        raise ValueError("Review committed; retry Reject to finish cleanup") from exc
+                    transaction.recover()
+                    raise ValueError("Reject failed; pre-review file contents restored") from exc
+                transaction.journal.state = "committed"
+                transaction.save()
+                transaction.cleanup()
+            payload = {"type": "task", "kind": "task.review", "task_id": task.id,
+                       "timestamp": task.updated_at, "task": task.model_dump(mode="json")}
+            self.bus.emit("task.event", payload)
+            return task
+
+    def task_recover_review(self, task_id: str) -> Task:
+        """Retry only an interrupted reject recovery; never force a conflict."""
+        store = self.task_store
+        # TaskStore follows the active workspace. Find the journal in a known
+        # workspace first, or switching projects would hide an interrupted
+        # review behind a misleading "Task not found" error.
+        journal_path = store.transaction_path(task_id)  # Validate the id before examining paths.
+        if not journal_path.exists():
+            for project in self.workspaces.recent():
+                candidate = TaskStore(Path(project.path) / ".axiom" / "tasks")
+                if candidate.transaction_path(task_id).exists():
+                    store = candidate
+                    break
+        with review_lock(store.directory):
+            if any(p != store.transaction_path(task_id) for p in store.directory.glob("*.review.json")):
+                raise ValueError("Recover the workspace's unfinished review before another review")
+            raw = store.load_transaction(task_id)
+            if raw is None:
+                raise ValueError("This task has no unfinished review recovery")
+            try:
+                journal = ReviewJournal.model_validate(raw)
+            except ValueError as exc:
+                raise ValueError("Review journal is invalid; manual recovery required") from exc
+            if journal.task_id != task_id or store.directory != Path(journal.root) / ".axiom" / "tasks":
+                raise ValueError("Review journal workspace/task mismatch")
+            root = self.workspace_root.resolve() if self.workspace_root is not None else None
+            if root is None or journal.root != str(root):
+                raise ValueError("Open the task's original workspace before recovery")
+            task = store.load(task_id)
+            if task is None:
+                raise ValueError("Task not found")
+            if task.state != TaskState.COMPLETED:
+                raise ValueError("Only a completed task can recover its review")
+            if self.busy:
+                raise ValueError("Stop the running generation before recovering changes")
+            if task.scope != str(root):
+                raise ValueError("Open the task's original workspace before recovery")
+            transaction = ReviewTransaction.load(store, task, root)
+            if transaction is None:
+                raise ValueError("This task has no unfinished review recovery")
+            if task.review_status == "rejected":
+                transaction.cleanup()
+            elif task.review_status == "pending":
+                transaction.recover()
+            else:
+                raise ValueError("This review cannot be recovered automatically")
+            recovered = store.load(task_id)
+            if recovered is None:
+                raise ValueError("Task disappeared during review recovery")
+            payload = {"type": "task", "kind": "task.review", "task_id": recovered.id,
+                       "timestamp": recovered.updated_at, "task": recovered.model_dump(mode="json")}
+            self.bus.emit("task.event", payload)
+            return recovered
 
     def task_cancel(self, task_id: str) -> bool:
         if self.active_task is None or self.active_task.id != task_id:

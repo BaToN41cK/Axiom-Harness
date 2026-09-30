@@ -2,6 +2,8 @@ import { ArrowLeft, Check, Circle, FileCode2, Loader2, TriangleAlert, X } from "
 import { TaskCard } from "./TaskCard";
 import TaskDelete from "./TaskDelete";
 import TaskResume from "./TaskResume";
+import DiffReview from "./DiffReview";
+import TaskReviewActions from "./TaskReviewActions";
 import type { Task } from "../types";
 import type { AxiomStore } from "../hooks/useAxiom";
 
@@ -23,42 +25,6 @@ const BUDGET_LABELS: Record<string, string> = {
   tool_results: "Результаты инструментов", conversation: "Диалог",
 };
 
-/** Real added/removed line counts of a unified diff (headers excluded). */
-function diffCounts(diff: string): { add: number; del: number } {
-  let add = 0;
-  let del = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
-    if (line.startsWith("+")) add += 1;
-    else if (line.startsWith("-")) del += 1;
-  }
-  return { add, del };
-}
-
-/** One collapsible changed-file diff with +/- counts, driven by task state. */
-function DiffFile({ path, diff }: { path: string; diff: string }) {
-  const placeholder = diff.startsWith("(File created");
-  const { add, del } = diffCounts(diff);
-  const lines = diff.split("\n");
-  const shown = lines.slice(0, 1500);
-  return (
-    <details className="task-diff-file">
-      <summary>
-        <code className="task-diff-path">{path}</code>
-        {!placeholder && <span className="task-diff-counts"><b className="add">+{add}</b><b className="del">−{del}</b></span>}
-      </summary>
-      {placeholder ? <p className="task-diff-note">{diff}</p> : (
-        <pre className="task-diff-body">{shown.map((line, index) => (
-          <span
-            key={index}
-            className={line.startsWith("+++") || line.startsWith("---") ? "meta" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith("@@") ? "hunk" : ""}
-          >{line || " "}</span>
-        ))}</pre>
-      )}
-      {!placeholder && lines.length > shown.length && <p className="task-diff-note">… diff усечён для отображения</p>}
-    </details>
-  );
-}
 
 export default function TaskExecution({ task, store, onBack }: Props) {
   const steps = task?.plan?.steps ?? [];
@@ -102,16 +68,13 @@ export default function TaskExecution({ task, store, onBack }: Props) {
             <div className="task-execution-section">
               <div className="task-execution-section-label"><FileCode2 size={13} /> Diff изменений ({diffEntries.length})</div>
               <div className="task-execution-review">
-                {task.state === "completed" ? (task.review_status === "pending" ? (
-                  <>
-                    <button type="button" className="task-btn mini primary" disabled={store.taskRequestPending} onClick={() => void store.reviewTask(task.id, "accept")}><Check size={12} /><span>Принять</span></button>
-                    <button type="button" className="task-btn mini danger" disabled={store.taskRequestPending} onClick={() => void store.reviewTask(task.id, "reject")}><X size={12} /><span>Отклонить</span></button>
-                  </>
+                {task.state === "completed" ? (task.review_status === "pending" || task.review_recovery ? (
+                  <TaskReviewActions key={task.id} task={task} busy={store.generating || store.taskRequestPending} onReview={store.reviewTask} onRecover={store.recoverReview} />
                 ) : (
                   <span className={`task-execution-review-state ${task.review_status}`}>{task.review_status === "accepted" ? "Изменения приняты" : "Изменения отклонены"}</span>
                 )) : <span className="task-execution-review-state pending">Ревью станет доступно после завершения</span>}
               </div>
-              {diffEntries.map(([file, diff]) => <DiffFile key={file} path={file} diff={diff} />)}
+              <DiffReview key={task.id} diffs={task.diffs} onOpenFile={(path) => void store.openWorkspaceFile(path)} />
             </div>
           )}
           {budgetRows.length > 0 && (
@@ -136,7 +99,7 @@ export default function TaskExecution({ task, store, onBack }: Props) {
           {task.commands.length > 0 && <div className="task-execution-section"><div className="task-execution-section-label">Реальные команды</div>{task.commands.map((command, index) => <details key={index}><summary>{String(command.tool ?? "command")} · {String(command.state ?? "")} {String(command.command ?? "")}</summary><pre>{String(command.output ?? "Вывод пока не получен")}</pre></details>)}</div>}
           {task.tests.length > 0 && <div className="task-execution-section"><div className="task-execution-section-label">Проверки</div>{task.tests.map((test, index) => <pre key={index} className={test.ok === true && test.executed === true ? "ok" : "error"}>{String(test.summary ?? test.error ?? JSON.stringify(test))}</pre>)}</div>}
           {task.errors.length > 0 && <div className="task-execution-error"><b>Ошибка выполнения</b><span>{task.errors[task.errors.length - 1].message}</span></div>}
-          {task.state === "completed" && <div className="task-execution-done"><Check size={15} />{task.review_status === "accepted" ? "Изменения приняты" : task.review_status === "rejected" ? "Изменения отклонены" : "Результат готов к ревью"}</div>}
+          {task.state === "completed" && <div className="task-execution-done"><Check size={15} />{task.review_recovery ? "Ревью требует восстановления" : task.review_status === "accepted" ? "Изменения приняты" : task.review_status === "rejected" ? "Изменения отклонены" : "Результат готов к ревью"}</div>}
           <div className="task-execution-actions">
             {store.activeTaskId === task.id && <button className="task-execution-stop" onClick={() => void store.cancelTask(task.id)}><X size={14} /> Остановить выполнение</button>}
             {!running && <TaskDelete key={`${task.id}:${task.revision}`} task={task} busy={store.generating || store.taskRequestPending} onDelete={store.deleteTask} />}
@@ -145,7 +108,7 @@ export default function TaskExecution({ task, store, onBack }: Props) {
             <summary>Подробности, ревью и управление задачей</summary>
             <TaskCard task={task} busy={store.generating || store.taskRequestPending}
               onResume={store.resumeTask} onCancel={store.cancelTask} onSave={store.saveTask}
-              onDelete={store.deleteTask} onReview={store.reviewTask} onInspect={store.setFocusedTaskId} />
+              onDelete={store.deleteTask} onReview={store.reviewTask} onRecover={store.recoverReview} onInspect={store.setFocusedTaskId} />
           </details>
         </div>
       )}

@@ -42,6 +42,8 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => { if (panelRef.current) panelRef.current.inert = !s.rightPanelOpen; }, [s.rightPanelOpen]);
   const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks">("files");
+  // A file opened from task review must be visible even from another tab.
+  useEffect(() => { if (s.openFile) setTab("files"); }, [s.openFile]);
   const pickTab = (next: typeof tab) => {
     if (tab !== next) playUiSound("panel");
     setTab(next);
@@ -111,6 +113,7 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
           onSave={s.saveTask}
           onDelete={s.deleteTask}
           onReview={s.reviewTask}
+          onRecover={s.recoverReview}
           onInspect={s.setFocusedTaskId}
         />
       )}

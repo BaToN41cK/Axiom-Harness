@@ -32,7 +32,10 @@ _WEBHOOK_DIAGNOSTIC_FIELDS = frozenset(
         "sign",
     }
 )
-_WEBHOOK_REQUIRED_FIELDS = ("operation_id", "amount", "withdraw_amount", "notification_type", "currency")
+_WEBHOOK_REQUIRED_FIELDS = ("operation_id", "amount", "notification_type", "currency")
+# Parameters YooMoney used to send and may still send. None of them decides a
+# settlement any more, which is exactly why a live notification used to fail here.
+_WEBHOOK_LEGACY_FIELDS = ("withdraw_amount", "unaccepted", "sha1_hash")
 
 
 def _log_webhook_diagnostic(

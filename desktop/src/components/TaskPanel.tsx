@@ -19,6 +19,7 @@ interface Props {
   ) => Promise<Task | null>;
   onDelete: (id: string) => Promise<boolean>;
   onReview: (id: string, decision: "accept" | "reject") => Promise<Task | null>;
+  onRecover: (id: string) => Promise<Task | null>;
   onInspect: (id: string) => void;
 }
 
@@ -135,7 +136,7 @@ export default function TaskPanel(props: Props) {
         ) : (
           props.tasks.map((task) => task.state !== "pending" ? (
             <button className="task-summary" key={task.id} onClick={() => props.onInspect(task.id)}>
-              <span className={`task-status-badge ${STATE_CONFIG[task.state].tone}`}>{STATE_CONFIG[task.state].label}</span>
+              <span className={`task-status-badge ${task.review_recovery ? "warning" : STATE_CONFIG[task.state].tone}`}>{task.review_recovery ? "Ревью требует восстановления" : STATE_CONFIG[task.state].label}</span>
               <strong>{task.goal}</strong>
               <span className="task-summary-link">Открыть выполнение →</span>
             </button>
@@ -149,6 +150,7 @@ export default function TaskPanel(props: Props) {
               onSave={props.onSave}
               onDelete={props.onDelete}
               onReview={props.onReview}
+              onRecover={props.onRecover}
               onInspect={props.onInspect}
             />
           ))

@@ -1,0 +1,31 @@
+.diff-review { min-width: 0; border: 1px solid var(--border-default); border-radius: var(--radius); overflow: hidden; background: var(--bg-secondary); }
+.diff-files { display: flex; flex-direction: column; max-height: 156px; overflow: auto; padding: 4px; gap: 2px; }
+.diff-files button { display: flex; align-items: center; gap: 12px; padding: 7px 8px; text-align: left; border-radius: 4px; color: var(--text-secondary); }
+.diff-files button code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); }
+.diff-files button[aria-current] { color: var(--text-primary); background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+.diff-review button { cursor: pointer; transition: background-color var(--motion-fast) var(--ease-ui); }
+.diff-review button:hover:not(:disabled) { background: var(--bg-hover); }
+.diff-review button:active:not(:disabled) { background: var(--ax-bg-active); }
+.diff-review button:disabled { opacity: .4; cursor: not-allowed; }
+.diff-review :is(button, summary, .diff-scroll):focus-visible { outline: var(--ax-focus-outline); outline-offset: -2px; }
+.diff-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 7px 10px; border-top: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 11px; }
+.diff-toolbar > :first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diff-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 26px; padding: 4px 6px; border: 1px solid var(--border-default); border-radius: 4px; }
+.diff-feedback { display: block; padding: 0 10px; color: var(--text-secondary); font-size: 11px; }
+.diff-feedback:empty { display: none; }
+.diff-scroll { overflow: auto; max-height: 420px; background: var(--bg-primary); }
+.diff-review .diff-hunk { min-width: 100%; width: max-content; }
+.diff-review .diff-hunk summary { display: list-item; padding: 7px 12px; font: 11px/1.5 var(--mono); color: var(--accent-text); background: var(--accent-softer); cursor: pointer; white-space: pre; }
+.diff-lines { font: 12px/1.65 var(--mono); user-select: text; }
+.diff-line { display: grid; grid-template-columns: 5ch 5ch 3ch minmax(0, 1fr); min-width: 100%; white-space: pre; color: var(--text-secondary); }
+.diff-line code { padding-right: 16px; font: inherit; white-space: pre; overflow-wrap: normal; tab-size: 4; }
+/* Token colours use the existing AXIOM hljs palette; row backgrounds and
+   +/- gutters remain semantic green/red, independently of source tokens. */
+.diff-line .diff-code { color: var(--text-primary); }
+.diff-line .diff-code .hljs-comment, .diff-line .diff-code .hljs-quote { color: var(--text-secondary); }
+.diff-number { color: var(--text-muted); text-align: right; padding: 0 6px; user-select: none; border-right: 1px solid var(--border-subtle); }
+.diff-sign { text-align: center; user-select: none; }
+.diff-line.add { background: var(--ax-success-soft); color: var(--ax-success-text); }
+.diff-line.del { background: var(--ax-error-soft); color: var(--ax-error-text); }
+.diff-line.meta { color: var(--text-muted); font-style: italic; }
+.diff-fallback { margin: 0; padding: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); color: var(--text-secondary); }

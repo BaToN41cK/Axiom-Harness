@@ -12,6 +12,7 @@ import pytest
 from axiom.core.events import ErrorEvent, ToolCallEvent, ToolResultEvent
 from axiom.core.ollama import StreamChunk, ToolCallRequest
 from axiom.core.planner import PlanStep, TaskPlan
+from axiom.core.review import ReviewTransaction
 from axiom.core.tasks import Task, TaskState
 from axiom.core.tools.base import ToolResult
 from axiom.core.tools.processes import process_group_options
@@ -314,6 +315,144 @@ async def test_quality_scenario_failed_check_repairs_then_diff_can_be_rejected(t
     assert reviewed.review_status == "rejected"
     assert "calc.py" in reviewed.diffs
     assert (ws / "calc.py").read_text(encoding="utf-8") == "value = 1\n"
+
+
+async def test_reject_refuses_to_overwrite_user_edit_after_task_completion(tmp_path, monkeypatch):
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    path = ws / "calc.py"
+    path.write_text("value = 2\n", encoding="utf-8")
+    session = _session(tmp_path, monkeypatch, ws)
+    task = Task(
+        goal="Change calc.py", state=TaskState.COMPLETED, scope=str(ws),
+        file_baselines={"calc.py": "value = 1\n"},
+        review_baselines={"calc.py": "value = 2\n"},
+        diffs={"calc.py": "real diff"},
+    )
+    session.task_store.save(task)
+
+    path.write_text("user edit\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed after the task completed"):
+        session.task_review(task.id, "reject")
+    assert path.read_text(encoding="utf-8") == "user edit\n"
+    assert session.task_store.load(task.id).review_status == "pending"
+
+
+async def test_reject_requires_post_change_snapshot_for_legacy_task(tmp_path, monkeypatch):
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    path = ws / "calc.py"
+    path.write_text("value = 2\n", encoding="utf-8")
+    session = _session(tmp_path, monkeypatch, ws)
+    task = Task(
+        goal="Change calc.py", state=TaskState.COMPLETED, scope=str(ws),
+        file_baselines={"calc.py": "value = 1\n"}, diffs={"calc.py": "real diff"},
+    )
+    session.task_store.save(task)
+
+    with pytest.raises(ValueError, match="no complete post-change snapshot"):
+        session.task_review(task.id, "reject")
+    assert path.read_text(encoding="utf-8") == "value = 2\n"
+
+
+async def test_e2e_coding_task_edit_verify_reject_recover_resume(tmp_path, monkeypatch):
+    """Deterministic backend E2E: real file edit, real pytest, reject, recovery, resume.
+
+    Offline except the fake model transport. No Tauri, no Edge, no network.
+    """
+    ws = tmp_path / "clean-workspace"
+    ws.mkdir()
+    target = ws / "buggy.py"
+    target.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    (ws / "test_buggy.py").write_text(
+        "from buggy import add\ndef test_add():\n    assert add(2, 3) == 5\n", encoding="utf-8"
+    )
+    session = _session(tmp_path, monkeypatch, ws)
+    subprocess.run(["git", "init", str(ws)], check=True, capture_output=True, stdin=subprocess.DEVNULL)
+    events: list[dict] = []
+    session.bus.subscribe("task.event", events.append)
+
+    async def transport(self, model, messages, **kwargs):
+        prompt = next(m["content"] for m in messages if m["role"] == "user")
+        if prompt.startswith("Plan the following"):
+            yield StreamChunk(content=plan_json(), done=True)
+        elif prompt.startswith("Review task acceptance"):
+            yield StreamChunk(content='{"approved":true,"reason":"sum and checks verified"}', done=True)
+        elif "Tool result (edit_file)" in str(messages):
+            yield StreamChunk(content="Changed buggy.py to return a + b.", done=True)
+        elif "Tool result (read_file)" in str(messages):
+            yield StreamChunk(tool_calls=[ToolCallRequest(name="edit_file", arguments={
+                "path": "buggy.py", "old_text": "return a - b", "new_text": "return a + b",
+            })], done=True)
+        else:
+            yield StreamChunk(tool_calls=[ToolCallRequest(name="read_file", arguments={"path": "buggy.py"})],
+                              done=True)
+
+    monkeypatch.setattr("axiom.core.providers.runtime.ProviderChatClient.chat", transport)
+
+    # 1. Real agent edit, real filesystem, real git-backed verification.
+    task = await session.task_start("Fix buggy.py")
+    assert task.state is TaskState.COMPLETED, task.detail
+    assert "return a + b" in target.read_text(encoding="utf-8")
+    assert task.tests and task.tests[0]["executed"] is True
+    assert events and events[0]["kind"] == "task.started"
+    assert events[-1]["kind"] == "task.completed"
+
+    # 2. Same state is durable across a fresh task store (restart boundary).
+    restarted_task = session.task_store.load(task.id)
+    assert restarted_task is not None and restarted_task.state is TaskState.COMPLETED
+
+    # 3. Interrupt reject after publication and preserve a concurrent external edit.
+    original_apply = ReviewTransaction.apply
+
+    def interrupt_after_apply(transaction):
+        original_apply(transaction)
+        # Publication hard-links the staged inode: unlink before simulating
+        # an independent user replacement so the staged artifact stays intact.
+        target.unlink()
+        target.write_text("external edit\n", encoding="utf-8")
+        raise OSError("simulated process interruption")
+
+    monkeypatch.setattr(ReviewTransaction, "apply", interrupt_after_apply)
+    with pytest.raises(ValueError, match="manual recovery required"):
+        session.task_review(task.id, "reject")
+    journal = session.task_store.load_transaction(task.id)
+    assert journal is not None and journal["state"] == "recovery_required"
+    assert target.read_text(encoding="utf-8") == "external edit\n"
+    assert session.task_state(task.id).review_status == "pending"
+    with pytest.raises(ValueError, match="manual recovery required"):
+        session.task_recover_review(task.id)
+    assert target.read_text(encoding="utf-8") == "external edit\n"
+
+    # 4. Recovery never overwrites the external file; once it is moved aside,
+    # recovery restores the post-task snapshot and Reject can be retried.
+    external = ws / "external-edit.txt"
+    target.replace(external)
+    recovered = session.task_recover_review(task.id)
+    assert recovered.review_status == "pending"
+    assert session.task_store.load_transaction(task.id) is None
+    assert external.read_text(encoding="utf-8") == "external edit\n"
+    assert target.read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
+    monkeypatch.setattr(ReviewTransaction, "apply", original_apply)
+    rejected = session.task_review(task.id, "reject")
+    assert rejected.review_status == "rejected"
+    assert target.read_text(encoding="utf-8").endswith("return a - b\n")
+
+    # 5. A fresh session can resume the same completed task without replaying it.
+    restarted = _session(tmp_path, monkeypatch, ws)
+    resumed = await restarted.task_resume(task.id)
+    assert resumed.id == task.id
+    assert resumed.state is TaskState.COMPLETED
+    assert resumed.review_status == "rejected"
+
+    # 6. A deliberately broken regression is detected by a real pytest run.
+    (ws / "conftest.py").write_text("import sys\nsys.exit('broken conftest')\n", encoding="utf-8")
+    broken = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q"], cwd=ws, capture_output=True,
+        text=True, stdin=subprocess.DEVNULL, timeout=30,
+    )
+    assert broken.returncode != 0
+    assert "broken conftest" in broken.stdout + broken.stderr
 
 
 async def test_verify_task_rejects_contradictory_check_without_reviewer(tmp_path, monkeypatch):

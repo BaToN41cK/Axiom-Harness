@@ -92,6 +92,32 @@ def gross_up_for_card(credit_minor: int) -> int:
     raise ValueError("amount_not_supported")
 
 
+def net_after_wallet_fee(gross_minor: int) -> int:
+    """What the wallet keeps from a PC button charge after the documented fee."""
+    return gross_minor - _rounded_minor((Decimal(gross_minor) / 100) / Decimal(101))
+
+
+def net_after_card_fee(gross_minor: int) -> int:
+    """What the wallet keeps from an AC button charge after the documented fee."""
+    return gross_minor - _rounded_minor((Decimal(gross_minor) / 100) * Decimal("0.03"))
+
+
+def settlement_floor_minor(order, method: str) -> int:
+    """The least signed amount the wallet may receive for this order to settle.
+
+    Current YooMoney notifications sign only ``amount`` — the sum credited to the
+    wallet — and no longer carry ``withdraw_amount``. That one signed number is
+    therefore the only settlement evidence: a top-up must never credit balance
+    the wallet did not actually receive, and PRO is worth its price net of the
+    fee the button is documented to take from the recipient. A payer-side fee
+    only makes the wallet receive more than the floor, never less.
+    """
+    if order["type"] == "balance_topup":
+        return int(order["amount_minor"])
+    price_net = net_after_card_fee(PRO_PRICE_MINOR) if method == "AC" else net_after_wallet_fee(PRO_PRICE_MINOR)
+    return price_net
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: str
@@ -433,10 +459,16 @@ class PaymentStore:
             amount_minor = rubles_to_minor(fields.get("amount", ""))
         except ValueError as exc:
             raise ValueError("invalid_amount") from exc
-        try:
-            withdraw_minor = rubles_to_minor(fields.get("withdraw_amount", ""))
-        except ValueError as exc:
-            raise ValueError("invalid_withdraw_amount") from exc
+        # YooMoney dropped withdraw_amount (and unaccepted) from the notification:
+        # amount is what the provider signs as credited to the wallet. Read the
+        # legacy field when it is still there so an old notification keeps
+        # reconciling, but never require it and never settle on it.
+        legacy_withdraw = fields.get("withdraw_amount", "")
+        if legacy_withdraw:
+            try:
+                rubles_to_minor(legacy_withdraw)
+            except ValueError as exc:
+                raise ValueError("invalid_withdraw_amount") from exc
         notification_type = fields.get("notification_type", "")
         if notification_type not in {"p2p-incoming", "card-incoming"}:
             raise ValueError("invalid_notification_type")
@@ -477,23 +509,19 @@ class PaymentStore:
                     failure_reason = "late_payment"
                 elif fields.get("test_notification", "false").lower() == "true":
                     verdict = "test_notification"
-                elif fields.get("codepro", "").lower() != "false" or fields.get("unaccepted", "").lower() != "false":
+                elif fields.get("codepro", "").lower() == "true" or fields.get("unaccepted", "").lower() == "true":
+                    # Only an explicit flag holds a payment: current notifications
+                    # simply omit both parameters.
                     verdict = "held_or_protected"
                     failure_reason = "payment_not_available"
                 else:
                     method = "PC" if notification_type == "p2p-incoming" else "AC"
-                    expected_withdraw = int(order[f"expected_{method.lower()}_withdraw_minor"])
-                    if withdraw_minor != expected_withdraw:
-                        verdict = "wrong_withdraw_amount"
-                        failure_reason = "amount_mismatch"
-                    elif order["type"] == "balance_topup" and amount_minor < MIN_TOPUP_MINOR:
+                    floor_minor = settlement_floor_minor(order, method)
+                    if order["type"] == "balance_topup" and amount_minor < MIN_TOPUP_MINOR:
                         verdict = "under_minimum"
                         failure_reason = "below_minimum"
-                    elif order["type"] == "balance_topup" and amount_minor != int(order["amount_minor"]):
-                        verdict = "wrong_received_amount"
-                        failure_reason = "amount_mismatch"
-                    elif order["type"] == "pro" and not (0 < amount_minor <= withdraw_minor):
-                        verdict = "invalid_received_amount"
+                    elif amount_minor < floor_minor:
+                        verdict = "under_settlement"
                         failure_reason = "amount_mismatch"
                     else:
                         verdict = "paid"
@@ -506,10 +534,11 @@ class PaymentStore:
             if order is not None and verdict == "paid":
                 paid_at = iso(now)
                 if order["type"] == "balance_topup":
-                    # Use the provider-confirmed incoming amount, never a client value.
+                    # Credit the amount the order sold, never the raw notification
+                    # value: a payer-side fee can make the wallet receive more.
                     db.execute(
                         "UPDATE users SET balance_minor = balance_minor + ? WHERE id = ?",
-                        (amount_minor, order["user_id"]),
+                        (int(order["amount_minor"]), order["user_id"]),
                     )
                 else:
                     user = db.execute("SELECT pro_expires_at FROM users WHERE id = ?", (order["user_id"],)).fetchone()

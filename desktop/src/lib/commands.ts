@@ -10,6 +10,10 @@ export interface SlashCommand {
   name: string;
   description: string;
   argumentHint?: string;
+  /** One compact glyph key from the shared command registry. */
+  icon?: "chat" | "model" | "search" | "settings" | "terminal" | "plugin";
+  /** Optional discoverability shortcut shown in the palette. */
+  shortcut?: string;
   /** Hint shown in the palette for commands that open a panel. */
   group: "chat" | "models" | "workspace" | "system" | "harness";
 }
@@ -53,6 +57,21 @@ export function matchingCommands(input: string): SlashCommand[] {
 export function commandByName(name: string): SlashCommand | undefined {
   const clean = name.startsWith("/") ? name : `/${name}`;
   return COMMANDS.find((c) => c.name === clean);
+}
+
+/** Shared presentation metadata used by the Desktop palette and future adapters. */
+const COMMAND_PRESENTATION: Record<string, { icon: NonNullable<SlashCommand["icon"]>; shortcut?: string }> = {
+  "/new": { icon: "chat", shortcut: "Ctrl+N" },
+  "/settings": { icon: "settings", shortcut: "Ctrl+," },
+  "/model": { icon: "model" },
+  "/models": { icon: "model" },
+  "/search": { icon: "search" },
+  "/tools": { icon: "terminal" },
+  "/plugins": { icon: "plugin" },
+};
+
+export function commandPresentation(command: SlashCommand) {
+  return COMMAND_PRESENTATION[command.name] ?? { icon: command.icon ?? "chat", shortcut: command.shortcut };
 }
 
 /** Split "/search python 3.15" into command name + rest. */

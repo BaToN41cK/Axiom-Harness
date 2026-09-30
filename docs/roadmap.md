@@ -26,7 +26,7 @@ A feature is complete only after implementation, real tests, and updated documen
 |---|---|---|
 | W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
 | W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
-| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 7 partial, 11 TODO |
+| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 6 partial, 11 TODO |
 | W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 12 done, 3 partial, 0 TODO |
 
 ---
@@ -272,13 +272,13 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 **DoD:** Every action works on real history, exports include actual messages/metrics, and E2E covers the new controls.
 ## W3.10 Composer 2.0: @file, Command Palette, History
 
-**Status:** PARTIAL — slash palette and `@file` completion/insertion exist; per-chat drafts and prompt history persist · **Priority:** P2 · **Stage:** 7
+**Status:** DONE — real `@file` chips, removable prompt attachments, and a shared command presentation registry · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** File-aware composition and command discovery are fast and persistent.
 
-**Delivery:** Turn accepted `@file` paths into visible chips; expose one shared command registry with icons, descriptions, and shortcuts. Persist prompt history and per-chat drafts (implemented).
+**Delivery:** Accepted `@file` paths from the real workspace index become visible removable chips; the Desktop command palette uses one metadata registry for icons, descriptions, argument hints, groups, and shortcuts. Prompt history and per-chat drafts remain persisted.
 
-**DoD:** `@file` inserts a real file, only executable commands are shown, and history/drafts survive restart.
+**DoD:** `@file` inserts a real file and is visibly removable without editing raw text, only executable commands are shown, palette metadata is shared by all Desktop command filtering/rendering, and history/drafts survive restart.
 
 ## W3.11 System Tray and Background Notifications
 
@@ -517,6 +517,9 @@ view offers user-confirmed resume for cancelled/failed/`waiting_for_user` tasks
 inactive tasks that returns to the chat. The same view renders per-file diffs from the task snapshot with real +/- counts, colored lines and a 1500-line cap, offers inline accept/reject review through the existing `task_review` once the task completes, and shows the actual per-category context sizes against their budgets (bars with an over-budget highlight) from the new `Task.context_report` field.
 
 **DoD:** UI state matches backend events, long tool output is collapsed safely, diff matches Git/task state, and no completion state appears without a real event.
+**2026-09-29 review hardening:** Central review uses a tested unified-diff parser with old/new line numbers, per-file counts, file/hunk navigation, collapse, copy feedback and Explorer opening. Task rejection validates all targets and post-tool snapshots before restoring text, preserves CRLF/LF, uses unique temp files and reports rollback/recovery state. Legacy tasks lacking snapshots fail closed. Both central view and task card now require explicit restore confirmation, with pending/error feedback and keyboard focus recovery. Review and Explorer share one highlight.js registry with tested language resolution, bounded diff highlighting, safe plain-text fallback and independent old/new tokenization. Review/reject now uses a durable journal with fsync-backed intent/staging, kernel-backed interprocess locking, content+inode fingerprints, no-clobber publication, explicit recovery-required state, restart recovery tests, and a user-facing safe recovery action that lists conflicts without overwriting them. This is crash-aware recovery with conflict preservation, not a transactional filesystem rollback or protection from non-cooperating parent-directory replacement.
+**Directory audit:** New review journals also record parent-directory device/inode/mode and refuse symlinks or Windows reparse points; checks during staging, apply, recovery and cleanup reject a changed parent, and Windows junction plus directory replacement regressions are covered. Existing journals remain readable under their previous guarantees. Identity checks do not eliminate races between a check and a filesystem operation; handle-relative platform-specific operations and Windows power-loss durability are not claimed. No additional roadmap item is marked DONE on the strength of this hardening alone.
+
 ## W4.13 IPC, Streaming, Memory, and Process Performance
 
 **Status:** PARTIAL — streaming, warmup, caches, and output limits exist · **Priority:** P1 · **Phase:** 11

@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type { Task, TaskPlan, TaskPlanStep, TaskState } from "../types";
+import TaskReviewActions from "./TaskReviewActions";
 
 export const STATE_CONFIG: Record<
   TaskState,
@@ -43,11 +44,12 @@ interface TaskCardProps {
   ) => Promise<Task | null>;
   onDelete: (id: string) => Promise<boolean>;
   onReview: (id: string, decision: "accept" | "reject") => Promise<Task | null>;
+  onRecover: (id: string) => Promise<Task | null>;
   onInspect: (id: string) => void;
 }
 
 export function TaskCard(props: TaskCardProps) {
-  const { task, busy, onResume, onCancel, onSave, onDelete, onReview, onInspect } = props;
+  const { task, busy, onResume, onCancel, onSave, onDelete, onReview, onRecover, onInspect } = props;
   const [acknowledged, setAcknowledged] = useState(false);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editStepText, setEditStepText] = useState("");
@@ -432,16 +434,9 @@ export function TaskCard(props: TaskCardProps) {
         ) : task.state === "completed" ? (
           <div className="task-completed-note">
             <CheckCircle2 size={14} className="text-success" />
-            <span>{task.review_status === "pending" ? "Проверка пройдена · результат готов к ревью" : task.review_status === "accepted" ? "Изменения приняты" : "Изменения отклонены"}</span>
-            {task.review_status === "pending" && (
-              <>
-                <button type="button" className="task-btn mini primary" onClick={() => void onReview(task.id, "accept")}>
-                  <Check size={12} /><span>Принять</span>
-                </button>
-                <button type="button" className="task-btn mini danger" onClick={() => void onReview(task.id, "reject")}>
-                  <X size={12} /><span>Отклонить</span>
-                </button>
-              </>
+            <span>{task.review_recovery ? "Ревью требует восстановления" : task.review_status === "pending" ? "Проверка пройдена · результат готов к ревью" : task.review_status === "accepted" ? "Изменения приняты" : "Изменения отклонены"}</span>
+            {(task.review_status === "pending" || task.review_recovery) && (
+              <TaskReviewActions key={task.id} task={task} busy={busy} onReview={onReview} onRecover={onRecover} />
             )}
             <button
               type="button"

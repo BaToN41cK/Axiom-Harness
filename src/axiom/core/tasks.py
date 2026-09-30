@@ -21,6 +21,7 @@ from axiom.core.config import axiom_home
 from axiom.core.context_engine import CompactionState, ContextEngine
 from axiom.core.events import ToolCallEvent, ToolResultEvent
 from axiom.core.planner import Planner, PlanStep, TaskPlan
+from axiom.core.review import durable_write, review_lock, sync_directory
 from axiom.core.trajectory import Trajectory
 
 
@@ -66,6 +67,14 @@ class Task(BaseModel):
     commands: list[dict] = Field(default_factory=list)
     file_baselines: dict[str, str | None] = Field(default_factory=dict)
     unknown_baselines: list[str] = Field(default_factory=list)
+    #: Snapshot captured after the final agent change. Reject uses it to avoid
+    #: overwriting edits made by the user after the task completed.
+    review_baselines: dict[str, str | None] = Field(default_factory=dict)
+    #: Durable reject journal state. A non-empty journal on disk is authoritative;
+    #: this field is a compact UI/restart hint, never the transaction itself.
+    review_recovery: str | None = None
+    review_recovery_detail: str | None = None
+    review_recovery_paths: list[str] = Field(default_factory=list)
     diffs: dict[str, str] = Field(default_factory=dict)
     review_status: Literal["pending", "accepted", "rejected"] = "pending"
     detail: str = ""
@@ -108,20 +117,42 @@ class TaskStore:
     def __init__(self, directory: Path | None = None) -> None:
         self.directory = directory if directory is not None else axiom_home() / "tasks"
 
+    def transaction_path(self, task_id: str) -> Path:
+        self._path(task_id)
+        return self.directory / f"{task_id}.review.json"
+
+    def save_transaction(self, task_id: str, transaction: dict) -> None:
+        path = self.transaction_path(task_id)
+        durable_write(path, json.dumps(transaction, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+
+    def load_transaction(self, task_id: str) -> dict | None:
+        path = self.transaction_path(task_id)
+        if not path.exists():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {"state": "recovery_required", "error": "Review journal is unreadable"}
+        return value if isinstance(value, dict) else {"state": "recovery_required", "error": "Invalid review journal"}
+
+    def remove_transaction(self, task_id: str) -> None:
+        self.transaction_path(task_id).unlink(missing_ok=True)
+        sync_directory(self.directory)
+
     def _path(self, task_id: str) -> Path:
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", task_id):
             raise ValueError("Invalid task id")
         return self.directory / f"{task_id}.json"
 
     def save(self, task: Task) -> None:
-        path = self._path(task.id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
-        try:
-            tmp.write_text(task.model_dump_json(indent=2), encoding="utf-8")
-            tmp.replace(path)
-        finally:
-            tmp.unlink(missing_ok=True)
+        with review_lock(self.directory):
+            if any(self.directory.glob("*.review.json")):
+                raise ValueError("Task has an unfinished review; recover it before changing task state")
+            self.save_review(task)
+
+    def save_review(self, task: Task) -> None:
+        """Commit while the caller holds review_lock; journal survives failed saves."""
+        durable_write(self._path(task.id), task.model_dump_json(indent=2).encode("utf-8"))
 
     def load(self, task_id: str) -> Task | None:
         path = self._path(task_id)
@@ -130,14 +161,23 @@ class TaskStore:
         task = Task.model_validate_json(path.read_text(encoding="utf-8"))
         if task.id != task_id:
             raise ValueError("Stored task id does not match its filename")
+        journal = self.load_transaction(task_id)
+        task.review_recovery = str(journal.get("state", "recovery_required")) if journal is not None else None
+        task.review_recovery_detail = (str(journal.get("error", "")) or None) if journal is not None else None
+        paths = journal.get("conflicts", []) if journal is not None else []
+        task.review_recovery_paths = [str(path) for path in paths] if isinstance(paths, list) else []
         return task
 
     def delete(self, task_id: str) -> bool:
-        path = self._path(task_id)
-        if path.exists():
-            path.unlink(missing_ok=True)
-            return True
-        return False
+        with review_lock(self.directory):
+            if self.transaction_path(task_id).exists():
+                raise ValueError("Cannot delete a task with an unfinished review journal")
+            path = self._path(task_id)
+            if path.exists():
+                path.unlink()
+                sync_directory(self.directory)
+                return True
+            return False
 
     def list(self) -> list[Task]:
         tasks = []
@@ -215,7 +255,16 @@ class TaskRunner:
             if relative in task.file_baselines:
                 continue
             try:
-                task.file_baselines[relative] = path.read_text(encoding="utf-8") if path.is_file() else None
+                if path.is_file():
+                    with path.open(encoding="utf-8", newline="") as stream:
+                        task.file_baselines[relative] = stream.read()
+                    captured = task.file_baselines[relative]
+                    if isinstance(captured, str) and "\x00" in captured:
+                        task.unknown_baselines.append(relative)
+                elif path.exists():
+                    task.unknown_baselines.append(relative)
+                else:
+                    task.file_baselines[relative] = None
             except (OSError, UnicodeError):
                 task.file_baselines[relative] = None
                 task.unknown_baselines.append(relative)
@@ -240,13 +289,22 @@ class TaskRunner:
                 continue
             before = task.file_baselines.get(relative)
             try:
-                after = path.read_text(encoding="utf-8") if path.is_file() else None
-            except (OSError, UnicodeError):
-                after = None
-            if before == after:
-                continue
-            if before is None and after is None:
+                if path.is_file():
+                    with path.open(encoding="utf-8", newline="") as stream:
+                        after = stream.read()
+                elif path.exists():
+                    raise ValueError("Not a regular text file")
+                else:
+                    after = None
+                if after is not None and "\x00" in after:
+                    raise ValueError("Binary content")
+            except (OSError, UnicodeError, ValueError):
+                task.review_baselines.pop(relative, None)
                 task.diffs[relative] = "(File created, deleted or changed as a non-text file.)"
+                continue
+            task.review_baselines[relative] = after
+            if before == after:
+                task.diffs.pop(relative, None)
                 continue
             old_lines = (before or "").splitlines(keepends=True)
             new_lines = (after or "").splitlines(keepends=True)

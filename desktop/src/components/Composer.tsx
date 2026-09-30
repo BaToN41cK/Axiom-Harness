@@ -2,9 +2,10 @@ import type { ReactNode, RefObject } from "react";
 import { useMemo, useEffect, useRef, useState } from "react";
 import { ArrowUp, CornerDownLeft, Globe, Image as ImageIcon, Loader2, Square, X } from "lucide-react";
 import type { AxiomConfig } from "../types";
-import { matchingCommands, type SlashCommand } from "../lib/commands";
+import { commandPresentation, matchingCommands, type SlashCommand } from "../lib/commands";
 import { readPromptHistory, writePromptHistory } from "../lib/composerStorage";
 import { formatCount } from "../lib/format";
+import { extractFileMentions, removeFileMention } from "../lib/composerMentions";
 import Presence from "./Presence";
 
 interface Props {
@@ -91,6 +92,10 @@ export default function Composer(props: Props) {
       .filter((file) => file.toLowerCase().includes(query))
       .slice(0, 12);
   }, [draft, mentionStart, workspaceFiles]);
+
+  // Accepted @file mentions become structured chips. Only paths returned by the
+  // real workspace index are chips; arbitrary @words remain ordinary prompt text.
+  const fileMentions = useMemo(() => extractFileMentions(draft, workspaceFiles), [draft, workspaceFiles]);
 
   useEffect(() => {
     const cursor = composerRef.current?.selectionStart;
@@ -215,6 +220,13 @@ export default function Composer(props: Props) {
     const before = draft.slice(0, mentionStart);
     onDraftChange(`${before}@${file} ${after}`);
     setMentionStart(null);
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  };
+
+  const removeMention = (file: string) => {
+    const item = fileMentions.find((mention) => mention.file === file);
+    if (!item) return;
+    onDraftChange(removeFileMention(draft, item));
     window.setTimeout(() => composerRef.current?.focus(), 0);
   };
 
@@ -357,10 +369,12 @@ export default function Composer(props: Props) {
               onClick={() => acceptCommand(command)}
             >
               <span className="palette-name">
+                <span className={`palette-command-icon icon-${commandPresentation(command).icon}`} aria-hidden="true" />
                 {command.name}
                 {command.argumentHint ? <span className="palette-arg"> {command.argumentHint}</span> : null}
               </span>
               <span className="palette-desc">{command.description}</span>
+              {commandPresentation(command).shortcut && <kbd className="palette-shortcut">{commandPresentation(command).shortcut}</kbd>}
             </button>
           ))}
           <div className="palette-foot">
@@ -371,6 +385,16 @@ export default function Composer(props: Props) {
 
       <div className={"composer" + (images.length > 0 ? " has-attach" : "") + (generating ? " generating" : "")}>
         {notice && <div className="composer-notice">{notice}</div>}
+
+        {fileMentions.length > 0 && (
+          <div className="mention-chip-row" aria-label="Файлы в запросе">
+            {fileMentions.map(({ file }) => (
+              <button key={file} type="button" className="file-chip" onClick={() => removeMention(file)} title={`Убрать @${file}`}>
+                <span>@{file}</span><X size={11} strokeWidth={2.2} />
+              </button>
+            ))}
+          </div>
+        )}
 
         {images.length > 0 && (
           <div className="attach-row inline">

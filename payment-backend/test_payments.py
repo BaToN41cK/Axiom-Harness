@@ -455,7 +455,6 @@ async def test_webhook_diagnostic_log_omits_field_values_and_signature(client, c
     assert diagnostic["required_fields_present"] == {
         "operation_id": True,
         "amount": True,
-        "withdraw_amount": True,
         "notification_type": True,
         "currency": True,
     }
@@ -475,12 +474,14 @@ async def test_wrong_amount_marks_order_failed_and_never_credits(client, setting
     order = (
         await client.post(
             "/v1/payments/topup",
-            json={"type": "balance_topup", "amount_rub": "100"},
+            json={"type": "balance_topup", "amount_rub": "101.00"},
             headers={"authorization": f"Bearer {token}"},
         )
     ).json()["payment"]
     label = await order_label(settings, order["id"])
-    response = await notify(client, payment_fields("wrong-amount", label, amount="101.00"))
+    # A signed amount above the global minimum but below this order's
+    # settlement floor exercises under_settlement: the order fails closed.
+    response = await notify(client, payment_fields("wrong-amount", label, amount="100.50", withdraw="101.51"))
     assert response.status_code == 200
     current = (await client.get(f"/v1/payments/{order['id']}", headers={"authorization": f"Bearer {token}"})).json()[
         "payment"
@@ -489,6 +490,29 @@ async def test_wrong_amount_marks_order_failed_and_never_credits(client, setting
     assert current["status"] == "failed"
     assert current["failure_reason"] == "amount_mismatch"
     assert account["balance_minor"] == 0
+
+
+@pytest.mark.asyncio
+async def test_overpaid_topup_marks_order_paid_for_order_amount(client, settings):
+    token, _ = await register(client)
+    order = (
+        await client.post(
+            "/v1/payments/topup",
+            json={"type": "balance_topup", "amount_rub": "100"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+    ).json()["payment"]
+    label = await order_label(settings, order["id"])
+    # A payer-side fee can make the wallet receive more than the settlement
+    # floor; the backend accepts the payment but credits only the order amount.
+    response = await notify(client, payment_fields("overpaid-amount", label, amount="101.00"))
+    assert response.status_code == 200
+    current = (await client.get(f"/v1/payments/{order['id']}", headers={"authorization": f"Bearer {token}"})).json()[
+        "payment"
+    ]
+    account = (await client.get("/v1/me", headers={"authorization": f"Bearer {token}"})).json()
+    assert current["status"] == "paid"
+    assert account["balance_minor"] == 10_000
 
 
 @pytest.mark.asyncio

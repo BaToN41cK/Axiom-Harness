@@ -41,6 +41,17 @@ const shim = `(() => {
     sessionStorage.setItem('smoke.task', JSON.stringify(task));
     listeners.get('bridge://line')?.({payload:{type:'event',event:{type:'task',kind,task_id:task.id,timestamp:Date.now()/1000,task:structuredClone(task)}}});
   };
+  window.__resetReview = () => { task.review_status='pending'; publish(task.state, 'task.state'); };
+  window.__reviewRecoveryFixture = () => {
+    task.review_status='pending'; task.review_recovery='recovery_required';
+    task.review_recovery_detail='Reject failed; manual recovery required for: src/example.ts: target changed externally';
+    task.review_recovery_paths=['src/example.ts'];
+    publish(task.state, 'task.state');
+  };
+  window.__reviewFixture = () => {
+    task.diffs['src/second.ts'] = ['@@ -1 +1 @@', '-old', '+new', '@@ -9 +9 @@', '-last', '+updated'].join(String.fromCharCode(10));
+    publish(task.state, 'task.state');
+  };
   window.__finishTask = () => {
     task.plan.steps[1].state='completed'; task.plan.steps[1].result='Изменения проверены';
     task.tests=[{ok:true,executed:true,summary:'2 passed'}];
@@ -52,7 +63,7 @@ const shim = `(() => {
       case 'tasks': return task ? [task] : [];
       case 'task_plan': return structuredClone(plan);
       case 'task_launch':
-        task={id:'smoke-task',goal:args.goal,state:'executing',scope:null,plan:structuredClone(args.plan),plan_history:[],
+        task={id:'smoke-task',goal:args.goal,state:'executing',scope:'C:/smoke-project',plan:structuredClone(args.plan),plan_history:[],
           changed_files:['src/example.ts'],errors:[],tests:[],pending_tool:null,active_processes:[],commands:[],
           file_baselines:{},unknown_baselines:[],review_status:'pending',detail:'Выполняется второй шаг',
           diffs:{'src/example.ts':'--- a/src/example.ts\\n+++ b/src/example.ts\\n@@ -1,2 +1,3 @@\\n const a = 1;\\n-const b = 2;\\n+const b = 3;\\n+const c = 4;\\n'},
@@ -65,18 +76,18 @@ const shim = `(() => {
       case 'task_continue': publish('executing','task.resumed'); return structuredClone(task);
       case 'task_delete': task=null; sessionStorage.removeItem('smoke.task'); return {deleted:true};
       case 'task_review': task.review_status = args.decision === 'accept' ? 'accepted' : 'rejected'; publish(task.state,'task.reviewed'); return structuredClone(task);
+      case 'task_recover_review': task.review_recovery=null; task.review_recovery_detail=null; task.review_recovery_paths=[]; publish(task.state,'task.review'); return structuredClone(task);
       case 'health': return { available: true, version: 'test', url: config.ollama_url };
-      case 'payment_wallet': return { balance_minor: 12500, currency: 'RUB', available: false,
-        message: 'Пополнение выполняется на сервере владельца AXIOM.', payment: null };
       case 'get_config': return config;
       case 'set_config': window.__patches.push(args.patch); Object.assign(config, args.patch); return config;
       case 'models': return [model];
       case 'set_model': case 'model_info': return model;
-      case 'workspace_info': return { current: null };
+      case 'workspace_info': return { current: { path: 'C:/smoke-project', name: 'smoke-project', kind: 'node', git: false, branch: null, entries: [] } };
       case 'recent_workspaces': return { recent: [] };
       case 'pinned_workspaces': return { pinned: [] };
       case 'workspace_tree': return { tree: [] };
-      case 'workspace_files': return { files: [] };
+      case 'workspace_file': return { ok: true, content: 'const b = 3;' };
+      case 'workspace_files': return { files: ['src/App.tsx', 'src/main.tsx'] };
       case 'git_panel': return { project: null, status: null, log: null };
       case 'profiles': return { active: '', items: [] };
       case 'trajectory': return { lines: [] };
@@ -107,7 +118,7 @@ const server = createServer(async (req, res) => {
     let body = await readFile(file);
     if (file.endsWith(".html")) body = Buffer.from(body.toString().replace("<head>", `<head><script>${shim}</script>`));
     const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
-    res.writeHead(200, { "content-type": mime[path.extname(file)] || "application/octet-stream" });
+    res.writeHead(200, { "content-type": mime[path.extname(file)] ? `${mime[path.extname(file)]}; charset=utf-8` : "application/octet-stream" });
     res.end(body);
   } catch { res.writeHead(404); res.end(); }
 });
@@ -153,12 +164,17 @@ try {
   await send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/` });
   for (let i = 0; i < 80; i++) { if (await evaluate("!!document.querySelector('.topbar')")) break; await sleep(100); }
   check("app booted with isolated IPC", await evaluate("!!document.querySelector('.topbar')"));
-  check("compact balance pill is always visible", await evaluate("document.querySelector('.balance-pill strong').textContent.includes('125')"));
-  await click('.balance-pill');
-  check("balance opens a compact top-up dialog", await evaluate("document.querySelector('.payment-dialog h2').textContent === 'Пополнение баланса'"));
-  check("top-up stays fail-closed until provider is connected", await evaluate("document.querySelector('.payment-dialog .primary').disabled === true && !!document.querySelector('.payment-unavailable')"));
-  await click('.payment-dialog .icon-btn');
-  check("top-up dialog closes without affecting chat", await evaluate("!document.querySelector('.payment-dialog') && !!document.querySelector('.chat-scroll')"));
+  check("chat is visible after boot", await evaluate("!!document.querySelector('.chat-scroll')"));
+  await evaluate("document.querySelector('.composer textarea').focus()");
+  await send('Input.insertText', { text: '@src/App.tsx' });
+  await sleep(120);
+  check("real @file appears as a removable chip", await evaluate("document.querySelector('.file-chip')?.textContent.includes('src/App.tsx') === true"));
+  await click('.file-chip');
+  check("removing chip removes prompt mention", await evaluate("!document.querySelector('.file-chip') && !document.querySelector('.composer textarea').value.includes('@src/App.tsx')"));
+  await evaluate("document.querySelector('.composer textarea').focus()");
+  await send('Input.insertText', { text: '/' });
+  await sleep(80);
+  check("command palette shows shared shortcut metadata", await evaluate("Array.from(document.querySelectorAll('.palette-shortcut')).some((node) => node.textContent === 'Ctrl+,')"));
   check("boot is silent", await evaluate("window.__audioStarts === 0"));
   await click('.side-action[title^="Настройки"]');
   check("settings has a separate navigation/content grid", await evaluate("getComputedStyle(document.querySelector('.axiom-settings-workspace')).display === 'grid'"));
@@ -282,12 +298,60 @@ try {
   await writeFile(path.join(tmp, 'task-execution.png'), Buffer.from(taskShot.data,'base64'));
   await evaluate('window.__finishTask()'); await sleep(80);
   check('completed result stays in central screen', await evaluate("!!document.querySelector('.task-execution-done') && document.querySelector('.task-execution-title-row strong').textContent==='100%'"));
-  check('changed-file diff is shown with real +/- counts', await evaluate("(() => { const s=document.querySelector('.task-execution-section .task-diff-file summary'); return !!s && s.textContent.includes('src/example.ts') && s.textContent.includes('+2') && s.textContent.includes('−1'); })()"));
+  check('changed-file diff is shown with real +/- counts', await evaluate("(() => { const s=document.querySelector('.diff-files button'); return !!s && s.textContent.includes('src/example.ts') && s.textContent.includes('+2') && s.textContent.includes('−1'); })()"));
+  check('diff uses real old/new line numbers', await evaluate("[...document.querySelectorAll('.diff-line.add .diff-number:last-of-type')].length === 0 && document.querySelector('.diff-line.del .diff-number').textContent === '2' && document.querySelector('.diff-line.add .diff-number:nth-child(2)').textContent === '2'"));
+  check('diff has line-level additions and deletions', await evaluate("document.querySelectorAll('.diff-line.add').length === 2 && document.querySelectorAll('.diff-line.del').length === 1 && document.querySelectorAll('.diff-line.context').length === 1"));
+  check('diff highlights TypeScript tokens without changing source', await evaluate("document.querySelector('.diff-line.add .hljs-keyword')?.textContent === 'const' && document.querySelector('.diff-line.add code').textContent === 'const b = 3;'"));
+  check('syntax tokens do not replace green/red row semantics', await evaluate("getComputedStyle(document.querySelector('.diff-line.add')).backgroundColor !== getComputedStyle(document.querySelector('.diff-line.del')).backgroundColor && document.querySelector('.diff-line.add .diff-sign').textContent === '+'"));
+  await click('.diff-hunk summary');
+  check('diff hunk collapses', await evaluate("!document.querySelector('.diff-hunk').open"));
+  await click('.diff-hunk summary');
+  check('diff preserves indentation without wrapping', await evaluate("getComputedStyle(document.querySelector('.diff-line code')).whiteSpace === 'pre'"));
+  await evaluate("Object.defineProperty(navigator, 'clipboard', {configurable:true,value:{writeText:async(text)=>{window.__copiedDiff=text;}}})");
+  await click('.diff-file button[aria-label="Скопировать diff"]');
+  check('copy uses original diff and reports success', await evaluate("window.__copiedDiff.includes('@@ -1,2 +1,3 @@') && document.querySelector('.diff-feedback').textContent.includes('скопирован')"));
+  await click('.diff-file button[aria-label^="Открыть"]');
+  check('review opens real workspace file and selects Explorer', await evaluate("window.__calls.some(c=>c.cmd==='workspace_file' && c.args.path==='src/example.ts') && !!document.querySelector('.explorer') && document.querySelector('.side-tabs button:first-child').classList.contains('active')"));
+  check('Explorer retains shared TypeScript highlighting', await evaluate("document.querySelector('.ex-file .hljs-keyword')?.textContent === 'const'"));
+  await click('.side-tabs button:last-child');
+  check('fixture Cyrillic remains readable', await evaluate("document.querySelector('.task-execution-title-row p').textContent === 'Выполняется второй шаг'"));
+  await evaluate("document.querySelector('.diff-scroll').scrollIntoView({block:'center'})");
+  const diffShot = await send('Page.captureScreenshot');
+  await writeFile(path.join(tmp, 'diff-review.png'), Buffer.from(diffShot.data,'base64'));
+  await evaluate('window.__reviewFixture()'); await sleep(100);
+  await click('.diff-review button[aria-label="Следующий файл"]');
+  check('changed-file navigation selects only one file', await evaluate("document.querySelector('.diff-files [aria-current]').textContent.includes('second.ts') && document.querySelectorAll('.diff-file').length === 1"));
+  await click('.diff-review button[aria-label="Следующий фрагмент"]');
+  check('hunk navigation transfers keyboard focus', await evaluate("document.activeElement.matches('.diff-hunk summary') && document.activeElement.textContent.includes('-9 +9')"));
+  await evaluate("Object.defineProperty(navigator, 'clipboard', {configurable:true,value:{writeText:async()=>{throw Error('denied');}}})");
+  await click('.diff-file button[aria-label="Скопировать diff"]');
+  check('clipboard refusal has visible feedback', await evaluate("document.querySelector('.diff-feedback').textContent.includes('Не удалось')"));
+  for (const width of [800, 600]) {
+    await send('Emulation.setDeviceMetricsOverride', {width, height:700, deviceScaleFactor:1, mobile:false});
+    await sleep(350);
+    check(`diff stays inside ${width}px workspace`, await evaluate("(() => {const r=document.querySelector('.diff-review').getBoundingClientRect(); const p=document.querySelector('.task-execution-scroll'); return r.right<=innerWidth && p.scrollWidth<=p.clientWidth+1;})()"));
+  }
+  await send('Emulation.setDeviceMetricsOverride', {width:1400, height:900, deviceScaleFactor:1, mobile:false});
   check('context category budgets are shown', await evaluate("document.querySelectorAll('.task-execution-budget').length >= 4 && document.querySelector('.task-execution-budget-num').textContent.includes('/')"));
   check('completed diff offers review actions', await evaluate("!!document.querySelector('.task-execution-review .primary') && !!document.querySelector('.task-execution-review .danger')"));
+  await click('.task-execution-review .danger');
+  check('reject explains destructive restore before IPC', await evaluate("!!document.querySelector('.task-review-confirm') && document.querySelector('.task-review-confirm').textContent.includes('восстановит') && !window.__calls.some(c=>c.cmd==='task_review' && c.args.decision==='reject')"));
+  await click('.task-review-confirm .ghost');
+  check('reject confirmation can be cancelled', await evaluate("!document.querySelector('.task-review-confirm')"));
+  check('cancel restores keyboard focus', await evaluate("document.activeElement.matches('.task-execution-review .danger')"));
   await click('.task-execution-review .primary');
   check('review uses existing task_review with same id', await evaluate("window.__calls.some(c=>c.cmd==='task_review' && c.args.id==='smoke-task' && c.args.decision==='accept')"));
   check('accepted review is reflected in the central screen', await evaluate("!!document.querySelector('.task-execution-review-state.accepted') && document.querySelector('.task-execution-done').textContent.includes('приняты')"));
+  await evaluate('window.__resetReview()'); await sleep(100);
+  await click('.task-card .task-review-actions > .danger');
+  check('task card also requires explicit restore confirmation', await evaluate("!!document.querySelector('.task-card .task-review-confirm') && !window.__calls.some(c=>c.cmd==='task_review' && c.args.decision==='reject')"));
+  await click('.task-card .task-review-confirm .danger');
+  check('confirmed reject uses existing IPC and settles review state', await evaluate("window.__calls.filter(c=>c.cmd==='task_review' && c.args.decision==='reject').length === 1 && !!document.querySelector('.task-execution-review-state.rejected')"));
+  await evaluate('window.__reviewRecoveryFixture()'); await sleep(100);
+  check('recovery lists conflicting path and hides review decisions', await evaluate("!!document.querySelector('.task-execution-review .task-review-recovery code') && document.querySelector('.task-execution-review .task-review-recovery code').textContent==='src/example.ts' && !document.querySelector('.task-execution-review .primary') && document.querySelector('.task-execution-done').textContent.includes('восстановления')"));
+  check('task card displays same recovery warning', await evaluate("!!document.querySelector('.task-card .task-review-recovery') && document.querySelector('.task-card .task-review-recovery').textContent.includes('target changed externally')"));
+  await click('.task-execution-review .task-review-recovery button'); await sleep(100);
+  check('safe recovery uses dedicated IPC and restores pending review', await evaluate("window.__calls.some(c=>c.cmd==='task_recover_review' && c.args.id==='smoke-task') && !!document.querySelector('.task-execution-review .primary') && !document.querySelector('.task-review-recovery')"));
   await click('.task-execution-back');
   check('return to chat is available', await evaluate("!document.querySelector('.task-execution') && !!document.querySelector('.chat-scroll')"));
   await click('.task-summary');

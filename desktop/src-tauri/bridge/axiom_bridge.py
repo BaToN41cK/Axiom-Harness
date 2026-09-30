@@ -442,6 +442,9 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
     if cmd == "task_review":
         task = session.task_review(str(args.get("id") or ""), str(args.get("decision") or ""))
         return task.model_dump(mode="json")
+    if cmd == "task_recover_review":
+        task = session.task_recover_review(str(args.get("id") or ""))
+        return task.model_dump(mode="json")
     if cmd == "task_cancel":
         return {"cancelled": session.task_cancel(str(args.get("id") or ""))}
     if cmd == "task_state":
