@@ -4,6 +4,7 @@ import sqlite3
 from datetime import timedelta
 from urllib.parse import urlencode
 
+import axiom_payments
 import httpx
 import pytest
 from axiom_payments import (
@@ -12,12 +13,14 @@ from axiom_payments import (
     gross_up_for_card,
     gross_up_for_wallet,
     iso,
+    load_yoomoney_notification_secret,
     notification_signature,
     utc_now,
 )
 from main import create_app
 
 SECRET = "test-notification-secret-do-not-use-in-production"
+FILE_SECRET = "synthetic-render-secret-for-tests"
 
 
 @pytest.fixture
@@ -81,6 +84,89 @@ def payment_fields(operation_id, label, *, notification_type="p2p-incoming", amo
         "test_notification": "false",
         "unaccepted": "false",
     }
+
+
+def test_notification_secret_loads_from_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("YOOMONEY_NOTIFICATION_SECRET", "  environment-secret  ")
+    monkeypatch.setattr(axiom_payments, "YOOMONEY_NOTIFICATION_SECRET_FILE", tmp_path / "missing-secret")
+
+    assert load_yoomoney_notification_secret() == "environment-secret"
+
+
+def test_notification_secret_loads_from_render_secret_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("YOOMONEY_NOTIFICATION_SECRET", " \t ")
+    secret_file = tmp_path / "YOOMONEY_NOTIFICATION_SECRET"
+    secret_file.write_text(f"  {FILE_SECRET}\n", encoding="utf-8")
+    monkeypatch.setattr(axiom_payments, "YOOMONEY_NOTIFICATION_SECRET_FILE", secret_file)
+
+    assert load_yoomoney_notification_secret() == FILE_SECRET
+
+
+def test_notification_environment_secret_takes_priority_over_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("YOOMONEY_NOTIFICATION_SECRET", "environment-secret")
+    secret_file = tmp_path / "YOOMONEY_NOTIFICATION_SECRET"
+    secret_file.write_text(FILE_SECRET, encoding="utf-8")
+    monkeypatch.setattr(axiom_payments, "YOOMONEY_NOTIFICATION_SECRET_FILE", secret_file)
+
+    assert load_yoomoney_notification_secret() == "environment-secret"
+
+
+def test_missing_notification_secret_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.delenv("YOOMONEY_NOTIFICATION_SECRET", raising=False)
+    monkeypatch.setattr(axiom_payments, "YOOMONEY_NOTIFICATION_SECRET_FILE", tmp_path / "missing-secret")
+
+    assert load_yoomoney_notification_secret() == ""
+
+
+def configure_render_payment_environment(monkeypatch, tmp_path):
+    monkeypatch.delenv("YOOMONEY_NOTIFICATION_SECRET", raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("PAYMENT_DATABASE_PATH", str(tmp_path / "render-payments.sqlite3"))
+    monkeypatch.setenv("YOOMONEY_WALLET_ID", "4100118808592904")
+    monkeypatch.setenv("PAYMENT_BACKEND_URL", "https://payments.example.test")
+    monkeypatch.setenv("YOOMONEY_COMMERCIAL_USE_APPROVED", "true")
+    monkeypatch.setattr(
+        axiom_payments,
+        "YOOMONEY_NOTIFICATION_SECRET_FILE",
+        tmp_path / "YOOMONEY_NOTIFICATION_SECRET",
+    )
+    axiom_payments.YOOMONEY_NOTIFICATION_SECRET_FILE.write_text(FILE_SECRET, encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_healthz_detects_render_secret_file_without_disclosing_it(monkeypatch, tmp_path):
+    configure_render_payment_environment(monkeypatch, tmp_path)
+    app = create_app(Settings.from_env())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as render_client:
+        response = await render_client.get("/healthz")
+
+    diagnostics = response.json()["diagnostics"]
+    assert response.status_code == 200
+    assert diagnostics["yoomoney_notification_secret_present"] is True
+    assert "yoomoney_notification_secret_length" not in diagnostics
+    assert diagnostics["environment_config_mode"] == "render/payments-enabled"
+    assert FILE_SECRET not in response.text
+
+
+@pytest.mark.asyncio
+async def test_yoomoney_webhook_uses_render_secret_file(monkeypatch, tmp_path):
+    configure_render_payment_environment(monkeypatch, tmp_path)
+    app = create_app(Settings.from_env())
+    fields = payment_fields("render-secret-operation", "AX1-unmatched-label")
+    fields["sign"] = notification_signature(fields, FILE_SECRET)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://testserver"
+    ) as render_client:
+        response = await render_client.post(
+            "/v1/webhooks/yoomoney",
+            content=urlencode(fields),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "unknown_order"
 
 
 @pytest.mark.parametrize(("credit", "wallet_sum", "card_sum"), [(10_000, 10_100, 10_309), (25_000, 25_250, 25_773)])

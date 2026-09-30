@@ -26,6 +26,19 @@ MAX_TOPUP_MINOR = 10_000_000
 TOKEN_TTL_DAYS = 30
 ORDER_TTL_HOURS = 24
 PASSWORD_ITERATIONS = 310_000
+YOOMONEY_NOTIFICATION_SECRET_FILE = Path("/etc/secrets/YOOMONEY_NOTIFICATION_SECRET")
+
+
+def load_yoomoney_notification_secret() -> str:
+    """Load the notification secret from the environment or a Render Secret File."""
+    env_value = os.getenv("YOOMONEY_NOTIFICATION_SECRET", "").strip()
+    if env_value:
+        return env_value
+
+    try:
+        return YOOMONEY_NOTIFICATION_SECRET_FILE.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return ""
 
 
 def utc_now() -> datetime:
@@ -103,7 +116,7 @@ class Settings:
         return cls(
             database_path=os.getenv("PAYMENT_DATABASE_PATH", "./data/axiom-payments.sqlite3"),
             wallet_id=os.getenv("YOOMONEY_WALLET_ID", ""),
-            notification_secret=os.getenv("YOOMONEY_NOTIFICATION_SECRET", ""),
+            notification_secret=load_yoomoney_notification_secret(),
             public_url=os.getenv("PAYMENT_BACKEND_URL", "").rstrip("/"),
             commercial_use_approved=os.getenv("YOOMONEY_COMMERCIAL_USE_APPROVED", "false").lower() == "true",
             allowed_origins=origins,

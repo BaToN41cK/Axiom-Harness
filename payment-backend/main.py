@@ -70,7 +70,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "diagnostics": {
                 "yoomoney_notification_secret_present": bool(settings.notification_secret),
-                "yoomoney_notification_secret_length": len(settings.notification_secret),
                 "yoomoney_wallet_id_present": bool(settings.wallet_id),
                 "payment_backend_url_present": bool(settings.public_url),
                 "environment_config_mode": f"{environment}/{payment_mode}",

@@ -48,12 +48,12 @@ New desktop accounts use a username and password because AXIOM currently has no 
 
 ## Environment configuration
 
-Set these in the hosting platform's secret/environment settings. Do not commit actual values or create a production `.env` file.
+Set these in the hosting platform's secret/environment settings. The backend reads `YOOMONEY_NOTIFICATION_SECRET` from the environment first, then falls back to the Render Secret File at `/etc/secrets/YOOMONEY_NOTIFICATION_SECRET`. Do not commit actual values or create a production `.env` file.
 
 | Variable | Value / purpose |
 | --- | --- |
 | `YOOMONEY_WALLET_ID` | Public receiving wallet ID, `4100118808592904` |
-| `YOOMONEY_NOTIFICATION_SECRET` | Secret generated in the wallet's HTTP-notification settings; never place in AXIOM desktop builds |
+| `YOOMONEY_NOTIFICATION_SECRET` | Secret generated in the wallet's HTTP-notification settings; read from the environment or Render Secret File; never place in AXIOM desktop builds |
 | `PAYMENT_BACKEND_URL` | Public HTTPS base URL of this service, e.g. `https://axiom-payments.onrender.com` |
 | `PAYMENT_DATABASE_PATH` | Persistent path, e.g. `/var/data/axiom-payments.sqlite3` |
 | `YOOMONEY_COMMERCIAL_USE_APPROVED` | Defaults to `false`; keep false unless YooMoney confirms this use is permitted for this wallet |
@@ -77,7 +77,7 @@ Render documents Python FastAPI web services and persistent disks. Free web serv
 3. Set **Build Command** to `pip install -r requirements.txt`.
 4. Set **Start Command** to `uvicorn main:app --host 0.0.0.0 --port $PORT`.
 5. Select a paid web-service plan with one service instance. Under **Advanced → Disk**, add a 1 GB persistent disk mounted at `/var/data`.
-6. Add the variables above in the service's **Environment** page. Set `PAYMENT_DATABASE_PATH=/var/data/axiom-payments.sqlite3`, `PAYMENT_BACKEND_URL` to the service's HTTPS URL, and keep `YOOMONEY_COMMERCIAL_USE_APPROVED=false` until the provider-use restriction is resolved.
+6. Add the configuration above in the service settings. Set `PAYMENT_DATABASE_PATH=/var/data/axiom-payments.sqlite3`, `PAYMENT_BACKEND_URL` to the service's HTTPS URL, and keep `YOOMONEY_COMMERCIAL_USE_APPROVED=false` until the provider-use restriction is resolved. Store the notification secret as an Environment variable or as a Secret File named `YOOMONEY_NOTIFICATION_SECRET`.
 7. Deploy and confirm `https://<service>.onrender.com/healthz` returns `{"status":"ok"}`.
 8. Build AXIOM with `VITE_PAYMENT_BACKEND_URL` set to the same public URL.
 
@@ -86,7 +86,7 @@ Render references: [FastAPI deployment](https://render.com/docs/deploy-fastapi),
 ## YooMoney setup (only after provider terms allow it)
 
 1. In the wallet's **HTTP notifications** settings, set the callback URL to `https://<service>/v1/webhooks/yoomoney`.
-2. Generate/copy the notification secret there and set it as `YOOMONEY_NOTIFICATION_SECRET` in Render. Never send it to AXIOM or commit it.
+2. Generate/copy the notification secret there and store it in Render as a Secret File named `YOOMONEY_NOTIFICATION_SECRET` (mounted at `/etc/secrets/YOOMONEY_NOTIFICATION_SECRET`) or as the `YOOMONEY_NOTIFICATION_SECRET` environment variable. Never send it to AXIOM or commit it.
 3. Use YooMoney's **Test** notification button. The service will accept a correctly signed test event but will not mark an order paid.
 4. Enable notifications and confirm Render receives a valid HTTPS callback. YooMoney documents retries if the endpoint does not return HTTP 200.
 5. Do not set `YOOMONEY_COMMERCIAL_USE_APPROVED=true` while relying only on the personal wallet under the currently published restriction.
