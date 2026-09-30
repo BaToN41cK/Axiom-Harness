@@ -1,4 +1,5 @@
 import html
+import os
 import time
 from collections import defaultdict, deque
 from typing import Annotated
@@ -62,8 +63,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         bucket.append(now)
 
     @app.get("/healthz")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, object]:
+        environment = "render" if os.getenv("RENDER", "").lower() == "true" else "local"
+        payment_mode = "payments-enabled" if settings.payments_enabled else "payments-disabled"
+        return {
+            "status": "ok",
+            "diagnostics": {
+                "yoomoney_notification_secret_present": bool(settings.notification_secret),
+                "yoomoney_notification_secret_length": len(settings.notification_secret),
+                "yoomoney_wallet_id_present": bool(settings.wallet_id),
+                "payment_backend_url_present": bool(settings.public_url),
+                "environment_config_mode": f"{environment}/{payment_mode}",
+            },
+        }
 
     @app.post("/v1/auth/register")
     def register(body: AuthRequest, request: Request) -> dict:
