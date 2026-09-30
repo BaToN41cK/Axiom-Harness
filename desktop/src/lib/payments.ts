@@ -64,8 +64,12 @@ async function api<T>(path: string, options: { token?: string | null; body?: unk
 }
 
 export const payments = {
+  providers: () => api<{ github: boolean; google: boolean }>("/v1/auth/providers"),
   register: (username: string, password: string) => api<{ access_token: string; account: Account }>("/v1/auth/register", { body: { username, password } }),
   login: (username: string, password: string) => api<{ access_token: string; account: Account }>("/v1/auth/login", { body: { username, password } }),
+  oauthStart: (provider: "github" | "google") => api<{ authorization_url: string; poll_token: string }>("/v1/auth/oauth/start", { body: { provider } }),
+  oauthStatus: (pollToken: string) => api<{ status: "pending" | "success" | "error"; code: string | null; error: string | null }>("/v1/auth/oauth/status", { body: { poll_token: pollToken } }),
+  oauthRedeem: (code: string) => api<{ access_token: string; account: Account }>("/v1/auth/oauth/redeem", { body: { code } }),
   account: (token: string) => api<Account>("/v1/me", { token }),
   logout: (token: string) => api<void>("/v1/auth/logout", { token, body: {} }),
   topup: (token: string, amountRub: string) => api<{ payment: Payment }>("/v1/payments/topup", { token, body: { type: "balance_topup", amount_rub: amountRub } }),

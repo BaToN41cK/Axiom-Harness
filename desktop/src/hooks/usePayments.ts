@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { openExternal } from "../bridge";
 import { payments, paymentToken } from "../lib/payments";
 import type { Account, Payment } from "../lib/payments";
 
@@ -11,6 +12,9 @@ export function usePayments() {
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
   const mounted = useRef(false);
+  const oauthGeneration = useRef(0);
+  const [oauthPending, setOauthPending] = useState(false);
+  const [providers, setProviders] = useState({ github: false, google: false });
 
   const refresh = useCallback(async () => {
     const token = paymentToken.get();
@@ -35,7 +39,8 @@ export function usePayments() {
   useEffect(() => {
     mounted.current = true;
     void refresh();
-    return () => { mounted.current = false; };
+    void payments.providers().then((value) => { if (mounted.current) setProviders(value); }).catch(() => undefined);
+    return () => { mounted.current = false; oauthGeneration.current += 1; };
   }, [refresh]);
 
   const authenticate = useCallback(async (username: string, password: string, create: boolean) => {
@@ -55,6 +60,57 @@ export function usePayments() {
     } catch (e) {
       if (mounted.current) setError(message(e));
     } finally { lock.current = false; if (mounted.current) setBusy(false); }
+  }, []);
+
+  const authenticateWithProvider = useCallback(async (provider: "github" | "google") => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError(null);
+    const generation = ++oauthGeneration.current;
+    const cancelled = () => !mounted.current || generation !== oauthGeneration.current;
+    setOauthPending(true);
+    try {
+      const start = await payments.oauthStart(provider);
+      if (cancelled()) return;
+      if (!start.authorization_url.startsWith("https://") || !start.poll_token) throw new Error("Некорректная OAuth-ссылка.");
+      await openExternal(start.authorization_url);
+      const deadline = Date.now() + 600_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        if (cancelled()) return;
+        const status = await payments.oauthStatus(start.poll_token);
+        if (cancelled()) return;
+        if (status.status === "error") throw new Error("Вход через провайдера не выполнен. Вернитесь в AXIOM и попробуйте ещё раз.");
+        if (status.status !== "success" || !status.code) continue;
+        const result = await payments.oauthRedeem(status.code);
+        if (cancelled()) {
+          void payments.logout(result.access_token).catch(() => undefined);
+          return;
+        }
+        paymentToken.set(result.access_token);
+        if (mounted.current) {
+          setAccount(result.account);
+          setPayment(result.account.latest_payment);
+        }
+        return;
+      }
+      throw new Error("Время ожидания входа истекло. Запустите вход ещё раз.");
+    } catch (e) {
+      if (!cancelled()) setError(message(e));
+    } finally {
+      if (generation === oauthGeneration.current) {
+        lock.current = false;
+        if (mounted.current) { setBusy(false); setOauthPending(false); }
+      }
+    }
+  }, []);
+
+  const cancelOAuth = useCallback(() => {
+    oauthGeneration.current += 1;
+    lock.current = false;
+    setOauthPending(false);
+    setBusy(false);
   }, []);
 
   const createPayment = useCallback(async (operation: () => Promise<{ payment: Payment }>) => {
@@ -121,7 +177,8 @@ export function usePayments() {
   }, []);
 
   return {
-    account, payment, error, busy, active, refresh, authenticate, signOut,
+    account, payment, error, busy, active, refresh, authenticate, authenticateWithProvider, signOut,
+    providers, oauthPending, cancelOAuth,
     createTopup: (amountRub: string) => createPayment(() => payments.topup(paymentToken.get() || "", amountRub)),
     buyPro: () => createPayment(() => payments.buyPro(paymentToken.get() || "")),
     buyProFromBalance,

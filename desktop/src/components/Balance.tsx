@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Check, Crown, ExternalLink, Loader2, Plus, Wallet, X } from "lucide-react";
+import { Check, Crown, ExternalLink, Github, Loader2, Plus, Wallet, X } from "lucide-react";
 import { openExternal } from "../bridge";
 import Presence from "./Presence";
 import { usePayments } from "../hooks/usePayments";
@@ -110,6 +110,15 @@ export default function Balance() {
             <button className="payment-text-button" onClick={() => setCreateAccount(!createAccount)}>
               {createAccount ? "Уже есть аккаунт? Войти" : "Создать аккаунт AXIOM"}
             </button>
+            <div className="payment-auth-divider"><span>или продолжить через</span></div>
+            <div className="payment-oauth-buttons">
+              <button className="btn payment-oauth" disabled={s.busy || !s.providers.github} onClick={() => void s.authenticateWithProvider("github")}><Github size={15} /> GitHub</button>
+              <button className="btn payment-oauth" disabled={s.busy || !s.providers.google} onClick={() => void s.authenticateWithProvider("google")}><strong className="google-mark">G</strong> Google</button>
+            </div>
+            {(!s.providers.github || !s.providers.google) && <p className="payment-note">Недоступные способы входа ещё не настроены на сервере.</p>}
+            {s.oauthPending && <div role="status" className="payment-note">Завершите вход в открытом браузере. Не переходите по ссылкам входа от других людей.
+              <button className="payment-text-button" onClick={s.cancelOAuth}>Отменить ожидание</button>
+            </div>}
           </div> : <div className="modal-body">
             <div className="payment-balance">
               <span>Внутренние AXIOM USD-кредиты</span><strong>{balanceLabel}</strong>

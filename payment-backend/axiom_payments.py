@@ -142,6 +142,13 @@ class Settings:
     public_url: str
     commercial_use_approved: bool
     allowed_origins: tuple[str, ...]
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    oauth_redirect_base: str = ""
+    github_redirect_uri: str = ""
+    google_redirect_uri: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -162,6 +169,13 @@ class Settings:
             public_url=os.getenv("PAYMENT_BACKEND_URL", "").rstrip("/"),
             commercial_use_approved=os.getenv("YOOMONEY_COMMERCIAL_USE_APPROVED", "false").lower() == "true",
             allowed_origins=origins,
+            github_client_id=os.getenv("GITHUB_CLIENT_ID", "").strip(),
+            github_client_secret=os.getenv("GITHUB_CLIENT_SECRET", "").strip(),
+            google_client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
+            google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
+            oauth_redirect_base=os.getenv("OAUTH_REDIRECT_BASE", "").strip().rstrip("/"),
+            github_redirect_uri=os.getenv("GITHUB_REDIRECT_URI", "").strip(),
+            google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", "").strip(),
         )
 
     @property
@@ -183,6 +197,21 @@ class Settings:
         if not self.wallet_id.isdigit() or not self.notification_secret or not self.public_url.startswith("https://"):
             return "Оплата ещё не настроена на сервере."
         return "Оплата доступна."
+
+
+    def oauth_client(self, provider: str) -> tuple[str, str] | None:
+        if provider == "github" and self.github_client_id and self.github_client_secret:
+            return self.github_client_id, self.github_client_secret
+        if provider == "google" and self.google_client_id and self.google_client_secret:
+            return self.google_client_id, self.google_client_secret
+        return None
+
+    def oauth_redirect_uri(self, provider: str) -> str:
+        configured = self.github_redirect_uri if provider == "github" else self.google_redirect_uri
+        if configured:
+            return configured
+        base = (self.oauth_redirect_base or self.public_url).rstrip("/")
+        return f"{base}/v1/auth/oauth/{provider}/callback"
 
 
 class PaymentStore:
@@ -226,6 +255,35 @@ class PaymentStore:
                     expires_at TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS oauth_identities (
+                    provider TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    email TEXT,
+                    display_name TEXT,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, subject),
+                    UNIQUE (provider, user_id)
+                );
+                CREATE TABLE IF NOT EXISTS oauth_flows (
+                    state_hash TEXT PRIMARY KEY,
+                    poll_hash TEXT NOT NULL UNIQUE,
+                    provider TEXT NOT NULL,
+                    redirect_uri TEXT NOT NULL,
+                    verifier TEXT NOT NULL,
+                    browser_hash TEXT,
+                    status TEXT NOT NULL DEFAULT 'new',
+                    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    error TEXT,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oauth_codes (
+                    code_hash TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS payment_orders (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id),
@@ -256,6 +314,9 @@ class PaymentStore:
                 """
             )
             columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+            flow_columns = {row["name"] for row in db.execute("PRAGMA table_info(oauth_flows)")}
+            if "browser_hash" not in flow_columns:
+                db.execute("ALTER TABLE oauth_flows ADD COLUMN browser_hash TEXT")
             if "pro_activated_at" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN pro_activated_at TEXT")
             accounting = db.execute(
@@ -310,6 +371,209 @@ class PaymentStore:
             (self._token_hash(token), user_id, iso(now + timedelta(days=TOKEN_TTL_DAYS)), iso(now)),
         )
         return token
+
+    @staticmethod
+    def _unusable_password() -> str:
+        return "oauth_only$" + secrets.token_urlsafe(32)
+
+    @staticmethod
+    def _oauth_hash(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def create_oauth_flow(self, provider: str, redirect_uri: str) -> tuple[str, str, str]:
+        if provider not in {"github", "google"}:
+            raise ValueError("invalid_provider")
+        state = secrets.token_urlsafe(32)
+        poll_token = secrets.token_urlsafe(32)
+        verifier = secrets.token_urlsafe(48)
+        now = utc_now()
+        with closing(self._connect()) as db:
+            db.execute("DELETE FROM oauth_flows WHERE expires_at <= ?", (iso(now),))
+            db.execute("DELETE FROM oauth_codes WHERE expires_at <= ?", (iso(now),))
+            db.execute(
+                "INSERT INTO oauth_flows(state_hash, poll_hash, provider, redirect_uri, verifier, expires_at, "
+                "created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    self._oauth_hash(state),
+                    self._oauth_hash(poll_token),
+                    provider,
+                    redirect_uri,
+                    verifier,
+                    iso(now + timedelta(minutes=10)),
+                    iso(now),
+                ),
+            )
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+        )
+        return state, poll_token, challenge
+
+    def begin_oauth(self, state: str, provider: str, browser_token: str) -> dict | None:
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM oauth_flows WHERE state_hash = ? AND provider = ? AND status = 'new' AND expires_at > ?",
+                (self._oauth_hash(state), provider, iso(utc_now())),
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute(
+                "UPDATE oauth_flows SET browser_hash = ?, status = 'authorizing' WHERE state_hash = ?",
+                (self._oauth_hash(browser_token), row["state_hash"]),
+            )
+            db.commit()
+            return dict(row)
+
+    def consume_oauth_state(self, state: str, provider: str, browser_token: str = "") -> dict | None:
+        if not state or len(state) > 256 or provider not in {"github", "google"}:
+            return None
+        now = utc_now()
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM oauth_flows WHERE state_hash = ? AND provider = ?",
+                (self._oauth_hash(state), provider),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] != "authorizing"
+                or not browser_token
+                or not row["browser_hash"]
+                or not hmac.compare_digest(row["browser_hash"], self._oauth_hash(browser_token))
+                or datetime.fromisoformat(row["expires_at"]) <= now
+            ):
+                if row is not None and datetime.fromisoformat(row["expires_at"]) <= now:
+                    db.execute(
+                        "UPDATE oauth_flows SET status = 'error', error = 'oauth_state_expired' WHERE state_hash = ?",
+                        (self._oauth_hash(state),),
+                    )
+                db.commit()
+                return None
+            db.execute(
+                "UPDATE oauth_flows SET status = 'processing', browser_hash = NULL WHERE state_hash = ?",
+                (self._oauth_hash(state),),
+            )
+            db.commit()
+            return dict(row)
+
+    def finish_oauth(self, state: str, user_id: str | None = None, error: str | None = None) -> None:
+        with closing(self._connect()) as db:
+            db.execute(
+                "UPDATE oauth_flows SET status = ?, user_id = ?, error = ? "
+                "WHERE state_hash = ? AND status = 'processing'",
+                ("success" if user_id else "error", user_id, error, self._oauth_hash(state)),
+            )
+
+    def oauth_status(self, poll_token: str) -> tuple[str, str | None] | None:
+        if not poll_token or len(poll_token) > 256:
+            return None
+        now = utc_now()
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state_hash, user_id, error, status, expires_at FROM oauth_flows WHERE poll_hash = ?",
+                (self._oauth_hash(poll_token),),
+            ).fetchone()
+            if row is None:
+                db.commit()
+                return None
+            if datetime.fromisoformat(row["expires_at"]) <= now:
+                db.execute(
+                    "UPDATE oauth_flows SET status = 'delivered', error = 'oauth_result_expired' WHERE state_hash = ?",
+                    (row["state_hash"],),
+                )
+                db.commit()
+                return ("error", "oauth_result_expired")
+            if row["status"] == "error":
+                db.execute("UPDATE oauth_flows SET status = 'delivered' WHERE state_hash = ?", (row["state_hash"],))
+                db.commit()
+                return ("error", str(row["error"] or "oauth_login_failed"))
+            if row["status"] != "success":
+                db.commit()
+                return ("error", "oauth_already_used") if row["status"] == "delivered" else ("pending", None)
+            oauth_code = secrets.token_urlsafe(32)
+            db.execute(
+                "INSERT INTO oauth_codes(code_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (self._oauth_hash(oauth_code), str(row["user_id"]), iso(now + timedelta(minutes=2)), iso(now)),
+            )
+            db.execute("UPDATE oauth_flows SET status = 'delivered' WHERE state_hash = ?", (row["state_hash"],))
+            db.commit()
+            return ("success", oauth_code)
+
+    def oauth_login(
+        self, provider: str, subject: str, username: str, email: str | None, display_name: str | None
+    ) -> str:
+        if provider not in {"github", "google"} or not subject or len(subject) > 256:
+            raise ValueError("invalid_oauth_identity")
+        clean_username = "".join(
+            char for char in username.strip() if char in string.ascii_letters + string.digits + "._-"
+        )
+        clean_username = clean_username[:40] or f"{provider}-user"
+        now = iso(utc_now())
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            identity = db.execute(
+                "SELECT user_id FROM oauth_identities WHERE provider = ? AND subject = ?",
+                (provider, subject),
+            ).fetchone()
+            if identity is None:
+                base = clean_username
+                user_id = ""
+                for suffix in range(1000):
+                    candidate = base if suffix == 0 else f"{base[: (47 - len(str(suffix)))]}-{suffix}"
+                    try:
+                        user_id = str(uuid.uuid4())
+                        db.execute(
+                            "INSERT INTO users(id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                            (user_id, candidate, self._unusable_password(), now),
+                        )
+                        break
+                    except sqlite3.IntegrityError:
+                        if suffix == 999:
+                            db.rollback()
+                            raise ValueError("username_unavailable") from None
+                db.execute(
+                    "INSERT INTO oauth_identities(provider, subject, user_id, email, display_name, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (provider, subject, user_id, email, display_name, now),
+                )
+            else:
+                user_id = str(identity["user_id"])
+                db.execute(
+                    "UPDATE oauth_identities SET email = ?, display_name = ? WHERE provider = ? AND subject = ?",
+                    (email, display_name, provider, subject),
+                )
+            db.commit()
+        return user_id
+
+    def create_oauth_code(self, user_id: str) -> str:
+        code = secrets.token_urlsafe(32)
+        now = utc_now()
+        with closing(self._connect()) as db:
+            db.execute(
+                "INSERT INTO oauth_codes(code_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (self._oauth_hash(code), user_id, iso(now + timedelta(minutes=2)), iso(now)),
+            )
+        return code
+
+    def redeem_oauth_code(self, code: str) -> tuple[str, str] | None:
+        if not code or len(code) > 256:
+            return None
+        now = utc_now()
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT user_id, expires_at FROM oauth_codes WHERE code_hash = ?",
+                (self._oauth_hash(code),),
+            ).fetchone()
+            db.execute("DELETE FROM oauth_codes WHERE code_hash = ?", (self._oauth_hash(code),))
+            if row is None or datetime.fromisoformat(row["expires_at"]) <= now:
+                db.commit()
+                return None
+            token = self._issue_session(db, str(row["user_id"]))
+            db.commit()
+            return str(row["user_id"]), token
 
     def register(self, username: str, password: str) -> tuple[str, str]:
         username = username.strip()

@@ -50,6 +50,11 @@
 .payment-open { gap: 7px; }
 .payment-error { padding: 9px 11px; border: 1px solid var(--error-border, #8a4141); border-radius: 8px; background: var(--error-soft, #3b2020); color: var(--error, #e77b7b); font-size: 11px; line-height: 1.5; }
 .payment-auth { display: flex; flex-direction: column; gap: 12px; }
+.payment-auth-divider { display: flex; align-items: center; gap: 9px; color: var(--text-faint); font-size: 10px; }
+.payment-auth-divider::before, .payment-auth-divider::after { content: ""; height: 1px; flex: 1; background: var(--border-soft); }
+.payment-oauth-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.payment-oauth { display: inline-flex; justify-content: center; align-items: center; gap: 7px; }
+.google-mark { color: #4285f4; font-size: 15px; }
 .payment-auth-error { margin: 0 20px 16px; }
 .payment-text-button { align-self: flex-start; padding: 0; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; }
 .payment-text-button:hover { text-decoration: underline; }

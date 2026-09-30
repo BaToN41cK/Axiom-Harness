@@ -30,6 +30,8 @@ The optional FastAPI service lives in `payment-backend/` and does not change AXI
 
 - `users`: account ID, username, PBKDF2 password hash, `balance_minor` in AXIOM USD cents (not RUB and not a bank balance), PRO activation and expiration timestamps.
 - `sessions`: only a SHA-256 hash of each random bearer token and its expiry.
+- `oauth_identities`: immutable GitHub/Google provider subject mapped to one AXIOM account; provider access tokens are not stored.
+- `oauth_flows` and `oauth_codes`: short-lived hashed OAuth state/polling flow and one-time exchange codes.
 - `payment_orders`: owner, type, expected amount, status, unique YooMoney label, unique operation ID, timestamps, and minimal reconciliation metadata.
 - `webhook_events`: one row per signed provider operation, including unmatched, duplicate-order, and rejected-amount events. Sender names, phone numbers, addresses, card data, and the whole callback body are not stored.
 
@@ -38,6 +40,8 @@ New desktop accounts use a username and password because AXIOM currently has no 
 ### API endpoints
 
 - `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/logout`
+- `GET /v1/auth/providers`, `POST /v1/auth/oauth/start`, `GET /v1/auth/oauth/browser-start`, `GET /v1/auth/oauth/{provider}/callback`, `POST /v1/auth/oauth/status`, `POST /v1/auth/oauth/redeem`
+- Compatibility browser routes: `GET /auth/google`, `GET /auth/google/callback`, `GET /auth/github`, `GET /auth/github/callback`, `GET /auth/me`, `POST /auth/logout`
 - `GET /v1/me` — current balance, PRO status/expiry, latest order, and payment availability
 - `POST /v1/payments/topup` — server validates 100–100,000 ₽ and creates a pending order
 - `POST /v1/payments/pro` — YooMoney amount is fixed server-side at 990 ₽
@@ -59,8 +63,12 @@ Set these in the hosting platform's secret/environment settings. The backend rea
 | `PAYMENT_DATABASE_PATH` | Persistent path, e.g. `/var/data/axiom-payments.sqlite3` |
 | `YOOMONEY_COMMERCIAL_USE_APPROVED` | Defaults to `false`; keep false unless YooMoney confirms this use is permitted for this wallet |
 | `AXIOM_ALLOWED_ORIGINS` | Optional comma-separated Tauri/dev origins. A restrictive Tauri allowlist is built in by default. |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | Optional GitHub OAuth application credentials; backend only |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google OAuth application credentials; backend only |
+| `GITHUB_REDIRECT_URI` / `GOOGLE_REDIRECT_URI` | Exact HTTPS callback URL registered at the provider; backend only |
+| `OAUTH_REDIRECT_BASE` | Optional public HTTPS base used for OAuth callbacks; defaults to `PAYMENT_BACKEND_URL` |
 
-The only payment-provider secret is `YOOMONEY_NOTIFICATION_SECRET`; the wallet ID is public. Both `axiom --gui` (Vite dev) and production desktop builds default to the public backend at `https://axiom-harness.onrender.com` via `DEFAULT_BACKEND_URL` in `desktop/src/lib/payments.ts`. A custom URL still wins when set at startup or build time:
+The YooMoney notification secret and OAuth client secrets are backend-only; the wallet ID and backend URL are public configuration. Both `axiom --gui` (Vite dev) and production desktop builds default to the public backend at `https://axiom-harness.onrender.com` via `DEFAULT_BACKEND_URL` in `desktop/src/lib/payments.ts`. A custom URL still wins when set at startup or build time:
 
 ```powershell
 $env:VITE_PAYMENT_BACKEND_URL = "https://axiom-harness.onrender.com"
@@ -69,7 +77,24 @@ npm --prefix desktop run build
 
 For local dev (`vite dev`), the same default applies. Set `VITE_PAYMENT_BACKEND_URL` explicitly only to use another backend.
 
-That URL is public configuration, not a secret. No YooMoney credentials or notification secret go into the frontend or desktop binary.
+That URL is public configuration, not a secret. No YooMoney credentials, OAuth client secrets, provider tokens, or notification secret go into the frontend or desktop binary.
+
+### GitHub and Google login
+
+The wallet provides normal local registration/login plus **GitHub** and **Google** buttons. OAuth client secrets stay on the backend. Configure the exact callback URLs in each provider application:
+
+```text
+https://<service>.onrender.com/auth/github/callback
+https://<service>.onrender.com/auth/google/callback
+```
+
+Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_REDIRECT_URI`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` only in Render. `OAUTH_REDIRECT_BASE` may be set to the same public service URL; otherwise `PAYMENT_BACKEND_URL` is used. The flow uses OAuth `state`, PKCE S256, an HttpOnly callback cookie, a short-lived polling token, and a one-time exchange code. Email addresses are not used for automatic account linking.
+
+Use a GitHub OAuth App and a Google OAuth client of type **Web application**. Configure Google's consent screen and test users while the application is in testing mode. Credentials are read from environment variables, not automatically from Render Secret Files. GitHub requests `read:user user:email` to retrieve verified private emails; missing email does not prevent login. Google uses `openid email profile`.
+
+The first provider login creates an account; repeated login uses the immutable provider ID. Email matching, password-account linking, and balance merging are intentionally not automatic. Password recovery is not implemented. Continue using the original sign-in method to access an existing balance. OAuth waits up to ten minutes; exchange codes expire after two minutes. The desktop app starts OAuth with `/v1/auth/oauth/start` and opens `/auth/{provider}?state=...`; opening `/auth/{provider}` directly redirects to the provider but has no desktop polling client to receive the resulting session. Only initiate sign-in from your own AXIOM app, never from a link sent by someone else. Cancelling in the app stops polling but does not revoke consent at the provider.
+
+Automated tests use mocked provider responses and temporary SQLite databases, including a separate browser cookie jar. Real GitHub/Google consent and the installed desktop/browser interaction require a manual smoke test after credentials and callbacks are deployed.
 
 ## Deployment on Render
 
@@ -80,9 +105,11 @@ Render documents Python FastAPI web services and persistent disks. Free web serv
 3. Set **Build Command** to `pip install -r requirements.txt`.
 4. Set **Start Command** to `uvicorn main:app --host 0.0.0.0 --port $PORT`.
 5. Select a paid web-service plan with one service instance. Under **Advanced → Disk**, add a 1 GB persistent disk mounted at `/var/data`.
-6. Add the configuration above in the service settings. Set `PAYMENT_DATABASE_PATH=/var/data/axiom-payments.sqlite3`, `PAYMENT_BACKEND_URL` to the service's HTTPS URL, and keep `YOOMONEY_COMMERCIAL_USE_APPROVED=false` until the provider-use restriction is resolved. Store the notification secret as an Environment variable or as a Secret File named `YOOMONEY_NOTIFICATION_SECRET`.
+6. Add the configuration above in the service settings. Set `PAYMENT_DATABASE_PATH=/var/data/axiom-payments.sqlite3`, `PAYMENT_BACKEND_URL` to the service's HTTPS URL, and keep `YOOMONEY_COMMERCIAL_USE_APPROVED=false` until the provider-use restriction is resolved. Store the notification secret as an Environment variable or as a Secret File named `YOOMONEY_NOTIFICATION_SECRET`. Add OAuth variables only when GitHub/Google login is enabled.
 7. Deploy and confirm `https://<service>.onrender.com/healthz` returns `{"status":"ok"}`.
 8. Build AXIOM with the default public URL, or set `VITE_PAYMENT_BACKEND_URL` to override it.
+
+Before testing real provider consent, verify the **deployed commit** contains `payment-backend/main.py` OAuth routes (local working-tree edits are not deployed by Render). Check `GET /v1/auth/providers` returns the configured provider flags, then check `GET /auth/google` and `GET /auth/github` without following redirects: each should return `303` to its provider (or `503` if its configuration is incomplete). `404` on both `/v1/auth/providers` and `/auth/google` means the deployed service is still running a pre-OAuth release, even if `/healthz` returns `ok`. Confirm Render's Root Directory is `payment-backend`, Start Command is `uvicorn main:app --host 0.0.0.0 --port $PORT`, and redeploy the commit containing the OAuth changes. Do not use a local production payment database to test the migration.
 
 Render references: [FastAPI deployment](https://render.com/docs/deploy-fastapi), [persistent disks](https://render.com/docs/disks), [environment variables/secrets](https://render.com/docs/configure-environment-variables), [pricing](https://render.com/pricing).
 

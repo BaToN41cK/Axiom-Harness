@@ -1,12 +1,17 @@
+import base64
+import hashlib
 import html
 import json
 import logging
 import os
 import re
+import sqlite3
 import time
 from collections import defaultdict, deque
-from typing import Annotated
-from urllib.parse import parse_qsl
+from typing import Annotated, Literal, overload
+from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 from axiom_payments import (
     PaymentStore,
@@ -15,9 +20,9 @@ from axiom_payments import (
     payment_methods,
     verify_notification,
 )
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
@@ -85,6 +90,21 @@ class AuthRequest(BaseModel):
     password: str = Field(min_length=12, max_length=256)
 
 
+class OAuthProviderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(pattern="^(github|google)$")
+
+
+class OAuthRedeemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str = Field(min_length=1, max_length=256)
+
+
+class OAuthStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    poll_token: str = Field(min_length=1, max_length=256)
+
+
 class TopupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: str = Field(pattern="^balance_topup$")
@@ -102,6 +122,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="AXIOM Payments", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.settings = settings
+
+    @app.middleware("http")
+    async def private_auth_responses(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith(("/v1/auth/", "/auth/")) or request.url.path in {"/v1/me", "/auth/me"}:
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     auth_attempts: dict[str, deque[float]] = defaultdict(deque)
     app.add_middleware(
         CORSMiddleware,
@@ -119,6 +149,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not user_id:
             raise HTTPException(status_code=401, detail="Сессия истекла. Войдите снова.")
         return user_id
+
+    @app.get("/auth/me")
+    def auth_me(user_id: Annotated[str, Depends(current_user)]) -> dict:
+        return store.account(user_id)
+
+    @app.post("/auth/logout", status_code=204)
+    def auth_logout(
+        authorization: Annotated[str | None, Header()] = None,
+        user_id: str = Depends(current_user),
+    ) -> Response:
+        del user_id
+        store.revoke_session((authorization or "")[7:])
+        return Response(status_code=204)
 
     def limit_auth_attempt(request: Request) -> None:
         bucket = auth_attempts[request.client.host if request.client else "unknown"]
@@ -166,6 +209,306 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             user_id, token = store.login(body.username, body.password)
         except ValueError as exc:
             raise HTTPException(status_code=401, detail="Неверное имя пользователя или пароль.") from exc
+        return {"access_token": token, "token_type": "bearer", "account": store.account(user_id)}
+
+    def oauth_configuration(provider: str) -> tuple[str, str, str, list[str]]:
+        client = settings.oauth_client(provider)
+        redirect_uri = settings.oauth_redirect_uri(provider)
+        redirect = urlsplit(redirect_uri)
+        base = urlsplit(settings.oauth_redirect_base or settings.public_url or f"{redirect.scheme}://{redirect.netloc}")
+        if (
+            client is None
+            or base.scheme != "https"
+            or not base.hostname
+            or base.path not in {"", "/"}
+            or base.username
+            or base.password
+            or base.query
+            or base.fragment
+            or redirect.scheme != "https"
+            or redirect.netloc != base.netloc
+            or redirect.path not in {f"/auth/{provider}/callback", f"/v1/auth/oauth/{provider}/callback"}
+            or redirect.query
+            or redirect.fragment
+        ):
+            raise HTTPException(status_code=503, detail=f"Вход через {provider} ещё не настроен на сервере.")
+        if provider == "github":
+            return (
+                client[0],
+                "https://github.com/login/oauth/authorize",
+                redirect_uri,
+                ["read:user", "user:email"],
+            )
+        return (
+            client[0],
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            redirect_uri,
+            ["openid", "email", "profile"],
+        )
+
+    def oauth_browser_start_for(provider: str, state: str, callback_path: str) -> RedirectResponse:
+        """Start the existing PKCE flow from a provider-friendly public URL."""
+        if provider not in {"github", "google"}:
+            raise HTTPException(status_code=400, detail="Неизвестный провайдер входа.")
+        client_id, authorization_endpoint, configured_redirect, scopes = oauth_configuration(provider)
+        browser_token = os.urandom(32).hex()
+        flow = store.begin_oauth(state, provider, browser_token)
+        if flow is None or flow["redirect_uri"] != configured_redirect:
+            raise HTTPException(status_code=400, detail="Ссылка входа истекла или уже использована.")
+        query = {
+            "client_id": client_id,
+            "redirect_uri": flow["redirect_uri"],
+            "response_type": "code",
+            "scope": " ".join(scopes),
+            "state": state,
+            "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(flow["verifier"].encode("ascii")).digest())
+            .decode("ascii")
+            .rstrip("="),
+            "code_challenge_method": "S256",
+        }
+        if provider == "google":
+            query.update({"access_type": "online", "prompt": "select_account"})
+        response = RedirectResponse(url=f"{authorization_endpoint}?{urlencode(query)}", status_code=303)
+        response.set_cookie(
+            key=f"axiom_oauth_{provider}",
+            value=browser_token,
+            max_age=600,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path=urlsplit(flow["redirect_uri"]).path or callback_path,
+        )
+        return response
+
+    @app.get("/auth/google")
+    def google_auth(state: str | None = None) -> RedirectResponse:
+        """Compatibility entrypoint for browser clients and provider consoles."""
+        oauth_configuration("google")
+        if not state:
+            state, _, _ = store.create_oauth_flow("google", settings.oauth_redirect_uri("google"))
+        return oauth_browser_start_for("google", state, "/auth/google/callback")
+
+    @app.get("/auth/github")
+    def github_auth(state: str | None = None) -> RedirectResponse:
+        """Compatibility entrypoint for browser clients and provider consoles."""
+        oauth_configuration("github")
+        if not state:
+            state, _, _ = store.create_oauth_flow("github", settings.oauth_redirect_uri("github"))
+        return oauth_browser_start_for("github", state, "/auth/github/callback")
+
+    @app.get("/v1/auth/providers")
+    def auth_providers() -> dict:
+        enabled = {}
+        for provider in ("github", "google"):
+            try:
+                oauth_configuration(provider)
+                enabled[provider] = True
+            except HTTPException:
+                enabled[provider] = False
+        return enabled
+
+    @app.post("/v1/auth/oauth/start")
+    def oauth_start(body: OAuthProviderRequest, request: Request) -> dict[str, str]:
+        limit_auth_attempt(request)
+        provider = body.provider
+        _, _, redirect_uri, _ = oauth_configuration(provider)
+        state, poll_token, _ = store.create_oauth_flow(provider, redirect_uri)
+        redirect = urlsplit(redirect_uri)
+        browser_base = (
+            settings.oauth_redirect_base
+            or settings.public_url
+            or f"{redirect.scheme}://{redirect.netloc}"
+        ).rstrip("/")
+        browser_start = f"{browser_base}/auth/{provider}"
+        query = {"state": state}
+        # Provider parameters stay server-side. The external browser first visits
+        # browser-start, which can set its HttpOnly cookie before redirecting.
+        return {"authorization_url": f"{browser_start}?{urlencode(query)}", "poll_token": poll_token}
+
+    @app.get("/v1/auth/oauth/browser-start")
+    def oauth_browser_start(provider: str, state: str) -> RedirectResponse:
+        return oauth_browser_start_for(provider, state, f"/v1/auth/oauth/{provider}/callback")
+
+    @overload
+    def provider_request(
+        url: str, *, method: str = "GET", form: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None, expect_list: Literal[False] = False,
+    ) -> dict: ...
+
+    @overload
+    def provider_request(
+        url: str, *, method: str = "GET", form: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None, expect_list: Literal[True],
+    ) -> list: ...
+
+    def provider_request(
+        url: str, *, method: str = "GET", form: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None, expect_list: bool = False,
+    ) -> dict | list:
+        body = urlencode(form).encode("utf-8") if form is not None else None
+        request = UrlRequest(url, data=body, headers=headers or {}, method=method)
+        try:
+            with urlopen(request, timeout=15) as response:
+                value = json.loads(response.read(1_000_000).decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("oauth_provider_unavailable") from exc
+        if not isinstance(value, list if expect_list else dict):
+            raise ValueError("oauth_provider_invalid_response")
+        return value
+
+    def oauth_identity(
+        provider: str, code: str, redirect_uri: str, verifier: str
+    ) -> tuple[str, str, str | None, str | None]:
+        client = settings.oauth_client(provider)
+        if client is None:
+            raise ValueError("oauth_not_configured")
+        if provider == "github":
+            token = provider_request(
+                "https://github.com/login/oauth/access_token",
+                method="POST",
+                form={
+                    "client_id": client[0],
+                    "client_secret": client[1],
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "code_verifier": verifier,
+                },
+                headers={"Accept": "application/json", "User-Agent": "AXIOM"},
+            ).get("access_token")
+            if not isinstance(token, str) or not token:
+                raise ValueError("oauth_provider_rejected")
+            profile = provider_request(
+                "https://api.github.com/user",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": "AXIOM",
+                },
+            )
+            if type(profile.get("id")) is not int or profile["id"] <= 0:
+                raise ValueError("oauth_identity_missing")
+            subject = str(profile["id"])
+            username = str(profile.get("login") or "github-user")
+            email = None
+            try:
+                emails = provider_request(
+                    "https://api.github.com/user/emails",
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "Authorization": f"Bearer {token}",
+                        "User-Agent": "AXIOM",
+                    },
+                    expect_list=True,
+                )
+                verified = [
+                    item for item in emails
+                    if isinstance(item, dict) and item.get("verified") is True
+                    and isinstance(item.get("email"), str) and item["email"]
+                ]
+                email = next((item["email"] for item in verified if item.get("primary") is True), None)
+                email = email or (verified[0]["email"] if verified else None)
+            except ValueError:
+                # A private email or a declined user:email scope must not prevent sign-in.
+                pass
+            return subject, username, email, profile.get("name") if isinstance(profile.get("name"), str) else None
+        token = provider_request(
+            "https://oauth2.googleapis.com/token",
+            method="POST",
+            form={
+                "client_id": client[0],
+                "client_secret": client[1],
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
+            },
+        ).get("access_token")
+        if not isinstance(token, str) or not token:
+            raise ValueError("oauth_provider_rejected")
+        profile = provider_request(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        subject = profile.get("sub")
+        if not isinstance(subject, str) or not subject:
+            raise ValueError("oauth_identity_missing")
+        username = str(profile.get("name") or profile.get("email") or "google-user")
+        email = profile.get("email") if profile.get("email_verified") is True else None
+        if not isinstance(email, str):
+            email = None
+        return subject, username, email, profile.get("name") if isinstance(profile.get("name"), str) else None
+
+    @app.get("/auth/{provider}/callback")
+    @app.get("/v1/auth/oauth/{provider}/callback")
+    def oauth_callback(
+        provider: str,
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+        browser_token: str | None = Cookie(default=None, alias="axiom_oauth_github"),
+        google_browser_token: str | None = Cookie(default=None, alias="axiom_oauth_google"),
+    ) -> HTMLResponse:
+        if provider not in {"github", "google"}:
+            return HTMLResponse(_checkout_message("OAuth", "Неизвестный провайдер входа."), status_code=400)
+        if not state:
+            return HTMLResponse(
+                _checkout_message("Вход не завершён", "Отсутствует параметр безопасности OAuth."), status_code=400
+            )
+        browser_token = browser_token if provider == "github" else google_browser_token
+        flow = store.consume_oauth_state(state, provider, browser_token or "")
+        if flow is None:
+            return HTMLResponse(
+                _checkout_message("Вход не завершён", "Ссылка входа истекла. Вернитесь в AXIOM и повторите попытку."),
+                status_code=400,
+            )
+
+        def callback_page(title: str, message: str, status_code: int = 200) -> HTMLResponse:
+            result = HTMLResponse(_checkout_message(title, message), status_code=status_code)
+            result.delete_cookie(key=f"axiom_oauth_{provider}", path=urlsplit(flow["redirect_uri"]).path)
+            return result
+
+        if error or not code:
+            store.finish_oauth(state, error="oauth_cancelled")
+            return callback_page("Вход отменён", "Вернитесь в AXIOM и выберите способ входа ещё раз.")
+        try:
+            subject, username, email, display_name = oauth_identity(
+                provider, code, flow["redirect_uri"], flow["verifier"]
+            )
+            if not subject:
+                raise ValueError("oauth_identity_missing")
+            user_id = store.oauth_login(provider, subject, username, email, display_name)
+        except ValueError as exc:
+            logger.warning("oauth_callback_failed provider=%s reason=%s", provider, str(exc))
+            store.finish_oauth(state, error="oauth_login_failed")
+            return callback_page(
+                "Вход не завершён",
+                "Не удалось подтвердить аккаунт провайдера. Вернитесь в AXIOM и повторите попытку.",
+                400,
+            )
+        except sqlite3.Error:
+            logger.error("oauth_callback_database_failed provider=%s", provider)
+            return callback_page("Вход не завершён", "Ошибка сервера. Вернитесь в AXIOM и повторите попытку.", 503)
+        store.finish_oauth(state, user_id=user_id)
+        return callback_page("Вход выполнен", "Можно закрыть эту вкладку и вернуться в AXIOM.")
+
+    @app.post("/v1/auth/oauth/status")
+    def oauth_status(body: OAuthStatusRequest) -> dict[str, str | None]:
+        result = store.oauth_status(body.poll_token)
+        if result is None:
+            raise HTTPException(status_code=401, detail="Сеанс входа истёк или не найден.")
+        status, value = result
+        return {
+            "status": status,
+            "code": value if status == "success" else None,
+            "error": value if status == "error" else None,
+        }
+
+    @app.post("/v1/auth/oauth/redeem")
+    def oauth_redeem(body: OAuthRedeemRequest) -> dict:
+        result = store.redeem_oauth_code(body.code)
+        if result is None:
+            raise HTTPException(status_code=401, detail="OAuth-код истёк или уже использован.")
+        user_id, token = result
         return {"access_token": token, "token_type": "bearer", "account": store.account(user_id)}
 
     @app.get("/v1/me")
