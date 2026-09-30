@@ -70,6 +70,20 @@ export function usePayments() {
     } finally { lock.current = false; if (mounted.current) setBusy(false); }
   }, []);
 
+  const buyProFromBalance = useCallback(async () => {
+    const token = paymentToken.get();
+    if (lock.current || !token) return;
+    lock.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await payments.buyProFromBalance(token);
+      if (mounted.current) setAccount(result.account);
+    } catch (e) {
+      if (mounted.current) setError(message(e));
+    } finally { lock.current = false; if (mounted.current) setBusy(false); }
+  }, []);
+
   const active = payment?.status === "pending";
   useEffect(() => {
     if (!active || !payment || !paymentToken.get()) return;
@@ -110,5 +124,6 @@ export function usePayments() {
     account, payment, error, busy, active, refresh, authenticate, signOut,
     createTopup: (amountRub: string) => createPayment(() => payments.topup(paymentToken.get() || "", amountRub)),
     buyPro: () => createPayment(() => payments.buyPro(paymentToken.get() || "")),
+    buyProFromBalance,
   };
 }

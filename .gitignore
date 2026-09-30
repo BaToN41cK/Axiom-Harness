@@ -20,6 +20,11 @@ venv/
 .smoke-home/
 .smoke/
 
+# Local payment database: contains real balance and payment records.
+data/*.sqlite3
+data/*.sqlite3-wal
+data/*.sqlite3-shm
+
 # Desktop (Tauri + React)
 desktop/node_modules/
 desktop/dist/

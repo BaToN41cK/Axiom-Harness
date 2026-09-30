@@ -10,6 +10,8 @@ import axiom_payments
 import httpx
 import pytest
 from axiom_payments import (
+    AXIOM_USD_PER_RUB,
+    PRO_PRICE_AXIOM_USD_MINOR,
     PRO_PRICE_MINOR,
     Settings,
     gross_up_for_card,
@@ -17,6 +19,7 @@ from axiom_payments import (
     iso,
     load_yoomoney_notification_secret,
     notification_signature,
+    rub_minor_to_axiom_usd_minor,
     utc_now,
 )
 from main import create_app
@@ -217,6 +220,37 @@ def test_documented_gross_up_preserves_confirmed_topup(credit, wallet_sum, card_
     assert gross_up_for_card(credit) == card_sum
 
 
+@pytest.mark.parametrize(
+    ("rub_minor", "expected_usd_minor"),
+    [(10_000, 100), (20_000, 200), (50_000, 500), (125_000, 1_250)],
+)
+def test_fixed_rub_to_axiom_usd_conversion(rub_minor, expected_usd_minor):
+    assert str(AXIOM_USD_PER_RUB) == "0.01"
+    assert rub_minor_to_axiom_usd_minor(rub_minor) == expected_usd_minor
+
+
+def test_legacy_rub_balance_is_migrated_to_axiom_usd_cents(tmp_path):
+    database_path = str(tmp_path / "legacy.sqlite3")
+    with sqlite3.connect(database_path) as db:
+        db.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT, password_hash TEXT, "
+            "balance_minor INTEGER NOT NULL, created_at TEXT)"
+        )
+        db.execute("INSERT INTO users VALUES ('legacy', 'legacy', 'hash', 20000, '2026-01-01T00:00:00+00:00')")
+    axiom_payments.PaymentStore(
+        Settings(
+            database_path=database_path,
+            wallet_id="4100118808592904",
+            notification_secret=SECRET,
+            public_url="https://payments.example.test",
+            commercial_use_approved=True,
+            allowed_origins=(),
+        )
+    )
+    with sqlite3.connect(database_path) as db:
+        assert db.execute("SELECT balance_minor FROM users WHERE id = 'legacy'").fetchone()[0] == 200
+
+
 @pytest.mark.asyncio
 async def test_topup_100_rub_creates_server_order_and_dynamic_yoomoney_link(client):
     token, account = await register(client)
@@ -236,8 +270,9 @@ async def test_topup_100_rub_creates_server_order_and_dynamic_yoomoney_link(clie
     assert page.status_code == 200
     assert "quickpay/confirm" in page.text
     assert "4100118808592904" in page.text
-    assert "101.00" in page.text
-    assert "103.09" in page.text
+    assert "100.00" in page.text
+    assert "101.00" not in page.text
+    assert "103.09" not in page.text
     assert "successURL" in page.text
 
 
@@ -269,6 +304,20 @@ async def test_pro_price_is_fixed_and_client_cannot_override_it(client):
 
 
 @pytest.mark.asyncio
+async def test_pro_can_be_paid_from_axiom_usd_balance_atomically(client, settings):
+    token, account = await register(client)
+    with sqlite3.connect(settings.database_path) as db:
+        db.execute("UPDATE users SET balance_minor = ? WHERE id = ?", (1_000, account["id"]))
+    response = await client.post("/v1/payments/pro/balance", headers={"authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    updated = response.json()["account"]
+    assert updated["balance_minor"] == 1_000 - PRO_PRICE_AXIOM_USD_MINOR
+    assert updated["pro_active"] is True
+    insufficient = await client.post("/v1/payments/pro/balance", headers={"authorization": f"Bearer {token}"})
+    assert insufficient.status_code == 402
+
+
+@pytest.mark.asyncio
 async def test_successful_balance_notification_credits_confirmed_amount_once(client, settings):
     token, _ = await register(client)
     created = await client.post(
@@ -286,9 +335,11 @@ async def test_successful_balance_notification_credits_confirmed_amount_once(cli
     assert duplicate.json()["duplicate"] is True
     assert second_operation.json()["status"] == "order_not_pending"
     account = (await client.get("/v1/me", headers={"authorization": f"Bearer {token}"})).json()
-    assert account["balance_minor"] == 10_000
+    assert account["balance_minor"] == 100
     current = await client.get(f"/v1/payments/{order['id']}", headers={"authorization": f"Bearer {token}"})
     assert current.json()["payment"]["status"] == "paid"
+    assert current.json()["payment"]["received_rub_minor"] == 10_000
+    assert current.json()["payment"]["credited_axiom_usd_minor"] == 100
 
 
 @pytest.mark.asyncio
@@ -308,7 +359,7 @@ async def test_card_notification_uses_card_amount_and_fee_validation(client, set
     )
     assert response.status_code == 200
     account = (await client.get("/v1/me", headers={"authorization": f"Bearer {token}"})).json()
-    assert account["balance_minor"] == 10_000
+    assert account["balance_minor"] == 100
 
 
 @pytest.mark.asyncio
@@ -469,19 +520,18 @@ async def test_webhook_diagnostic_log_omits_field_values_and_signature(client, c
 
 
 @pytest.mark.asyncio
-async def test_wrong_amount_marks_order_failed_and_never_credits(client, settings):
+async def test_net_amount_below_settlement_floor_marks_order_failed_and_never_credits(client, settings):
     token, _ = await register(client)
     order = (
         await client.post(
             "/v1/payments/topup",
-            json={"type": "balance_topup", "amount_rub": "101.00"},
+            json={"type": "balance_topup", "amount_rub": "1000.00"},
             headers={"authorization": f"Bearer {token}"},
         )
     ).json()["payment"]
     label = await order_label(settings, order["id"])
-    # A signed amount above the global minimum but below this order's
-    # settlement floor exercises under_settlement: the order fails closed.
-    response = await notify(client, payment_fields("wrong-amount", label, amount="100.50", withdraw="101.51"))
+    # A signed amount below the wallet fee-adjusted settlement floor fails closed.
+    response = await notify(client, payment_fields("wrong-amount", label, amount="989.99", withdraw="999.99"))
     assert response.status_code == 200
     current = (await client.get(f"/v1/payments/{order['id']}", headers={"authorization": f"Bearer {token}"})).json()[
         "payment"
@@ -490,6 +540,40 @@ async def test_wrong_amount_marks_order_failed_and_never_credits(client, setting
     assert current["status"] == "failed"
     assert current["failure_reason"] == "amount_mismatch"
     assert account["balance_minor"] == 0
+
+
+@pytest.mark.asyncio
+async def test_confirmed_net_amount_is_converted_to_usd_cents(client, settings):
+    token, _ = await register(client)
+    order = (
+        await client.post(
+            "/v1/payments/topup",
+            json={"type": "balance_topup", "amount_rub": "200"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+    ).json()["payment"]
+    label = await order_label(settings, order["id"])
+    response = await notify(client, payment_fields("two-hundred-rub", label, amount="200.00"))
+    assert response.status_code == 200
+    account = (await client.get("/v1/me", headers={"authorization": f"Bearer {token}"})).json()
+    assert account["balance_minor"] == 200
+
+
+@pytest.mark.asyncio
+async def test_fee_adjusted_webhook_credits_order_amount(client, settings):
+    token, _ = await register(client)
+    order = (
+        await client.post(
+            "/v1/payments/topup",
+            json={"type": "balance_topup", "amount_rub": "200"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+    ).json()["payment"]
+    label = await order_label(settings, order["id"])
+    response = await notify(client, payment_fields("two-hundred-net-of-fee", label, amount="198.02"))
+    assert response.status_code == 200
+    account = (await client.get("/v1/me", headers={"authorization": f"Bearer {token}"})).json()
+    assert account["balance_minor"] == 198
 
 
 @pytest.mark.asyncio
@@ -504,7 +588,7 @@ async def test_overpaid_topup_marks_order_paid_for_order_amount(client, settings
     ).json()["payment"]
     label = await order_label(settings, order["id"])
     # A payer-side fee can make the wallet receive more than the settlement
-    # floor; the backend accepts the payment but credits only the order amount.
+    # floor; the signed received RUB amount is what gets converted.
     response = await notify(client, payment_fields("overpaid-amount", label, amount="101.00"))
     assert response.status_code == 200
     current = (await client.get(f"/v1/payments/{order['id']}", headers={"authorization": f"Bearer {token}"})).json()[
@@ -512,7 +596,7 @@ async def test_overpaid_topup_marks_order_paid_for_order_amount(client, settings
     ]
     account = (await client.get("/v1/me", headers={"authorization": f"Bearer {token}"})).json()
     assert current["status"] == "paid"
-    assert account["balance_minor"] == 10_000
+    assert account["balance_minor"] == 101
 
 
 @pytest.mark.asyncio
@@ -526,7 +610,7 @@ async def test_incoming_payment_below_100_is_recorded_but_not_credited(client, s
         )
     ).json()["payment"]
     label = await order_label(settings, order["id"])
-    response = await notify(client, payment_fields("under-minimum", label, amount="99.99"))
+    response = await notify(client, payment_fields("under-minimum", label, amount="98.00"))
     assert response.status_code == 200
     current = (await client.get(f"/v1/payments/{order['id']}", headers={"authorization": f"Bearer {token}"})).json()[
         "payment"

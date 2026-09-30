@@ -8,7 +8,13 @@ from collections import defaultdict, deque
 from typing import Annotated
 from urllib.parse import parse_qsl
 
-from axiom_payments import PaymentStore, Settings, minor_to_rubles, payment_methods, verify_notification
+from axiom_payments import (
+    PaymentStore,
+    Settings,
+    minor_to_rubles,
+    payment_methods,
+    verify_notification,
+)
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -199,6 +205,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except PermissionError as exc:
             raise HTTPException(status_code=503, detail=settings.disabled_reason) from exc
         return {"payment": order}
+
+    @app.post("/v1/payments/pro/balance")
+    def create_pro_from_balance(user_id: Annotated[str, Depends(current_user)]) -> dict:
+        try:
+            account = store.activate_pro_from_balance(user_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=402, detail="Недостаточно AXIOM USD-кредитов для AXIOM PRO.") from exc
+        return {"account": account}
 
     @app.get("/v1/payments/{order_id}")
     def payment_status(order_id: str, user_id: Annotated[str, Depends(current_user)]) -> dict:

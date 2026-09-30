@@ -1,6 +1,8 @@
 export type PaymentType = "balance_topup" | "pro";
 export type PaymentStatus = "pending" | "paid" | "failed" | "expired";
 
+export { axiomUsd, rubMinorToAxiomUsdMinor } from "./currency";
+
 export interface Payment {
   id: string;
   type: PaymentType;
@@ -10,6 +12,8 @@ export interface Payment {
   paid_at: string | null;
   expires_at: string | null;
   failure_reason: string | null;
+  received_rub_minor: number | null;
+  credited_axiom_usd_minor: number | null;
   payment_url: string | null;
 }
 
@@ -66,6 +70,7 @@ export const payments = {
   logout: (token: string) => api<void>("/v1/auth/logout", { token, body: {} }),
   topup: (token: string, amountRub: string) => api<{ payment: Payment }>("/v1/payments/topup", { token, body: { type: "balance_topup", amount_rub: amountRub } }),
   buyPro: (token: string) => api<{ payment: Payment }>("/v1/payments/pro", { token, body: { type: "pro" } }),
+  buyProFromBalance: (token: string) => api<{ account: Account }>("/v1/payments/pro/balance", { token, body: {} }),
   status: (token: string, id: string) => api<{ payment: Payment; account: Account }>(`/v1/payments/${encodeURIComponent(id)}`, { token }),
 };
 

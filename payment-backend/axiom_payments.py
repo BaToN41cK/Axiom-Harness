@@ -19,6 +19,10 @@ from pathlib import Path
 from urllib.parse import quote
 
 RUB = Decimal("0.01")
+# Fixed internal denomination: one AXIOM USD is backed by 100 RUB.
+# This is not a market or Central Bank exchange rate.
+AXIOM_USD_PER_RUB = Decimal("0.01")
+USD = Decimal("0.01")
 PRO_PRICE_MINOR = 99_000
 PRO_DAYS = 30
 MIN_TOPUP_MINOR = 10_000
@@ -61,6 +65,17 @@ def rubles_to_minor(value: str | Decimal) -> int:
 
 def minor_to_rubles(value: int) -> str:
     return f"{Decimal(value) / 100:.2f}"
+
+
+def rub_minor_to_axiom_usd_minor(rub_minor: int) -> int:
+    """Convert confirmed RUB kopecks to AXIOM USD cents using the fixed rate."""
+    if not isinstance(rub_minor, int) or rub_minor < 0:
+        raise ValueError("invalid_rub_minor")
+    usd = (Decimal(rub_minor) / 100) * AXIOM_USD_PER_RUB
+    return int((usd / USD).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+PRO_PRICE_AXIOM_USD_MINOR = rub_minor_to_axiom_usd_minor(PRO_PRICE_MINOR)
 
 
 def _rounded_minor(value: Decimal) -> int:
@@ -113,7 +128,8 @@ def settlement_floor_minor(order, method: str) -> int:
     only makes the wallet receive more than the floor, never less.
     """
     if order["type"] == "balance_topup":
-        return int(order["amount_minor"])
+        ordered_minor = int(order["amount_minor"])
+        return net_after_card_fee(ordered_minor) if method == "AC" else net_after_wallet_fee(ordered_minor)
     price_net = net_after_card_fee(PRO_PRICE_MINOR) if method == "AC" else net_after_wallet_fee(PRO_PRICE_MINOR)
     return price_net
 
@@ -185,14 +201,21 @@ class PaymentStore:
 
     def initialize(self) -> None:
         with closing(self._connect()) as db:
+            legacy_users_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
+            ).fetchone() is not None
             db.executescript(
                 """
                 PRAGMA journal_mode = WAL;
+                CREATE TABLE IF NOT EXISTS accounting_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY,
                     username TEXT NOT NULL COLLATE NOCASE UNIQUE,
                     password_hash TEXT NOT NULL,
-                    balance_minor INTEGER NOT NULL DEFAULT 0 CHECK (balance_minor >= 0),
+                    balance_minor INTEGER NOT NULL DEFAULT 0 CHECK (balance_minor >= 0), -- AXIOM USD cents
                     pro_activated_at TEXT,
                     pro_expires_at TEXT,
                     created_at TEXT NOT NULL
@@ -207,7 +230,7 @@ class PaymentStore:
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id),
                     type TEXT NOT NULL CHECK (type IN ('balance_topup', 'pro')),
-                    amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+                    amount_minor INTEGER NOT NULL CHECK (amount_minor > 0), -- RUB kopecks
                     expected_pc_withdraw_minor INTEGER NOT NULL CHECK (expected_pc_withdraw_minor > 0),
                     expected_ac_withdraw_minor INTEGER NOT NULL CHECK (expected_ac_withdraw_minor > 0),
                     status TEXT NOT NULL CHECK (status IN ('pending', 'paid', 'failed', 'expired')),
@@ -235,6 +258,22 @@ class PaymentStore:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
             if "pro_activated_at" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN pro_activated_at TEXT")
+            accounting = db.execute(
+                "SELECT value FROM accounting_meta WHERE key = 'balance_currency'"
+            ).fetchone()
+            if accounting is None:
+                db.execute("BEGIN IMMEDIATE")
+                if legacy_users_table:
+                    rows = db.execute("SELECT id, balance_minor FROM users").fetchall()
+                    for row in rows:
+                        db.execute(
+                            "UPDATE users SET balance_minor = ? WHERE id = ?",
+                            (rub_minor_to_axiom_usd_minor(int(row["balance_minor"])), row["id"]),
+                        )
+                db.execute(
+                    "INSERT INTO accounting_meta(key, value) VALUES ('balance_currency', 'AXIOM_USD_cents')"
+                )
+                db.commit()
 
     @staticmethod
     def _password_hash(password: str, salt: bytes | None = None) -> str:
@@ -338,7 +377,7 @@ class PaymentStore:
         return {
             "id": row["id"],
             "username": row["username"],
-            "balance_minor": int(row["balance_minor"]),
+            "balance_minor": int(row["balance_minor"]),  # AXIOM USD cents
             "pro_active": bool(expires and expires > utc_now()),
             "pro_activated_at": row["pro_activated_at"],
             "pro_expires_at": row["pro_expires_at"],
@@ -358,8 +397,10 @@ class PaymentStore:
                 raise ValueError("minimum_topup")
             if amount_minor > MAX_TOPUP_MINOR:
                 raise ValueError("maximum_topup")
-            pc_withdraw = gross_up_for_wallet(amount_minor)
-            ac_withdraw = gross_up_for_card(amount_minor)
+            # The customer pays exactly the requested RUB amount. The internal
+            # AXIOM USD-credit conversion happens only after a verified webhook.
+            pc_withdraw = amount_minor
+            ac_withdraw = amount_minor
         elif order_type == "pro":
             if amount_rub is not None and rubles_to_minor(amount_rub) != PRO_PRICE_MINOR:
                 raise ValueError("invalid_pro_price")
@@ -398,6 +439,36 @@ class PaymentStore:
             db.commit()
         return self.public_order(order)
 
+    def activate_pro_from_balance(self, user_id: str) -> dict:
+        """Atomically debit AXIOM USD cents and activate PRO."""
+        now = utc_now()
+        paid_at = iso(now)
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            user = db.execute("SELECT balance_minor, pro_expires_at FROM users WHERE id = ?", (user_id,)).fetchone()
+            if user is None:
+                db.rollback()
+                raise ValueError("unknown_user")
+            debited = db.execute(
+                "UPDATE users SET balance_minor = balance_minor - ? "
+                "WHERE id = ? AND balance_minor >= ?",
+                (PRO_PRICE_AXIOM_USD_MINOR, user_id, PRO_PRICE_AXIOM_USD_MINOR),
+            )
+            if debited.rowcount != 1:
+                db.rollback()
+                raise PermissionError("insufficient_balance")
+            current_expiry = (
+                datetime.fromisoformat(user["pro_expires_at"]) if user["pro_expires_at"] else None
+            )
+            starts_at = current_expiry if current_expiry and current_expiry > now else now
+            new_expiry = starts_at + timedelta(days=PRO_DAYS)
+            db.execute(
+                "UPDATE users SET pro_activated_at = ?, pro_expires_at = ? WHERE id = ?",
+                (paid_at, iso(new_expiry), user_id),
+            )
+            db.commit()
+        return self.account(user_id)
+
     def get_order(self, user_id: str, order_id: str) -> dict | None:
         with closing(self._connect()) as db:
             row = db.execute(
@@ -422,6 +493,16 @@ class PaymentStore:
 
     def public_order(self, order: sqlite3.Row | dict) -> dict:
         order = dict(order)
+        try:
+            metadata = json.loads(order.get("metadata_json", "{}"))
+        except (TypeError, ValueError):
+            metadata = {}
+        received_rub_minor = metadata.get("received_minor")
+        credited_axiom_usd_minor = (
+            rub_minor_to_axiom_usd_minor(received_rub_minor)
+            if isinstance(received_rub_minor, int) and order["type"] == "balance_topup"
+            else None
+        )
         return {
             "id": order["id"],
             "type": order["type"],
@@ -431,6 +512,8 @@ class PaymentStore:
             "paid_at": order.get("paid_at"),
             "expires_at": order.get("expires_at"),
             "failure_reason": order.get("failure_reason"),
+            "received_rub_minor": received_rub_minor if isinstance(received_rub_minor, int) else None,
+            "credited_axiom_usd_minor": credited_axiom_usd_minor,
             "payment_url": (
                 f"{self.settings.public_url}/checkout/{order['id']}"
                 if order["status"] == "pending" and self.settings.payments_enabled
@@ -517,7 +600,7 @@ class PaymentStore:
                 else:
                     method = "PC" if notification_type == "p2p-incoming" else "AC"
                     floor_minor = settlement_floor_minor(order, method)
-                    if order["type"] == "balance_topup" and amount_minor < MIN_TOPUP_MINOR:
+                    if order["type"] == "balance_topup" and amount_minor < floor_minor and amount_minor < MIN_TOPUP_MINOR:
                         verdict = "under_minimum"
                         failure_reason = "below_minimum"
                     elif amount_minor < floor_minor:
@@ -534,11 +617,13 @@ class PaymentStore:
             if order is not None and verdict == "paid":
                 paid_at = iso(now)
                 if order["type"] == "balance_topup":
-                    # Credit the amount the order sold, never the raw notification
-                    # value: a payer-side fee can make the wallet receive more.
+                    # Convert only the provider-confirmed RUB amount. This
+                    # runs after signature, order, currency and settlement
+                    # checks, never when a payment is merely created/returned.
+                    credited_axiom_usd_minor = rub_minor_to_axiom_usd_minor(amount_minor)
                     db.execute(
                         "UPDATE users SET balance_minor = balance_minor + ? WHERE id = ?",
-                        (int(order["amount_minor"]), order["user_id"]),
+                        (credited_axiom_usd_minor, order["user_id"]),
                     )
                 else:
                     user = db.execute("SELECT pro_expires_at FROM users WHERE id = ?", (order["user_id"],)).fetchone()

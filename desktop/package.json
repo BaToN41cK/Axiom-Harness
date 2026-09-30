@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "test:currency": "node --test src/lib/currency.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

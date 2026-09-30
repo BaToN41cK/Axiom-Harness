@@ -5,7 +5,7 @@ import { Check, Crown, ExternalLink, Loader2, Plus, Wallet, X } from "lucide-rea
 import { openExternal } from "../bridge";
 import Presence from "./Presence";
 import { usePayments } from "../hooks/usePayments";
-import { formatExpiry, parseAmount, paymentBackendConfigured, paymentToken, rubles } from "../lib/payments";
+import { axiomUsd, formatExpiry, parseAmount, paymentBackendConfigured, paymentToken, rubles, rubMinorToAxiomUsdMinor } from "../lib/payments";
 import type { Payment } from "../lib/payments";
 import { paymentQr } from "../lib/paymentQr";
 import "../styles/payments.css";
@@ -63,14 +63,18 @@ export default function Balance() {
   const createPro = () => {
     if (!s.active && s.account?.payments_available) void s.buyPro();
   };
-  const balanceLabel = s.account ? rubles(s.account.balance_minor) : "— ₽";
+  const createProFromBalance = () => {
+    if (!s.active && s.account && s.account.balance_minor >= 990) void s.buyProFromBalance();
+  };
+  const balanceLabel = s.account ? axiomUsd(s.account.balance_minor) : "—";
+  const topupUsdLabel = amountMinor === null ? "—" : axiomUsd(rubMinorToAxiomUsdMinor(amountMinor));
   const pending = s.payment?.status === "pending";
 
   return <>
     <button
       className={"balance-pill" + (s.account?.pro_active ? " balance-pro" : "")}
-      title={`Баланс ${balanceLabel} · AXIOM PRO`}
-      aria-label={`Баланс ${balanceLabel}. Открыть баланс и AXIOM PRO`}
+      title={`Баланс ${balanceLabel} AXIOM USD-кредитов · AXIOM PRO`}
+      aria-label={`Баланс ${balanceLabel} AXIOM USD-кредитов. Открыть баланс и AXIOM PRO`}
       aria-haspopup="dialog"
       aria-expanded={open}
       onClick={() => { setOpen(true); if (paymentToken.get()) void s.refresh(); }}
@@ -108,7 +112,7 @@ export default function Balance() {
             </button>
           </div> : <div className="modal-body">
             <div className="payment-balance">
-              <span>Баланс AXIOM</span><strong>{balanceLabel}</strong>
+              <span>Внутренние AXIOM USD-кредиты</span><strong>{balanceLabel}</strong>
               <span className="payment-account">Аккаунт: {s.account.username}</span>
             </div>
             <section className="payment-section">
@@ -117,25 +121,29 @@ export default function Balance() {
               <button className="btn primary" disabled={s.busy || s.active || !s.account.payments_available} onClick={createPro}>
                 {s.busy ? "Создание…" : s.account.pro_active ? "Продлить AXIOM PRO" : "Купить PRO · 990 ₽"}
               </button>
+              <button className="btn" disabled={s.busy || s.active || s.account.balance_minor < 990} onClick={createProFromBalance}>
+                {s.account.pro_active ? "Продлить PRO за $9.90 AXIOM" : "Купить PRO за $9.90 AXIOM"}
+              </button>
             </section>
             <section className="payment-section">
               <div className="payment-section-head"><div><span className="payment-kicker">БАЛАНС</span><h3>Пополнить баланс</h3></div></div>
               <div className="payment-presets" role="group" aria-label="Быстрая сумма пополнения">
                 {[100, 250, 500, 1000].map((value) => <button key={value} className={"btn" + (amountMinor === value * 100 ? " selected" : "")} disabled={s.active} aria-pressed={amountMinor === value * 100} onClick={() => setAmount(String(value))}>{rubles(value * 100)}</button>)}
               </div>
-              <label className="field"><span className="field-label">Сумма к зачислению, ₽</span>
+              <label className="field"><span className="field-label">Сумма оплаты, ₽</span>
                 <input inputMode="decimal" value={amount} disabled={s.active} aria-describedby="payment-range" aria-invalid={amountMinor === null} onChange={(event) => setAmount(event.target.value)} />
               </label>
-              <span className="payment-note" id="payment-range">От 100 до 100 000 ₽. Страница ЮMoney покажет сумму к оплате для выбранного способа.</span>
+              <span className="payment-note" id="payment-range">Вы платите RUB. Фиксированный курс AXIOM: 100 ₽ = $1.00 внутреннего баланса, не курс обмена валют.</span>
+              <div className="payment-note">Вы получите: <strong>{topupUsdLabel} AXIOM USD-кредитов</strong></div>
               <button className="btn primary" disabled={s.busy || s.active || !amountMinor || !s.account.payments_available} onClick={createTopup}>
-                {s.busy ? "Создание…" : "Пополнить"}
+                {s.busy ? "Создание…" : `Пополнить на ${amount} ₽`}
               </button>
             </section>
             {s.account.payments_message && <p className="payment-note payment-unavailable">{s.account.payments_message}</p>}
             {s.payment && <section className={"payment-result" + (s.payment.status === "paid" ? " payment-success" : "")} role="status">
               {s.payment.status === "paid" ? <Check size={20} /> : s.payment.status === "pending" ? <Loader2 size={16} className="spin" /> : null}
               <strong>{paymentMessage(s.payment)}</strong>
-              {s.payment.status === "paid" && <span>{s.payment.type === "pro" ? `Подписка до ${formatExpiry(s.account.pro_expires_at)}` : `Зачислено ${rubles(s.payment.amount_minor)}`}</span>}
+              {s.payment.status === "paid" && <span>{s.payment.type === "pro" ? `Подписка до ${formatExpiry(s.account.pro_expires_at)}` : `Подтверждено ${rubles(s.payment.received_rub_minor ?? s.payment.amount_minor)} · зачислено ${axiomUsd(s.payment.credited_axiom_usd_minor ?? rubMinorToAxiomUsdMinor(s.payment.amount_minor))} AXIOM USD-кредитов`}</span>}
               {pending && <>
                 <span>{s.payment.type === "pro" ? "AXIOM PRO · 990 ₽" : `Зачисление · ${rubles(s.payment.amount_minor)}`}</span>
                 {qr && <svg className="payment-qr" viewBox="0 0 65 65" role="img" aria-label="QR-код страницы оплаты YooMoney" shapeRendering="crispEdges">

@@ -18,7 +18,7 @@ The implementation uses YooMoney's documented payment-button form instead:
 4. YooMoney sends `POST /v1/webhooks/yoomoney`. The backend verifies the official HMAC-SHA256 `sign` over all URL-encoded notification parameters except `sign`, sorted by name, then validates currency, incoming type, label, unique operation ID, expected sender debit and recipient amount.
 5. One SQLite transaction records the operation, changes the order, and credits the confirmed amount or extends PRO. A duplicate operation ID cannot apply a second time.
 
-The QR in AXIOM contains only the public HTTPS checkout URL. The hosted page displays the actual charge for the selected method. For top-ups, YooMoney's documented button fees are recipient-side (wallet: 1%; card: 3%), so the backend calculates the form sum to deliver the requested top-up amount. If the signed notification's received amount does not match the pending order, or is below 100 ₽, it is recorded and the order fails without a credit. PRO costs exactly 990 ₽ to the payer (`withdraw_amount`); recipient fees reduce what reaches the wallet but do not change the purchase price.
+The QR in AXIOM contains only the public HTTPS checkout URL. The hosted page displays the requested RUB charge. The fixed internal denomination is `AXIOM_USD_PER_RUB = 0.01`: 100 RUB = 1.00 AXIOM USD credit, not a market exchange rate. YooMoney's signed `amount` is the confirmed RUB amount received after provider fees; after signature, currency, label, order, and fee-adjusted settlement checks pass, that confirmed integer RUB amount is converted to integer AXIOM USD cents. A duplicate operation ID cannot credit twice. PRO costs exactly 990 ₽ through YooMoney (or $9.90 in internal AXIOM USD credits when the balance purchase endpoint is used).
 
 The notification protocol does not contain a separate `status` field. The signed incoming-payment notification is treated as the provider's confirmation event; `unaccepted=true`, code-protected, test, wrong-currency, wrong-type, wrong-label, wrong-amount, and duplicate events do not grant value. A browser return is informational only.
 
@@ -28,7 +28,7 @@ Primary docs: [payment-button form and fee parameters](https://yoomoney.ru/docs/
 
 The optional FastAPI service lives in `payment-backend/` and does not change AXIOM's local chat runtime. It uses one SQLite database on a persistent server disk and must run as a single service instance.
 
-- `users`: account ID, username, PBKDF2 password hash, balance in kopecks, PRO activation and expiration timestamps.
+- `users`: account ID, username, PBKDF2 password hash, `balance_minor` in AXIOM USD cents (not RUB and not a bank balance), PRO activation and expiration timestamps.
 - `sessions`: only a SHA-256 hash of each random bearer token and its expiry.
 - `payment_orders`: owner, type, expected amount, status, unique YooMoney label, unique operation ID, timestamps, and minimal reconciliation metadata.
 - `webhook_events`: one row per signed provider operation, including unmatched, duplicate-order, and rejected-amount events. Sender names, phone numbers, addresses, card data, and the whole callback body are not stored.
@@ -40,7 +40,8 @@ New desktop accounts use a username and password because AXIOM currently has no 
 - `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/logout`
 - `GET /v1/me` — current balance, PRO status/expiry, latest order, and payment availability
 - `POST /v1/payments/topup` — server validates 100–100,000 ₽ and creates a pending order
-- `POST /v1/payments/pro` — amount is fixed server-side at 990 ₽
+- `POST /v1/payments/pro` — YooMoney amount is fixed server-side at 990 ₽
+- `POST /v1/payments/pro/balance` — atomically debit $9.90 AXIOM USD credits and activate PRO
 - `GET /v1/payments/{order_id}` — owner-scoped public status and refreshed account fields
 - `POST /v1/webhooks/yoomoney` — signed YooMoney callback
 - `GET /checkout/{order_id}` — hosted form; `GET /checkout/{order_id}/return` — informational return page
