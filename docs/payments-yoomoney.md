@@ -54,17 +54,19 @@ Set these in the hosting platform's secret/environment settings. The backend rea
 | --- | --- |
 | `YOOMONEY_WALLET_ID` | Public receiving wallet ID, `4100118808592904` |
 | `YOOMONEY_NOTIFICATION_SECRET` | Secret generated in the wallet's HTTP-notification settings; read from the environment or Render Secret File; never place in AXIOM desktop builds |
-| `PAYMENT_BACKEND_URL` | Public HTTPS base URL of this service, e.g. `https://axiom-payments.onrender.com` |
+| `PAYMENT_BACKEND_URL` | Public HTTPS base URL of this service, e.g. `https://axiom-harness.onrender.com` |
 | `PAYMENT_DATABASE_PATH` | Persistent path, e.g. `/var/data/axiom-payments.sqlite3` |
 | `YOOMONEY_COMMERCIAL_USE_APPROVED` | Defaults to `false`; keep false unless YooMoney confirms this use is permitted for this wallet |
 | `AXIOM_ALLOWED_ORIGINS` | Optional comma-separated Tauri/dev origins. A restrictive Tauri allowlist is built in by default. |
 
-The only payment-provider secret is `YOOMONEY_NOTIFICATION_SECRET`; the wallet ID is public. This flow does not require a YooMoney OAuth/API token. The desktop app needs only the public backend URL at build time:
+The only payment-provider secret is `YOOMONEY_NOTIFICATION_SECRET`; the wallet ID is public. Both `axiom --gui` (Vite dev) and production desktop builds default to the public backend at `https://axiom-harness.onrender.com` via `DEFAULT_BACKEND_URL` in `desktop/src/lib/payments.ts`. A custom URL still wins when set at startup or build time:
 
 ```powershell
-$env:VITE_PAYMENT_BACKEND_URL = "https://axiom-payments.onrender.com"
+$env:VITE_PAYMENT_BACKEND_URL = "https://axiom-harness.onrender.com"
 npm --prefix desktop run build
 ```
+
+For local dev (`vite dev`), the same default applies. Set `VITE_PAYMENT_BACKEND_URL` explicitly only to use another backend.
 
 That URL is public configuration, not a secret. No YooMoney credentials or notification secret go into the frontend or desktop binary.
 
@@ -79,7 +81,7 @@ Render documents Python FastAPI web services and persistent disks. Free web serv
 5. Select a paid web-service plan with one service instance. Under **Advanced → Disk**, add a 1 GB persistent disk mounted at `/var/data`.
 6. Add the configuration above in the service settings. Set `PAYMENT_DATABASE_PATH=/var/data/axiom-payments.sqlite3`, `PAYMENT_BACKEND_URL` to the service's HTTPS URL, and keep `YOOMONEY_COMMERCIAL_USE_APPROVED=false` until the provider-use restriction is resolved. Store the notification secret as an Environment variable or as a Secret File named `YOOMONEY_NOTIFICATION_SECRET`.
 7. Deploy and confirm `https://<service>.onrender.com/healthz` returns `{"status":"ok"}`.
-8. Build AXIOM with `VITE_PAYMENT_BACKEND_URL` set to the same public URL.
+8. Build AXIOM with the default public URL, or set `VITE_PAYMENT_BACKEND_URL` to override it.
 
 Render references: [FastAPI deployment](https://render.com/docs/deploy-fastapi), [persistent disks](https://render.com/docs/disks), [environment variables/secrets](https://render.com/docs/configure-environment-variables), [pricing](https://render.com/pricing).
 

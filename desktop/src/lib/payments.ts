@@ -25,7 +25,13 @@ export interface Account {
   latest_payment: Payment | null;
 }
 
-const API_BASE = (import.meta.env.VITE_PAYMENT_BACKEND_URL || "").replace(/\/$/, "");
+// Public HTTPS URL used in dev and production; an explicit Vite URL overrides it.
+// Do not put YooMoney credentials, keys or tokens in the frontend.
+const DEFAULT_BACKEND_URL = "https://axiom-harness.onrender.com";
+
+const API_BASE = (
+  import.meta.env.VITE_PAYMENT_BACKEND_URL || DEFAULT_BACKEND_URL
+).replace(/\/$/, "");
 const TOKEN_KEY = "axiom.payments.session.v1";
 
 export const paymentBackendConfigured = Boolean(API_BASE);
