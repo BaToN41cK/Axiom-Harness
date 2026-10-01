@@ -362,14 +362,6 @@ export default function App() {
             />
             )}
 
-            {s.lastAction && (
-              <div className={"last-action" + (s.lastAction.ok ? " ok" : " error")}>
-                <span className="last-action-label">Последнее действие</span>
-                <span className="last-action-name">{s.lastAction.name}</span>
-                {s.lastAction.detail && <span className="last-action-detail">{s.lastAction.detail}</span>}
-                <span className="last-action-state">{s.lastAction.ok ? "готово" : "ошибка"}</span>
-              </div>
-            )}
             <Composer
               generating={s.generating}
               disabled={!s.connected && !s.activeModel}

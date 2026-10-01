@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rich.text import Text
 from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import OptionList, Static
@@ -23,6 +24,7 @@ class Command:
     name: str
     description: str
     argument_hint: str = ""
+    category: str = "General"
 
     @property
     def usage(self) -> str:
@@ -31,28 +33,44 @@ class Command:
 
 #: Canonical command set (OpenCode-style).
 COMMANDS: tuple[Command, ...] = (
-    Command("/help", "Show help"),
-    Command("/model", "Change model", "[name]"),
-    Command("/models", "Model list"),
-    Command("/clear", "Clear conversation"),
-    Command("/history", "Conversation history"),
-    Command("/new", "New conversation"),
-    Command("/settings", "Settings"),
-    Command("/search", "Web search", "query"),
-    Command("/searchtest", "Test web search (real query)", "[query]"),
-    Command("/status", "System status"),
-    Command("/permissions", "Permission mode (ask/auto_approve_safe/auto_approve_all)"),
-    Command("/profiles", "List / switch system prompt profiles"),
-    Command("/trajectory", "Trajectory viewer: steps, tool calls, tokens/cost"),
-    Command("/providers", "Provider manager: statuses, test connection"),
-    Command("/agents", "Agent registry: roles and assigned models"),
-    Command("/plugins", "Plugin manager: install, enable, disable, remove"),
-    Command("/memory", "Curated memory: list, add (a), delete (d), edit (e)"),
-    Command("/knowledge", "Knowledge base: collections, index, search"),
-    Command("/orchestrate", "Run a task through analyst, coder, debugger, tester and reviewer", "task"),
-    Command("/benchmark", "Run real cold/warm performance scenarios", "[repetitions]"),
-    Command("/exit", "Exit Axiom"),
+    Command("/help", "Show help", category="General"),
+    Command("/new", "New conversation", category="Chat"),
+    Command("/clear", "Clear conversation", category="Chat"),
+    Command("/history", "Conversation history", category="Chat"),
+    Command("/search", "Web search", "query", category="Chat"),
+    Command("/open", "Open a project folder (picker, or a path)", "[path]", category="Workspace"),
+    Command("/close", "Close the folder — global chat, no file tools", category="Workspace"),
+    Command("/account", "Account: balance, AXIOM PRO, sign in / out", category="Account"),
+    Command("/login", "Sign in (password, GitHub or Google)", category="Account"),
+    Command("/register", "Create an AXIOM account", category="Account"),
+    Command("/pro", "Subscribe to AXIOM PRO — 990 ₽ / 30 days", category="Account"),
+    Command("/topup", "Top up the balance", "[amount ₽]", category="Account"),
+    Command("/model", "Change model", "[name]", category="Models"),
+    Command("/models", "Model list", category="Models"),
+    Command("/providers", "Provider manager: statuses, test connection", category="Models"),
+    Command("/agents", "Agent registry: roles and assigned models", category="Models"),
+    Command("/settings", "Settings", category="Settings"),
+    Command("/theme", "Switch accent colour (cycles when empty)", "[accent]", category="Settings"),
+    Command("/animations", "Turn animations on / off", "[on|off]", category="Settings"),
+    Command("/panel", "Show / hide the workspace panel (Ctrl+B)", category="Settings"),
+    Command("/permissions", "Permission mode (ask/auto_approve_safe/auto_approve_all)", category="Settings"),
+    Command("/profiles", "List / switch system prompt profiles", category="Settings"),
+    Command("/plugins", "Plugin manager: install, enable, disable, remove", category="Extensions"),
+    Command("/memory", "Curated memory: list, add (a), delete (d), edit (e)", category="Extensions"),
+    Command("/knowledge", "Knowledge base: collections, index, search", category="Extensions"),
+    Command("/orchestrate", "Run a task through analyst, coder, debugger, tester and reviewer", "task", category="Agents"),
+    Command("/trajectory", "Trajectory viewer: steps, tool calls, tokens/cost", category="Agents"),
+    Command("/status", "System status", category="System"),
+    Command("/searchtest", "Test web search (real query)", "[query]", category="System"),
+    Command("/benchmark", "Run real cold/warm performance scenarios", "[repetitions]", category="System"),
+    Command("/exit", "Exit Axiom", category="System"),
 )
+
+#: Glyph shown next to each category header in the slash menu.
+CATEGORY_GLYPHS: dict[str, str] = {
+    "General": "◆", "Chat": "✦", "Models": "◈", "Settings": "⚙", "Extensions": "⬢", "Agents": "⟡", "System": "▣",
+    "Workspace": "▤", "Account": "◎",
+}
 
 _COMMAND_INDEX = {command.name: command for command in COMMANDS}
 
@@ -83,13 +101,25 @@ def matching_commands(prefix: str) -> list[Command]:
 
 
 def command_rows(commands: list[Command], width: int = 60) -> list[Option]:
-    """Render commands as option rows, aligned for the menu panel."""
+    """Render commands as option rows grouped by category (headers are disabled)."""
     widest = max((len(c.usage) for c in commands), default=8)
     widest = min(widest, max(10, width - 24))
+    grouped = len(commands) > 6
     rows: list[Option] = []
+    current: str | None = None
     for command in commands:
-        usage = command.usage.ljust(widest)
-        rows.append(Option(f"{usage}  {command.description}", id=command.name))
+        if grouped and command.category != current:
+            current = command.category
+            header = Text(no_wrap=True)
+            header.append(f"{CATEGORY_GLYPHS.get(current, '·')} {current.upper()}", style="bold #6c6c78")
+            rows.append(Option(header, id=f"__cat__{current}", disabled=True))
+        line = Text(no_wrap=True, overflow="ellipsis")
+        line.append(command.name, style="bold")
+        hint = f" {command.argument_hint}" if command.argument_hint else ""
+        line.append(hint, style="#8b949e")
+        line.append(" " * max(1, widest - len(command.usage) + 2))
+        line.append(command.description, style="#9a9aa6")
+        rows.append(Option(line, id=command.name))
     return rows
 
 
@@ -118,7 +148,7 @@ class CommandMenu(Vertical):
         self._visible = False
 
     def compose(self):
-        yield Static("COMMANDS", id="command-menu-title")
+        yield Static("COMMANDS  ·  ↑↓ choose  ·  Enter run  ·  Tab complete", id="command-menu-title")
         yield MenuOptionList(id="command-menu-list")
 
 
@@ -149,7 +179,9 @@ class CommandMenu(Vertical):
         option_list.clear_options()
         for option in command_rows(commands, self.size.width or 60):
             option_list.add_option(option)
-        option_list.highlighted = 0
+        option_list.highlighted = next(
+            (i for i in range(option_list.option_count) if not option_list.get_option_at_index(i).disabled), 0
+        )
         self._visible = True
         self.display = True
         self.refresh(layout=True)

@@ -30,6 +30,9 @@ class Message(BaseModel):
     created_at: float | None = None
     #: Base64-encoded images attached to this message (Ollama vision models)
     images: list[str] = Field(default_factory=list)
+    #: Validated structured artifacts attached to this message (W3.4). Stored as
+    #: raw dicts so history persistence stays decoupled from artifact validation.
+    artifacts: list[dict] = Field(default_factory=list)
 
 
 class ReasoningChunk(BaseModel):

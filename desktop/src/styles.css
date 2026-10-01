@@ -984,15 +984,6 @@ body.resizing .sidebar-inner { transition: none !important; }
 .topbar-model { color: var(--text-dim); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar-tools { color: var(--ok); }
 
-.last-action { display: flex; align-items: center; gap: 8px; max-width: 780px; margin: 0 auto 6px; padding: 5px 10px; border: 1px solid var(--border-soft); border-radius: 7px; color: var(--text-faint); font-size: 11px; }
-.last-action.ok { border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
-.last-action.error { border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
-.last-action-label { text-transform: uppercase; letter-spacing: .06em; }
-.last-action-name { color: var(--text-dim); }
-.last-action-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.last-action-state { margin-left: auto; color: var(--ok); }
-.last-action.error .last-action-state { color: var(--bad); }
-
 .ex-search { display: flex; align-items: center; gap: 6px; margin: 0 8px 7px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); }
 .ex-empty b, .ex-empty span { display: block; }
 .ex-empty b { color: var(--text-dim); margin-bottom: 3px; }

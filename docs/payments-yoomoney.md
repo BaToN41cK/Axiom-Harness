@@ -81,6 +81,8 @@ That URL is public configuration, not a secret. No YooMoney credentials, OAuth c
 
 ### GitHub and Google login
 
+![Регистрация / вход в аккаунт desktop GUI](../assets/Gui_Registration.png)
+
 The wallet provides normal local registration/login plus **GitHub** and **Google** buttons. OAuth client secrets stay on the backend. Configure the exact callback URLs in each provider application:
 
 ```text

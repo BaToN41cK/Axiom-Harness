@@ -1,6 +1,18 @@
-import { useState, useEffect, useRef, useId, createContext, useContext, isValidElement, cloneElement } from "react";
+import { useState, useEffect, useMemo, useRef, useId, createContext, useContext, isValidElement, cloneElement } from "react";
 import {
   BookOpen,
+  Check,
+  Copy,
+  Cpu,
+  FolderOpen,
+  HardDrive,
+  Layers,
+  Lock,
+  Monitor,
+  Puzzle,
+  ShieldCheck,
+  Terminal,
+  Zap,
   Brain,
   Globe,
   Info,
@@ -30,7 +42,12 @@ import type {
 import type { SettingsSection } from "../hooks/useAxiom";
 import { isSoundEnabled, playUiSound, setSoundEnabled } from "../lib/sound";
 import type { UiSound } from "../lib/sound";
+import ProvidersPanel from "./settings/ProvidersPanel";
+import PluginsMarketplace from "./settings/PluginsMarketplace";
 import "../styles/settings.css";
+import "../styles/settings-market.css";
+import "../styles/settings-polish.css";
+import pkg from "../../package.json";
 
 interface Props {
   config: AxiomConfig;
@@ -97,6 +114,15 @@ const SECTION_GROUPS: { label: string; keys: SettingsSection[] }[] = [
   { label: "Расширения", keys: ["plugins"] },
   { label: "Система", keys: ["about"] },
 ];
+
+/** Colour family of each group — drives the icon tiles in nav and header. */
+const SECTION_TINT: Record<SettingsSection, string> = {
+  general: "ws", appearance: "ws", chat: "ws", shortcuts: "ws",
+  models: "ai", providers: "ai", tools: "ai",
+  memory: "data", knowledge: "data",
+  plugins: "ext",
+  about: "sys",
+};
 
 const SECTION_META: Record<SettingsSection, { eyebrow: string; title: string; description: string }> = {
   general: { eyebrow: "Рабочее пространство", title: "Общие", description: "История, системный промпт и базовое поведение AXIOM." },
@@ -221,6 +247,34 @@ export default function SettingsModal({
   const dialogRef = useSettingsFocus(onClose);
   const contentRef = useRef<HTMLElement>(null);
   const meta = SECTION_META[section];
+  const [navQuery, setNavQuery] = useState("");
+  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(config), [draft, config]);
+  const sectionItem = SECTIONS.find((item) => item.key === section);
+  const navGroups = useMemo(() => {
+    const q = navQuery.trim().toLowerCase();
+    if (!q) return SECTION_GROUPS;
+    return SECTION_GROUPS
+      .map((group) => ({
+        ...group,
+        keys: group.keys.filter((key) => {
+          const item = SECTIONS.find((candidate) => candidate.key === key)!;
+          const m = SECTION_META[key];
+          return [item.label, m.title, m.description, group.label].some((text) => text.toLowerCase().includes(q));
+        }),
+      }))
+      .filter((group) => group.keys.length > 0);
+  }, [navQuery]);
+  const saveRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     setDraft(config);
@@ -284,12 +338,16 @@ export default function SettingsModal({
     onSave(patch);
     onClose();
   };
+  saveRef.current = save;
 
   return (
     <div className="modal-backdrop axiom-settings-backdrop" onClick={onClose}>
       <div className="modal axiom-settings" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="axiom-settings-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="axiom-settings-head">
-          <h2 id="axiom-settings-title"><span className="settings-wordmark">AXIOM</span>Настройки</h2>
+          <h2 id="axiom-settings-title">
+            <span className="settings-logo" aria-hidden="true"><span /></span>
+            <span className="settings-wordmark">AXIOM</span>Настройки
+          </h2>
           <button className="icon-btn" aria-label="Закрыть настройки" title="Закрыть (Esc)" onClick={onClose}>
             <X size={16} strokeWidth={1.8} />
           </button>
@@ -297,7 +355,21 @@ export default function SettingsModal({
 
         <div className="axiom-settings-workspace">
           <nav className="settings-nav" aria-label="Разделы настроек">
-            {SECTION_GROUPS.map((group) => (
+            <label className="settings-nav-search">
+              <Search size={13} strokeWidth={1.8} />
+              <input
+                value={navQuery}
+                placeholder="Найти раздел"
+                aria-label="Найти раздел настроек"
+                onChange={(e) => setNavQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && navGroups[0]?.keys[0]) { setSection(navGroups[0].keys[0]); }
+                  if (e.key === "Escape" && navQuery) { e.stopPropagation(); setNavQuery(""); }
+                }}
+              />
+            </label>
+            {navGroups.length === 0 && <div className="settings-nav-empty">Ничего не найдено</div>}
+            {navGroups.map((group) => (
               <div className="settings-nav-group" key={group.label}>
                 <div className="settings-nav-group-label">{group.label}</div>
                 {group.keys.map((key) => {
@@ -310,7 +382,7 @@ export default function SettingsModal({
                       aria-current={section === item.key ? "page" : undefined}
                       onClick={() => { if (section !== item.key) playUiSound("panel"); setSection(item.key); }}
                     >
-                      <span className="settings-nav-icon">{item.icon}</span>
+                      <span className={"settings-nav-icon tint-" + SECTION_TINT[item.key]}>{item.icon}</span>
                       <span>{item.label}</span>
                     </button>
                   );
@@ -321,7 +393,9 @@ export default function SettingsModal({
 
           <main className="settings-main" ref={contentRef} aria-labelledby="settings-section-heading" tabIndex={0}>
             <header className="settings-section-title">
+              <span className={"settings-section-icon tint-" + SECTION_TINT[section]} aria-hidden="true">{sectionItem?.icon}</span>
               <div>
+                <span className="settings-section-eyebrow">{meta.eyebrow}</span>
                 <h3 id="settings-section-heading">{meta.title}</h3>
                 <p>{meta.description}</p>
               </div>
@@ -329,7 +403,7 @@ export default function SettingsModal({
             <div className="settings-content" key={section}>
             {section === "general" && <GeneralSection draft={draft} set={set} />}
             {section === "models" && <ModelsSection draft={draft} set={set} config={config} onRestartCore={onRestartCore} />}
-            {section === "providers" && <ProvidersSection rows={providerRows} models={providerModels} loading={providerLoading} onSave={onProviderSaveSettings} onPickModel={onProviderPickModel} />}
+            {section === "providers" && <ProvidersPanel rows={providerRows} models={providerModels} loading={providerLoading} activeModel={config.model} onSave={onProviderSaveSettings} onPickModel={onProviderPickModel} />}
             {section === "plugins" && <PluginsSection rows={pluginRows} bundled={bundledPlugins} loading={pluginLoading} onInstall={onInstallPlugin} onInstallBundled={onInstallBundledPlugin} onToggle={onTogglePlugin} onRemove={onRemovePlugin} />}
             {section === "memory" && <MemorySection rows={memoryRows} loading={memoryLoading} onLoad={onLoadMemory} onAdd={onAddMemory} onEdit={onEditMemory} onDelete={onDeleteMemory} />}
             {section === "knowledge" && (
@@ -348,7 +422,7 @@ export default function SettingsModal({
             {section === "tools" && <ToolsSection draft={draft} set={set} searchProviders={searchProviders} onRunSearchTest={onRunSearchTest} searchTestResult={searchTestResult} searchTesting={searchTesting} />}
             {section === "appearance" && <AppearanceSection draft={draft} set={set} />}
             {section === "shortcuts" && <ShortcutsSection />}
-            {section === "about" && <AboutSection />}
+            {section === "about" && <AboutSection config={config} pluginCount={pluginRows.length} providerCount={providerRows.length} />}
             </div>
           </main>
         </div>
@@ -358,12 +432,16 @@ export default function SettingsModal({
             <RefreshCw size={14} strokeWidth={1.8} />
             <span>Перезапустить ядро</span>
           </button>
-          <span className="settings-save-hint">{["providers", "plugins", "memory", "knowledge"].includes(section) ? "Действия в этом разделе применяются сразу" : "Параметры применяются кнопкой «Сохранить»"}</span>
+          <span className={"settings-save-hint" + (dirty ? " dirty" : "")}>
+            {dirty
+              ? <><span className="settings-dirty-dot" />Есть несохранённые изменения · Ctrl+S</>
+              : ["providers", "plugins", "memory", "knowledge"].includes(section) ? "Действия в этом разделе применяются сразу" : "Все изменения сохранены"}
+          </span>
           <div className="modal-foot-spacer" />
           <button className="btn ghost" onClick={onClose}>
             Отмена
           </button>
-          <button className="btn primary settings-save" onClick={save}>
+          <button className={"btn primary settings-save" + (dirty ? " pulse" : "")} onClick={save}>
             Сохранить
           </button>
         </div>
@@ -378,52 +456,6 @@ interface SectionProps {
   draft: AxiomConfig;
   set: <K extends keyof AxiomConfig>(key: K, value: AxiomConfig[K]) => void;
 }
-function ProvidersSection({ rows, models, loading, onSave, onPickModel }: {
-  rows: ProviderRow[]; models: ProviderModelRow[]; loading: boolean;
-  onSave: (id: string, key: string, baseUrl: string) => Promise<void>;
-  onPickModel: (providerId: string, model: string) => Promise<void>;
-}) {
-  const [selected, setSelected] = useState(rows.find((item) => item.id === "openai_compatible")?.id ?? rows[0]?.id ?? "openai_compatible");
-  const [key, setKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const row = rows.find((item) => item.id === selected) ?? rows[0];
-  useEffect(() => {
-    if (rows.length && !rows.some((item) => item.id === selected)) {
-      setSelected(rows.find((item) => item.id === "openai_compatible")?.id ?? rows[0].id);
-    }
-  }, [rows, selected]);
-  useEffect(() => setBaseUrl(row?.base_url || ""), [row?.id, row?.base_url]);
-  const providerModels = models.filter((item) => item.provider_id === selected);
-  return <div className="provider-settings">
-    <div className="settings-card provider-picker-card">
-      <div className="settings-card-head">
-        <h4>Подключение</h4>
-        {row && <span className="settings-status-pill">{row.status}</span>}
-      </div>
-      <label className="settings-field"><span>Провайдер</span><select value={selected} onChange={(e) => { setSelected(e.target.value); setKey(""); }}>
-        {rows.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-      </select></label>
-      {row && <div className="provider-summary"><span>{row.configured ? "Подключение настроено" : "Требуется настройка"}</span><code>{row.base_url || "endpoint не задан"}</code></div>}
-    </div>
-    <div className="settings-card">
-      <div className="settings-field-grid">
-        <label className="settings-field"><span>API key</span><input type="password" value={key} placeholder={row?.configured ? "•••••••• (сохранён)" : "Не задан"} onChange={(e) => setKey(e.target.value)} /></label>
-        <label className="settings-field"><span>Base URL</span><input value={baseUrl} spellCheck={false} placeholder="https://api.example.com/v1" onChange={(e) => setBaseUrl(e.target.value)} /></label>
-      </div>
-      <div className="settings-card-foot"><span>Пустой ключ — оставить текущий. Endpoint: /v1.</span><button className="btn primary" disabled={!row || loading} onClick={() => void onSave(selected, key, baseUrl.trim())}>{loading ? "Проверка…" : "Сохранить и проверить"}</button></div>
-    </div>
-    <div className="settings-card">
-      <label className="settings-field"><span>Модель для следующих запросов</span><select value="" onChange={(e) => { if (e.target.value) void onPickModel(selected, e.target.value); }}>
-        <option value="">Выберите модель…</option>
-        {providerModels.map((item) => <option key={item.id} value={item.model}>{item.label} · {item.capabilities.join(", ")}</option>)}
-      </select></label>
-      {!providerModels.length && <div className="settings-inline-note">Модели появятся после проверки подключения.</div>}
-    </div>
-  </div>;
-}
-
-
-
 function PluginsSection({
   rows,
   bundled,
@@ -441,7 +473,6 @@ function PluginsSection({
   onToggle: (name: string, enabled: boolean) => Promise<PluginRow | null>;
   onRemove: (name: string) => Promise<boolean>;
 }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [pendingTrust, setPendingTrust] = useState<{ plugin: PluginRow | null; action: "install" | "run"; run: () => Promise<unknown> } | null>(null);
   const [pendingRemove, setPendingRemove] = useState<PluginRow | null>(null);
 
@@ -455,143 +486,18 @@ function PluginsSection({
     if (pending) await pending.run();
   };
 
-  const toggleExpand = (name: string) => {
-    setExpanded((prev) => (prev === name ? null : name));
-  };
-
   return (
     <div className="plugin-settings">
-      <div className="settings-section-head">
-        <div>
-          <h3>Установленные <span className="settings-count">{rows.length}</span></h3>
-        </div>
-        <button className="btn primary" disabled={loading} onClick={() => requestTrust(null, "install", onInstall)}>
-          {loading ? "Загрузка…" : "Установить из папки"}
-        </button>
-      </div>
-      <div className="plugin-path-hint">
-        Каталог установленных плагинов: <code>~/.axiom/plugins/</code>
-      </div>
-      {rows.length === 0 ? (
-        <div className="settings-empty">Плагинов пока нет. Выберите папку своего плагина или установите встроенный ниже.</div>
-      ) : (
-        <div className="plugin-list">
-          {rows.map((plugin) => (
-            <div className="plugin-card" key={plugin.name}>
-              <div className="plugin-card-main">
-                <div className="plugin-card-title">
-                  <span className={"plugin-status-dot" + (plugin.enabled ? " enabled" : "")} />
-                  <strong>{plugin.name}</strong>
-                  <span className="plugin-version">v{plugin.version}</span>
-                  <span className={"settings-status-pill " + (plugin.enabled ? "ready" : "idle")}>{plugin.enabled ? "Включён" : "Выключен"}</span>
-                  {plugin.bundled && <span className="plugin-version">встроенный</span>}
-                  {plugin.readme && (
-                    <button
-                      className="btn ghost small"
-                      onClick={() => toggleExpand(plugin.name)}
-                      aria-expanded={expanded === plugin.name}
-                      style={{ marginLeft: "auto" }}
-                    >
-                      <BookOpen size={13} />{expanded === plugin.name ? "Скрыть" : "Документация"}
-                    </button>
-                  )}
-                </div>
-                <div className="plugin-card-description">
-                  {plugin.description || "Пользовательский плагин AXIOM"}
-                </div>
-                <div className="plugin-card-meta">
-                  {plugin.author && <span>Автор: {plugin.author}</span>}
-                  {plugin.tools.length > 0 && <span>Инструменты: {plugin.tools.join(", ")}</span>}
-                  {plugin.skills.length > 0 && <span>Skills: {plugin.skills.join(", ")}</span>}
-                </div>
-                {plugin.readme && (
-                  <div className={"plugin-disclosure" + (expanded === plugin.name ? " open" : "")} aria-hidden={expanded !== plugin.name}>
-                  <div className="plugin-card-readme">
-                    <pre>{plugin.readme}</pre>
-                  </div>
-                  </div>
-                )}
-              </div>
-              <div className="plugin-card-actions">
-                <button
-                  className={"switch" + (plugin.enabled ? " on" : "")}
-                  role="switch"
-                  aria-label={`${plugin.enabled ? "Выключить" : "Включить"} ${plugin.name}`}
-                  aria-checked={plugin.enabled}
-                  disabled={loading}
-                  onClick={() => plugin.enabled
-                    ? void onToggle(plugin.name, false)
-                    : requestTrust(plugin, "run", async () => onToggle(plugin.name, true))}
-                >
-                  <span className="switch-knob" />
-                </button>
-                <button className="btn danger ghost" disabled={loading} aria-label={`Удалить плагин ${plugin.name}`} onClick={() => setPendingRemove(plugin)}>
-                  Удалить
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {bundled.length > 0 && (
-        <>
-          <div className="settings-section-head">
-            <div>
-              <h3>Каталог AXIOM <span className="settings-count">{bundled.length}</span></h3>
-              <p>Встроенные расширения. После установки остаются выключенными.</p>
-            </div>
-          </div>
-          <div className="plugin-list">
-            {bundled.map((plugin) => (
-              <div className="plugin-card" key={plugin.name}>
-                <div className="plugin-card-main">
-                  <div className="plugin-card-title">
-                    <span className="plugin-status-dot" />
-                    <strong>{plugin.name}</strong>
-                    <span className="plugin-version">v{plugin.version}</span>
-                    <span className="plugin-version">каталог</span>
-                    {plugin.readme && (
-                      <button
-                        className="btn ghost small"
-                        onClick={() => toggleExpand(plugin.name)}
-                        aria-expanded={expanded === plugin.name}
-                        style={{ marginLeft: "auto" }}
-                      >
-                        <BookOpen size={13} />{expanded === plugin.name ? "Скрыть" : "Документация"}
-                      </button>
-                    )}
-                  </div>
-                  <div className="plugin-card-description">
-                    {plugin.description || "Встроенный плагин AXIOM"}
-                  </div>
-                  <div className="plugin-card-meta">
-                    {plugin.author && <span>Автор: {plugin.author}</span>}
-                    {plugin.tools.length > 0 && <span>Инструменты: {plugin.tools.join(", ")}</span>}
-                  </div>
-                  {plugin.readme && (
-                    <div className={"plugin-disclosure" + (expanded === plugin.name ? " open" : "")} aria-hidden={expanded !== plugin.name}>
-                    <div className="plugin-card-readme">
-                      <pre>{plugin.readme}</pre>
-                    </div>
-                    </div>
-                  )}
-                </div>
-                <div className="plugin-card-actions">
-                  <button className="btn primary" disabled={loading} onClick={() => requestTrust(plugin, "install", async () => onInstallBundled(plugin.name))}>
-                    Установить
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      <div className="plugin-security-note">
-        Код плагина выполняется с правами процесса AXIOM. Манифест и `ui.scopes` не ограничивают Python-доступ.
-        Включение плагина означает согласие запускать его код в этой и следующих сессиях, пока плагин включён.
-      </div>
+      <PluginsMarketplace
+        rows={rows}
+        bundled={bundled}
+        loading={loading}
+        onInstall={onInstall}
+        onInstallBundled={onInstallBundled}
+        onToggle={onToggle}
+        onRequestTrust={requestTrust}
+        onRequestRemove={setPendingRemove}
+      />
       {pendingTrust && (
         <SettingsConfirmation title="Подтвердить доверие к плагину" onClose={() => setPendingTrust(null)}>
             <div className="modal-body">
@@ -1284,35 +1190,76 @@ const ACCENT_LABELS: Record<AxiomConfig["accent"], string> = {
   amber: "Янтарный",
 };
 
+const ACCENT_COLORS: Record<AxiomConfig["accent"], string> = {
+  garnet: "#ff5a4d", blue: "#58A6FF", teal: "#2DD4BF", violet: "#A78BFA", slate: "#C3C8CF", rose: "#F2789F", amber: "#F0A93C",
+};
+/** Themes whose accent follows the user's choice (others ship a fixed one). */
+const ACCENT_THEMES: AxiomConfig["theme"][] = ["obsidian", "graphite", "light"];
+const THEME_PREVIEWS: { id: AxiomConfig["theme"]; name: string; bg: string; panel: string; elevated: string; text: string; accent: string }[] = [
+  { id: "obsidian", name: "AXIOM Dark", bg: "#050506", panel: "#0a0a0c", elevated: "#121216", text: "#ececf0", accent: "#ff5a4d" },
+  { id: "graphite", name: "Graphite Grey", bg: "#17181A", panel: "#1C1E21", elevated: "#23262A", text: "#E8E9EA", accent: "#C3C8CF" },
+  { id: "rosewood", name: "Rose Noir", bg: "#0B0709", panel: "#120C0F", elevated: "#1A1216", text: "#F5EAEE", accent: "#F2789F" },
+  { id: "nord", name: "Nord Frost", bg: "#2E3440", panel: "#333A48", elevated: "#3B4252", text: "#ECEFF4", accent: "#88C0D0" },
+  { id: "midnight", name: "Midnight Blue", bg: "#0D1117", panel: "#111820", elevated: "#1B2632", text: "#F0F6FC", accent: "#58A6FF" },
+  { id: "terminal", name: "Terminal Green", bg: "#000000", panel: "#050505", elevated: "#101010", text: "#F2FFF4", accent: "#00FF41" },
+  { id: "solarized", name: "Solarized Dark", bg: "#002B36", panel: "#073642", elevated: "#104B56", text: "#FDF6E3", accent: "#B58900" },
+  { id: "light", name: "AXIOM Light", bg: "#FFF7F7", panel: "#FFF0F0", elevated: "#FFFFFF", text: "#171717", accent: "#E0352A" },
+];
+function accentFor(theme: AxiomConfig["theme"], accent: AxiomConfig["accent"]): string {
+  if (ACCENT_THEMES.includes(theme)) return ACCENT_COLORS[accent];
+  return THEME_PREVIEWS.find((t) => t.id === theme)?.accent ?? ACCENT_COLORS.garnet;
+}
+
 function AppearanceSection({ draft, set }: SectionProps) {
   const [soundEnabled, setSoundEnabledState] = useState(isSoundEnabled);
   return (
     <>
       <GroupTitle>Цвет и оформление</GroupTitle>
-      <Row label="Тема">
-        <select
-          value={draft.theme}
-          onChange={(e) => set("theme", e.target.value as AxiomConfig["theme"])}
-        >
-          <option value="obsidian">AXIOM Dark</option>
-          <option value="graphite">Graphite Grey</option>
-          <option value="rosewood">Rose Noir</option>
-          <option value="nord">Nord Frost</option>
-          <option value="midnight">Midnight Blue</option>
-          <option value="terminal">Terminal Green</option>
-          <option value="solarized">Solarized Dark</option>
-          <option value="light">AXIOM Light</option>
-        </select>
-      </Row>
-      <Row label="Акцент" hint="Общий проверенный цвет для Desktop и TUI">
-        <select
-          value={draft.accent}
-          onChange={(e) => set("accent", e.target.value as AxiomConfig["accent"])}
-        >
+      <div className="theme-picker" role="radiogroup" aria-label="Тема">
+        {THEME_PREVIEWS.map((theme) => (
+          <button
+            key={theme.id}
+            type="button"
+            role="radio"
+            aria-checked={draft.theme === theme.id}
+            className={"theme-card" + (draft.theme === theme.id ? " active" : "")}
+            onClick={() => set("theme", theme.id)}
+          >
+            <span className="theme-preview" style={{ background: theme.bg }}>
+              <span className="theme-preview-side" style={{ background: theme.panel }} />
+              <span className="theme-preview-main">
+                <span style={{ background: theme.text, width: "62%" }} />
+                <span style={{ background: theme.text, width: "44%", opacity: 0.45 }} />
+                <span className="theme-preview-bubble" style={{ background: theme.elevated }} />
+                <span className="theme-preview-accent" style={{ background: accentFor(theme.id, draft.accent) }} />
+              </span>
+            </span>
+            <span className="theme-card-label">
+              {theme.name}
+              {draft.theme === theme.id && <Check size={12} strokeWidth={2.4} />}
+            </span>
+          </button>
+        ))}
+      </div>
+      <Row label="Акцент" hint={ACCENT_THEMES.includes(draft.theme) ? "Общий проверенный цвет для Desktop и TUI" : "У этой темы собственный акцент — выбор применяется к AXIOM Dark, Graphite и Light"}>
+        <div className="accent-picker" role="radiogroup" aria-label="Акцент">
           {(Object.keys(ACCENT_LABELS) as AxiomConfig["accent"][]).map((accent) => (
-            <option key={accent} value={accent}>{ACCENT_LABELS[accent]}</option>
+            <button
+              key={accent}
+              type="button"
+              role="radio"
+              aria-checked={draft.accent === accent}
+              title={ACCENT_LABELS[accent]}
+              aria-label={ACCENT_LABELS[accent]}
+              className={"accent-dot" + (draft.accent === accent ? " active" : "")}
+              style={{ ["--dot" as string]: ACCENT_COLORS[accent] }}
+              onClick={() => set("accent", accent)}
+            >
+              {draft.accent === accent && <Check size={11} strokeWidth={3} />}
+            </button>
           ))}
-        </select>
+          <span className="accent-name">{ACCENT_LABELS[draft.accent]}</span>
+        </div>
       </Row>
       <Row label="Подсветка панелей" hint="Выделять строки и кнопки панели при наведении">
         <Toggle value={draft.panel_hover} onChange={(v) => set("panel_hover", v)} />
@@ -1387,30 +1334,124 @@ function AppearanceSection({ draft, set }: SectionProps) {
   );
 }
 
-function AboutSection() {
+const ACCESS_LABELS: Record<string, string> = { read_only: "Только чтение", workspace: "Внутри проекта", full: "Полный доступ" };
+
+function AboutSection({ config, pluginCount, providerCount }: { config: AxiomConfig; pluginCount: number; providerCount: number }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const platform = typeof navigator !== "undefined" ? (/Windows/i.test(navigator.userAgent) ? "Windows" : /Mac/i.test(navigator.userAgent) ? "macOS" : "Linux") : "—";
+  const facts: { icon: ReactNode; label: string; value: string; mono?: boolean }[] = [
+    { icon: <Cpu size={14} />, label: "Активная модель", value: config.model || "не выбрана", mono: true },
+    { icon: <Zap size={14} />, label: "Ollama", value: config.ollama_url || "—", mono: true },
+    { icon: <FolderOpen size={14} />, label: "Проект", value: config.workspace_root || "не выбран", mono: true },
+    { icon: <Lock size={14} />, label: "Доступ AI", value: ACCESS_LABELS[config.access_mode] ?? String(config.access_mode) },
+    { icon: <Globe size={14} />, label: "Провайдеры", value: String(providerCount) },
+    { icon: <Puzzle size={14} />, label: "Плагины", value: String(pluginCount) },
+  ];
+  const paths = [
+    { label: "Настройки", value: "~/.axiom/config.json" },
+    { label: "История", value: "~/.axiom/history" },
+    { label: "Плагины", value: "~/.axiom/plugins" },
+  ];
+  const copy = async (key: string, text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(key); window.setTimeout(() => setCopied((c) => (c === key ? null : c)), 1400); } catch { /* clipboard blocked */ }
+  };
+  const diagnostics = [
+    `AXIOM ${pkg.version} · desktop (Tauri 2 + React 18) · ${platform}`,
+    ...facts.map((f) => `${f.label}: ${f.value}`),
+    `Тема: ${config.theme} · акцент: ${config.accent}`,
+  ].join("\n");
+
   return (
-    <div className="settings-about">
-      <div className="about-brand">AXIOM</div>
-      <div className="about-sub">LOCAL-FIRST AI WORKSPACE</div>
-      <p className="about-text">
-        AXIOM — агент для работы с проектом и документами. Он может отвечать в чате,
-        искать по проекту, читать и изменять файлы, запускать команды и проверять результат.
-        Один и тот же Python core используют TUI и desktop GUI.
-      </p>
-      <div className="about-grid">
-        <div><b>Модели</b><span>Ollama и внешние API через единый streaming runtime.</span></div>
-        <div><b>Проект</b><span>Файловые операции ограничены выбранной рабочей папкой.</span></div>
-        <div><b>Инструменты</b><span>Чтение, поиск, редактирование, terminal, Git и web search.</span></div>
-        <div><b>Контроль</b><span>Tool calls, timeline, permissions и stop reason видны в интерфейсе.</span></div>
+    <div className="about-v2">
+      <section className="about-hero">
+        <div className="about-orbit" aria-hidden="true">
+          <span className="about-ring r1" /><span className="about-ring r2" /><span className="about-ring r3" />
+          <span className="about-core" />
+          <span className="about-planet" />
+        </div>
+        <div className="about-hero-text">
+          <div className="about-wordmark">AXIOM</div>
+          <p className="about-tagline">Локальный AI coding agent и desktop IDE: чат с моделями, файлы проекта, терминал, Git и веб-поиск в одном окне.</p>
+          <div className="about-chips">
+            <span className="about-chip accent">v{pkg.version}</span>
+            <span className="about-chip">Desktop · Tauri 2</span>
+            <span className="about-chip">TUI · Textual</span>
+            <span className="about-chip">{platform}</span>
+            <span className="about-chip">MIT License</span>
+          </div>
+        </div>
+        <button className="btn ghost about-copy" onClick={() => void copy("diag", diagnostics)}>
+          {copied === "diag" ? <Check size={13} /> : <Copy size={13} />}
+          {copied === "diag" ? "Скопировано" : "Скопировать сведения"}
+        </button>
+      </section>
+
+      <h4 className="about-h">Текущая конфигурация</h4>
+      <div className="about-facts">
+        {facts.map((fact) => (
+          <div className="about-fact" key={fact.label}>
+            <span className="about-fact-icon">{fact.icon}</span>
+            <span className="about-fact-label">{fact.label}</span>
+            <span className={"about-fact-value" + (fact.mono ? " mono" : "")} title={fact.value}>{fact.value}</span>
+          </div>
+        ))}
       </div>
-      <p className="about-text">
-        API-ключи и история хранятся локально. Режим <b>auto_approve_all</b> разрешает
-        инструменты без дополнительных вопросов — включайте его только для доверенного проекта.
-      </p>
-      <p className="about-text about-muted">
-        Настройки: <code>~/.axiom/config.json</code> · история: <code>~/.axiom/history</code>.
-        При старте выберите проект в верхней панели.
-      </p>
+
+      <h4 className="about-h">Что умеет AXIOM</h4>
+      <div className="about-features">
+        {[
+          { icon: <MessageSquare size={16} />, title: "Чат и модели", text: "Ollama и внешние API через единый streaming runtime, reasoning и метрики." },
+          { icon: <FolderOpen size={16} />, title: "Работа с проектом", text: "Поиск, чтение и правка файлов строго внутри выбранной рабочей папки." },
+          { icon: <Terminal size={16} />, title: "Терминал и Git", text: "Команды, сборка, тесты и Git — с выводом прямо в ленте ответа." },
+          { icon: <Layers size={16} />, title: "Агенты", text: "Analyst, coder, debugger, tester и reviewer в одной траектории." },
+          { icon: <Puzzle size={16} />, title: "Плагины", text: "Каталог расширений с документацией, разрешениями и доверием." },
+          { icon: <ShieldCheck size={16} />, title: "Контроль", text: "Tool calls, timeline, permissions и причина остановки всегда видны." },
+        ].map((feature) => (
+          <div className="about-feature" key={feature.title}>
+            <span className="about-feature-icon">{feature.icon}</span>
+            <b>{feature.title}</b>
+            <span>{feature.text}</span>
+          </div>
+        ))}
+      </div>
+
+      <h4 className="about-h">Архитектура</h4>
+      <div className="about-arch" aria-label="Схема архитектуры">
+        <div className="about-arch-col">
+          <div className="about-node"><Monitor size={14} /><b>Desktop GUI</b><span>Tauri 2 · React 18</span></div>
+          <div className="about-node"><Terminal size={14} /><b>TUI</b><span>Textual</span></div>
+        </div>
+        <div className="about-arch-link" aria-hidden="true"><span /></div>
+        <div className="about-node core"><Cpu size={14} /><b>Python core</b><span>ChatSession · tools · permissions</span></div>
+        <div className="about-arch-link" aria-hidden="true"><span /></div>
+        <div className="about-arch-col">
+          <div className="about-node"><Zap size={14} /><b>Ollama</b><span>локальные модели</span></div>
+          <div className="about-node"><Globe size={14} /><b>API-провайдеры</b><span>облачные модели</span></div>
+          <div className="about-node"><HardDrive size={14} /><b>Проект</b><span>файлы · терминал · Git</span></div>
+        </div>
+      </div>
+
+      <h4 className="about-h">Приватность и безопасность</h4>
+      <div className="about-privacy">
+        <div><Lock size={14} /><span>API-ключи, история и память хранятся локально на этом компьютере.</span></div>
+        <div><ShieldCheck size={14} /><span>Режим <b>auto_approve_all</b> разрешает инструменты без вопросов — включайте его только для доверенного проекта.</span></div>
+        <div><Puzzle size={14} /><span>Код плагинов не изолирован: устанавливайте расширения только из надёжных источников.</span></div>
+      </div>
+
+      <h4 className="about-h">Где хранятся данные</h4>
+      <div className="about-paths">
+        {paths.map((item) => (
+          <div className="about-path" key={item.label}>
+            <span>{item.label}</span>
+            <code>{item.value}</code>
+            <button className="icon-btn" aria-label={`Скопировать путь: ${item.label}`} onClick={() => void copy(item.label, item.value)}>
+              {copied === item.label ? <Check size={13} /> : <Copy size={13} />}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <p className="about-foot">© 2026 BaToN41cK · распространяется по лицензии MIT</p>
     </div>
   );
 }

@@ -105,7 +105,9 @@ class Hook:
 
     def risk(self) -> tuple[str, str]:
         """Visible W4.9 risk tier and reason for this hook's command."""
-        return classify_command_risk(" ".join(self.command))
+        # Hook commands are already separated argv executed without a shell.
+        # Shell metacharacters in a Python -c argument are not command separators.
+        return classify_command_risk(" ".join(self.command), shell=False)
 
 
 @dataclass

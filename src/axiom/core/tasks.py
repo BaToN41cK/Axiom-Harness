@@ -54,6 +54,10 @@ class Task(BaseModel):
     goal: str = Field(min_length=1, max_length=16000)
     state: TaskState = TaskState.PENDING
     scope: str | None = None
+    #: W3.15 — provenance marker: ``"automation"`` for scheduled tasks, else None.
+    source: str | None = None
+    #: W3.15 — highest command-risk tier an automated task may inherit (W4.9).
+    max_risk: str | None = None
     plan: TaskPlan | None = None
     plan_history: list[TaskPlan] = Field(default_factory=list)
     changed_files: list[str] = Field(default_factory=list)

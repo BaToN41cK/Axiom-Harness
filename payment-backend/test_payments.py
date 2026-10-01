@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import replace
 from datetime import timedelta
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import axiom_payments
 import httpx
+import main as payment_main
 import pytest
 from axiom_payments import (
     AXIOM_USD_PER_RUB,
@@ -214,6 +216,112 @@ async def test_yoomoney_webhook_acknowledges_signed_notification_without_label(c
     assert response.json()["status"] == "unknown_order"
 
 
+@pytest.mark.asyncio
+async def test_oauth_requires_server_side_provider_configuration(client):
+    response = await client.post("/v1/auth/oauth/start", json={"provider": "github"})
+
+    assert response.status_code == 503
+    assert "не настроен" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_state_and_code_are_single_use(client, settings):
+    oauth_settings = replace(settings, github_client_id="github-client", github_client_secret="github-secret")
+    app = create_app(oauth_settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://testserver") as oauth_client:
+        start = await oauth_client.post("/v1/auth/oauth/start", json={"provider": "github"})
+        assert start.status_code == 200
+        payload = start.json()
+        query = parse_qs(urlparse(payload["authorization_url"]).query)
+        assert "state" in query
+        assert payload["poll_token"] not in payload["authorization_url"]
+        assert "github-secret" not in start.text
+        assert (await oauth_client.post("/v1/auth/oauth/status", json={"poll_token": payload["poll_token"]})).json()[
+            "status"
+        ] == "pending"
+
+        browser = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://testserver")
+        browser_start = await browser.get(
+            f"/v1/auth/oauth/browser-start?provider=github&state={query['state'][0]}", follow_redirects=False
+        )
+        assert browser_start.status_code == 303
+        provider_query = parse_qs(urlparse(browser_start.headers["location"]).query)
+        assert provider_query["client_id"] == ["github-client"]
+        assert provider_query["code_challenge_method"] == ["S256"]
+        assert "code_challenge" in provider_query
+        assert browser.cookies.get("axiom_oauth_github")
+        store = app.state.store
+        user_id = store.oauth_login("github", "subject-1", "octocat", "octo@example.test", "Octo")
+        assert (
+            store.consume_oauth_state(query["state"][0], "github", browser.cookies.get("axiom_oauth_github"))
+            is not None
+        )
+        store.finish_oauth(query["state"][0], user_id=user_id)
+        completed = await oauth_client.post("/v1/auth/oauth/status", json={"poll_token": payload["poll_token"]})
+        assert completed.status_code == 200
+        assert completed.json()["status"] == "success"
+        code = completed.json()["code"]
+        assert isinstance(code, str)
+        assert (await oauth_client.post("/v1/auth/oauth/status", json={"poll_token": payload["poll_token"]})).json()[
+            "status"
+        ] == "error"
+
+        redeemed = await oauth_client.post("/v1/auth/oauth/redeem", json={"code": code})
+        assert redeemed.status_code == 200
+        assert redeemed.json()["account"]["username"] == "octocat"
+        reused = await oauth_client.post("/v1/auth/oauth/redeem", json={"code": code})
+        assert reused.status_code == 401
+        await browser.aclose()
+
+
+@pytest.mark.asyncio
+async def test_github_oauth_callback_creates_account_and_session(monkeypatch, settings):
+    oauth_settings = replace(settings, github_client_id="github-client", github_client_secret="github-secret")
+    app = create_app(oauth_settings)
+
+    class ProviderResponse:
+        def __init__(self, value):
+            self.value = json.dumps(value).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            del limit
+            return self.value
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        if request.full_url.endswith("/access_token"):
+            return ProviderResponse({"access_token": "github-provider-token"})
+        return ProviderResponse({"id": 4242, "login": "octocat", "email": "octo@example.test", "name": "Octo Cat"})
+
+    monkeypatch.setattr(payment_main, "urlopen", fake_urlopen)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://testserver") as oauth_client:
+        start = await oauth_client.post("/v1/auth/oauth/start", json={"provider": "github"})
+        state = parse_qs(urlparse(start.json()["authorization_url"]).query)["state"][0]
+        browser = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://testserver")
+        browser_start = await browser.get(
+            f"/v1/auth/oauth/browser-start?provider=github&state={state}", follow_redirects=False
+        )
+        assert browser_start.status_code == 303
+        callback = await browser.get(f"/v1/auth/oauth/github/callback?code=provider-code&state={state}")
+        assert callback.status_code == 200
+        assert "Можно закрыть эту вкладку" in callback.text
+        result = await oauth_client.post("/v1/auth/oauth/status", json={"poll_token": start.json()["poll_token"]})
+        assert result.json()["status"] == "success"
+        redeemed = await oauth_client.post("/v1/auth/oauth/redeem", json={"code": result.json()["code"]})
+        assert redeemed.status_code == 200
+        token = redeemed.json()["access_token"]
+        account = await oauth_client.get("/v1/me", headers={"authorization": f"Bearer {token}"})
+        assert account.status_code == 200
+        assert account.json()["username"] == "octocat"
+        await browser.aclose()
+
+
 @pytest.mark.parametrize(("credit", "wallet_sum", "card_sum"), [(10_000, 10_100, 10_309), (25_000, 25_250, 25_773)])
 def test_documented_gross_up_preserves_confirmed_topup(credit, wallet_sum, card_sum):
     assert gross_up_for_wallet(credit) == wallet_sum
@@ -237,7 +345,7 @@ def test_legacy_rub_balance_is_migrated_to_axiom_usd_cents(tmp_path):
             "balance_minor INTEGER NOT NULL, created_at TEXT)"
         )
         db.execute("INSERT INTO users VALUES ('legacy', 'legacy', 'hash', 20000, '2026-01-01T00:00:00+00:00')")
-    axiom_payments.PaymentStore(
+    store = axiom_payments.PaymentStore(
         Settings(
             database_path=database_path,
             wallet_id="4100118808592904",
@@ -247,6 +355,42 @@ def test_legacy_rub_balance_is_migrated_to_axiom_usd_cents(tmp_path):
             allowed_origins=(),
         )
     )
+    with sqlite3.connect(database_path) as db:
+        assert db.execute("SELECT balance_minor FROM users WHERE id = 'legacy'").fetchone()[0] == 200
+    assert store.account("legacy")["balance_minor"] == 200
+
+
+def test_legacy_balance_migration_is_safe_when_two_workers_start(tmp_path):
+    database_path = str(tmp_path / "legacy-concurrent.sqlite3")
+    with sqlite3.connect(database_path) as db:
+        db.execute(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT, password_hash TEXT, "
+            "balance_minor INTEGER NOT NULL, created_at TEXT)"
+        )
+        db.execute("INSERT INTO users VALUES ('legacy', 'legacy', 'hash', 20000, '2026-01-01T00:00:00+00:00')")
+
+    settings = Settings(
+        database_path=database_path,
+        wallet_id="4100118808592904",
+        notification_secret=SECRET,
+        public_url="https://payments.example.test",
+        commercial_use_approved=True,
+        allowed_origins=(),
+    )
+    errors: list[Exception] = []
+
+    def initialize() -> None:
+        try:
+            axiom_payments.PaymentStore(settings)
+        except Exception as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    workers = [threading.Thread(target=initialize) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    assert errors == []
     with sqlite3.connect(database_path) as db:
         assert db.execute("SELECT balance_minor FROM users WHERE id = 'legacy'").fetchone()[0] == 200
 
@@ -496,9 +640,7 @@ async def test_webhook_diagnostic_log_omits_field_values_and_signature(client, c
 
     assert response.status_code == 400
     diagnostic_message = next(
-        record.getMessage()
-        for record in caplog.records
-        if "yoomoney_webhook_validation" in record.getMessage()
+        record.getMessage() for record in caplog.records if "yoomoney_webhook_validation" in record.getMessage()
     )
     diagnostic = json.loads(diagnostic_message.removeprefix("yoomoney_webhook_validation "))
     assert diagnostic["content_type"] == "application/x-www-form-urlencoded"

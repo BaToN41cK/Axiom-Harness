@@ -39,6 +39,15 @@ import {
 } from "./useAxiom.helpers";
 // Re-exported so existing consumers keep importing these from `useAxiom`.
 export { orchestrationProgress, resolveModel, toolLabel, toolTarget } from "./useAxiom.helpers";
+
+/** Keep tool arguments for the chat previews, capping huge strings (file bodies). */
+function capToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    out[key] = typeof value === "string" && value.length > 24_000 ? value.slice(0, 24_000) : value;
+  }
+  return out;
+}
 import {
   applyOrchestrationEvent,
   applyOrchestrationResult,
@@ -213,7 +222,6 @@ export function useAxiom() {
   const [projectSearchResults, setProjectSearchResults] = useState<ProjectSearchResult>({ query: "", hits: [] });
   const [projectSearching, setProjectSearching] = useState(false);
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
-  const [lastAction, setLastAction] = useState<{ name: string; detail: string; ok: boolean; durationMs?: number } | null>(null);
   const [agentTimelineOpen, setAgentTimelineOpen] = useState(true);
   const [termHistory, setTermHistory] = useState<{ command: string; result: TerminalResult }[]>([]);
   const [pendingTerm, setPendingTerm] = useState<string | null>(null);
@@ -570,14 +578,21 @@ export function useAxiom() {
     setBootSteps(freshSteps());
     setBootError(null);
     let current = "ui";
+    
+    // Искусственная задержка для демонстрации анимаций
+    const bootDelay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    
     try {
       setStep("ui", "running");
+      await bootDelay(800);
       await Promise.resolve();
       setStep("ui", "ok", "AXIOM desktop");
+      await bootDelay(400);
 
       // The local config read and the Ollama probe do not depend on each other,
       // so they run together instead of as a chain of round trips.
       setStep("detect", "running");
+      await bootDelay(600);
       current = "detect";
       const [probe, cfg] = await Promise.all([
         request<HealthReport>("health"),
@@ -606,8 +621,10 @@ export function useAxiom() {
       } else {
         setStep("detect", "ok", probe.url);
       }
+      await bootDelay(500);
 
       setStep("connect", "running");
+      await bootDelay(700);
       setStep(
         "connect",
         "ok",
@@ -617,9 +634,11 @@ export function useAxiom() {
             ? "соединение установлено"
             : "режим внешнего API",
       );
+      await bootDelay(450);
 
       // The model list and the saved history are independent as well.
       setStep("models", "running");
+      await bootDelay(800);
       current = "models";
       // /api/tags can briefly answer with an empty list (or fail) while Ollama
       // is still starting / loading a model — retry before believing it.
@@ -646,6 +665,7 @@ export function useAxiom() {
             ? "нет данных — повторим позже"
             : "моделей пока нет",
       );
+      await bootDelay(600);
 
       if (list.length === 0) {
         // An empty model list is NOT an error (API providers are coming):
@@ -653,6 +673,7 @@ export function useAxiom() {
         setStep("select", "ok", "модель не выбрана");
       } else {
         setStep("select", "running");
+        await bootDelay(650);
         current = "select";
         const configuredRoute = cfg.router_primary;
         const routeModel = configuredRoute
@@ -674,8 +695,10 @@ export function useAxiom() {
           notify(`Модель ${cfg.model} не найдена в Ollama — выбрана ${selected.displayName}`, "error");
         }
       }
+      await bootDelay(550);
 
       setStep("workspace", "running");
+      await bootDelay(750);
       try {
         const seq = ++workspaceSeqRef.current;
         const ws = await request<{ current: ProjectInfo | null }>("workspace_info");
@@ -696,6 +719,7 @@ export function useAxiom() {
       } catch {
         setStep("workspace", "ok", "готово");
       }
+      await bootDelay(400); // Финальная пауза перед переходом
       setConnected(true);
       setCoreLost(false);
       setPhase("ready");
@@ -807,6 +831,7 @@ export function useAxiom() {
                 name: event.name,
                 detail: toolTarget(event.name, event.arguments ?? {}),
                 state: "running",
+                args: capToolArgs(event.arguments ?? {}),
               });
             }),
           );
@@ -821,7 +846,7 @@ export function useAxiom() {
                 call.state = event.ok ? "ok" : "failed";
                 call.durationMs = event.durationMs;
                 call.error = event.error;
-                setLastAction({ name: event.name, detail: call.detail, ok: event.ok, durationMs: event.durationMs });
+                if (typeof event.content === "string" && event.content) call.output = event.content.slice(0, 16_000);
               }
             }),
           );
@@ -2678,7 +2703,6 @@ export function useAxiom() {
     projectSearching,
     workspaceFiles,
     openProjectSearchHit: (path: string) => openWorkspaceFile(path),
-    lastAction,
     agentTimelineOpen,
     setAgentTimelineOpen,
     termHistory,

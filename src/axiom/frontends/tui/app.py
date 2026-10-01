@@ -14,6 +14,7 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.screen import Screen
 from textual.theme import Theme as TextualTheme
@@ -36,8 +37,12 @@ from axiom.core.models import ModelRegistry
 from axiom.core.permissions import PermissionMode, PermissionOutcome
 from axiom.core.state import GenerationState
 from axiom.core.tools.web_search import FETCH_URL_TOOL, WEB_SEARCH_TOOL
+from axiom.frontends.tui.widgets.activity import AUTO_HIDE_WIDTH, ActivityPanel
+from axiom.frontends.tui.widgets.tool_view import kind_of
 from axiom.frontends.tui.widgets.commands import COMMANDS, find_command
 from axiom.frontends.tui.widgets.find import ChatFindBar
+from axiom.frontends.tui.widgets.folder_picker import FolderPicker, resolve_folder
+from axiom.frontends.tui.widgets.account import AccountScreen
 from axiom.frontends.tui.widgets.header import HeaderBar, StatusBar
 from axiom.frontends.tui.widgets.messages import AssistantMessage, ChatView, UserMessage
 from axiom.frontends.tui.widgets.panels import (
@@ -73,6 +78,8 @@ class WorkspaceScreen(Screen):
         Binding("ctrl+c", "stop_generation", "Stop", priority=True),
         Binding("escape", "stop_generation", "Stop", show=False),
         Binding("ctrl+f", "find_chat", "Find chat", priority=True),
+        Binding("ctrl+b", "toggle_panel", "Panel", priority=True),
+        Binding("ctrl+o", "open_folder", "Open folder", priority=True),
     ]
 
     #: Auto-focus is disabled on this screen so the hidden slash-menu list
@@ -99,13 +106,158 @@ class WorkspaceScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield HeaderBar()
-        yield ChatView()
-        yield ChatFindBar()
-        yield InputBar()
+        with Horizontal(id="workspace-body"):
+            with Vertical(id="workspace-main"):
+                yield ChatView()
+                yield ChatFindBar()
+                yield InputBar()
+            panel = ActivityPanel(self._workspace_root())
+            panel.set_recent(self._recent_projects())
+            yield panel
         yield StatusBar()
+
+    # ------------------------------------------------------------ side panel
+
+    def _workspace_root(self):
+        """Only a folder the user explicitly opened — never the launch dir."""
+        config = self.session.config
+        if not getattr(config, "workspace_root", None) or not getattr(config, "workspace_tools_enabled", True):
+            return None
+        try:
+            return self.session.workspace_root
+        except Exception:  # pragma: no cover - sessions without a workspace
+            return None
+
+    # ------------------------------------------------------------ workspace folder
+
+    def action_open_folder(self) -> None:
+        if self._generating:
+            self.notify("Stop the current generation before switching folders.", severity="warning", timeout=4)
+            return
+        current = self._workspace_root()
+        try:
+            recent = [str(p.path) for p in self._recent_projects()]
+        except Exception:  # pragma: no cover
+            recent = []
+        self.app.push_screen(FolderPicker(current, recent), callback=self._folder_chosen)
+
+    def _folder_chosen(self, path: str | None) -> None:
+        if path:
+            self.run_worker(self._open_workspace(path), exclusive=True, group="workspace")
+
+    async def _open_workspace(self, raw: str) -> None:
+        target = resolve_folder(raw)
+        if target is None:
+            self.notify(f"Not a folder: {raw}", severity="error", timeout=5)
+            return
+        try:
+            info = self.session.set_workspace(str(target))
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            self.notify(str(exc), title="Open folder", severity="error", timeout=6)
+            return
+        self.chat_view.clear_messages()
+        panel = self.activity
+        if panel is not None:
+            await panel.set_root(target)
+            if panel.forced is False:
+                panel.forced = None
+            self._apply_panel_visibility()
+        kind = getattr(info, "kind", None) or getattr(info, "project_type", None)
+        suffix = f" · {kind}" if kind else ""
+        self.notify(f"{target}{suffix}\nThe agent now works inside this folder.", title="Folder opened", timeout=5)
+
+    async def _close_workspace(self) -> None:
+        try:
+            self.session.clear_workspace()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(str(exc), title="Close folder", severity="error", timeout=6)
+            return
+        self.chat_view.clear_messages()
+        panel = self.activity
+        if panel is not None:
+            panel.set_recent(self._recent_projects())
+            await panel.set_root(None)
+        self.notify("Folder closed — global chat, file tools are off.", title="Workspace", timeout=4)
+
+    @property
+    def activity(self) -> ActivityPanel | None:
+        try:
+            return self.query_one(ActivityPanel)
+        except NoMatches:
+            return None
+
+    def _apply_panel_visibility(self) -> None:
+        panel = self.activity
+        if panel is None:
+            return
+        auto = (self.size.width or 120) >= AUTO_HIDE_WIDTH
+        panel.display = auto if panel.forced is None else panel.forced
+
+    def on_resize(self, event) -> None:
+        self._apply_panel_visibility()
+
+    def action_toggle_panel(self) -> None:
+        panel = self.activity
+        if panel is None:
+            return
+        panel.forced = not panel.display
+        self._apply_panel_visibility()
+
+    def _activity_start(self, name: str, arguments) -> None:
+        panel = self.activity
+        if panel is not None:
+            panel.tool_started(name, arguments)
+
+    def _activity_finish(self, name: str, ok: bool, duration_ms, error) -> None:
+        panel = self.activity
+        if panel is not None:
+            panel.tool_finished(name, ok, duration_ms, error)
+            # Files written / moved / deleted or commands run show up at once.
+            if ok and kind_of(name) not in ("read", "search", "list", "web"):
+                panel.refresh_tree()
+
+    def _recent_projects(self) -> list:
+        try:
+            return list(self.session.recent_workspaces())
+        except Exception:  # pragma: no cover
+            return []
+
+    def on_activity_panel_open_requested(self, event: ActivityPanel.OpenRequested) -> None:
+        event.stop()
+        if event.path:
+            self.run_worker(self._open_workspace(event.path), exclusive=True, group="workspace")
+        else:
+            self.action_open_folder()
+
+    def on_activity_panel_close_requested(self, event: ActivityPanel.CloseRequested) -> None:
+        event.stop()
+        self.run_worker(self._close_workspace(), exclusive=True, group="workspace")
+
+    def on_activity_panel_file_chosen(self, event: ActivityPanel.FileChosen) -> None:
+        """Clicking a file in the tree mentions it in the prompt."""
+        field = self.input_bar.input  # AxiomInput is a TextArea (.text, not .value)
+        value = field.text
+        sep = "" if not value or value.endswith((" ", "\n")) else " "
+        field.load_text(f"{value}{sep}@{event.path} ")
+        field.move_cursor(field.document.end)
+        field.focus()
+
+    def _account_closed(self, _result=None) -> None:
+        self._refresh_account_badge()
+
+    def _refresh_account_badge(self) -> None:
+        from axiom.core.account import AccountStore
+
+        cached = AccountStore().cached_account()
+        try:
+            self.query_one(HeaderBar).set_account(cached)
+        except Exception:  # pragma: no cover - header without account slot
+            pass
 
     def on_mount(self) -> None:
         self.query_one(ChatFindBar).display = False
+        self._refresh_account_badge()
+        self._apply_panel_visibility()
         self._refresh_model_display()
         # W2.4: ASK tools (incl. model-initiated memory writes) open the real
         # permission dialog; without this callback they are denied silently.
@@ -262,6 +414,7 @@ class WorkspaceScreen(Screen):
             await assistant.add_answer(event.text)
         elif isinstance(event, ToolCallEvent):
             assistant.tool_started(event.name, event.arguments)
+            self._activity_start(event.name, event.arguments)
             if event.name == WEB_SEARCH_TOOL:
                 self.status_bar.set_web(True)
         elif isinstance(event, SearchResultEvent):
@@ -271,12 +424,20 @@ class WorkspaceScreen(Screen):
             self.status_bar.set_web(True)
         elif isinstance(event, ToolResultEvent):
             if event.ok:
-                detail = f"{event.duration_ms} ms" if event.duration_ms else "ok"
-                assistant.tool_finished(event.name, True, detail)
+                assistant.tool_finished(
+                    event.name, True, "", content=event.content, duration_ms=event.duration_ms or None
+                )
             else:
-                assistant.tool_finished(event.name, False, event.error or "Tool execution failed.")
+                assistant.tool_finished(
+                    event.name,
+                    False,
+                    event.error or "Tool execution failed.",
+                    content=event.content,
+                    duration_ms=event.duration_ms or None,
+                )
                 if event.name == WEB_SEARCH_TOOL:
                     self.status_bar.set_web(False)
+            self._activity_finish(event.name, event.ok, event.duration_ms or None, event.error)
             if event.name == WEB_SEARCH_TOOL and not event.ok:
                 assistant.search_failed(event.error or "Web search failed.")
             elif event.name == FETCH_URL_TOOL:
@@ -416,6 +577,22 @@ class WorkspaceScreen(Screen):
             )
         elif name == "/settings":
             self.app.push_screen(SettingsPanel(self.session.config))
+        elif name == "/panel":
+            self.action_toggle_panel()
+        elif name == "/open":
+            if argument:
+                self.run_worker(self._open_workspace(argument), exclusive=True, group="workspace")
+            else:
+                self.action_open_folder()
+        elif name == "/close":
+            self.run_worker(self._close_workspace(), exclusive=True, group="workspace")
+        elif name in ("/account", "/login", "/register", "/pro", "/topup"):
+            view = {"/register": "register", "/pro": "pro", "/topup": "topup"}.get(name, "auto")
+            self.app.push_screen(AccountScreen(view=view, amount=argument or None), callback=self._account_closed)
+        elif name == "/theme":
+            self._set_accent(argument)
+        elif name == "/animations":
+            self._set_animations(argument)
         elif name == "/search":
             if not argument:
                 self.notify("Usage: /search <query>", severity="warning", timeout=4)
@@ -646,6 +823,32 @@ class WorkspaceScreen(Screen):
             input_bar.set_busy(False)
             if panel is not None:
                 panel.finish()
+
+    def _set_accent(self, argument: str) -> None:
+        presets = list(palette.ACCENT_PRESETS)
+        current = self.session.config.accent
+        if argument.strip():
+            choice = argument.strip().lower()
+        else:
+            index = presets.index(current) if current in presets else -1
+            choice = presets[(index + 1) % len(presets)]
+        if choice not in presets:
+            self.notify(f"Accents: {', '.join(presets)}", title="Theme", severity="warning", timeout=5)
+            return
+        self.session.config.accent = choice
+        self.session.config.save()
+        self.app.register_theme(TextualTheme(**palette.theme_colors(choice)))
+        self.app.theme = palette.THEME_NAME
+        self.app.refresh_css()
+        self.notify(f"Accent: {choice}", title="Theme", timeout=3)
+
+    def _set_animations(self, argument: str) -> None:
+        value = argument.strip().lower()
+        enabled = (not self.session.config.animations) if value not in ("on", "off") else value == "on"
+        self.session.config.animations = enabled
+        self.session.config.save()
+        self._animations = enabled
+        self.notify(f"Animations {'on' if enabled else 'off'}", title="Settings", timeout=3)
 
     def _model_chosen(self, name: str | None) -> None:
         if name:

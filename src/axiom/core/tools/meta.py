@@ -24,6 +24,7 @@ CATEGORY_OF: dict[str, str] = {
     "run_tests": "verification", "run_linter": "verification",
     "build_project": "verification", "verify_changes": "verification",
     "git_status": "git", "git_diff": "git", "git_log": "git", "git_branch": "git",
+    "git_graph": "git", "git_add": "git", "git_unstage": "git", "git_commit": "git",
     "inspect_project": "project",
 }
 
@@ -34,8 +35,8 @@ AGENT_TOOLS: dict[str, tuple[str, ...]] = {
               "search_text", "search_files", "create_directory", "run_command",
               "run_tests", "verify_changes", "git_status", "git_diff"),
     "debugger": ("read_file", "search_text", "run_command", "run_tests",
-                 "run_linter", "git_diff", "git_log"),
-    "reviewer": ("read_file", "git_diff", "git_status", "git_log", "verify_changes"),
+                 "run_linter", "git_diff", "git_log", "git_graph"),
+    "reviewer": ("read_file", "git_diff", "git_status", "git_log", "git_graph", "verify_changes"),
     "tester": ("run_command", "run_tests", "run_linter", "verify_changes",
                "read_file", "search_text"),
     "architect": ("list_files", "read_file", "inspect_project", "web_search"),
@@ -44,7 +45,7 @@ AGENT_TOOLS: dict[str, tuple[str, ...]] = {
     # W4.6 roles: Explorer is strictly read-only reconnaissance; Frontend
     # and Backend own their editing/testing surface.
     "explorer": ("list_files", "read_file", "search_text", "search_files",
-                 "inspect_project", "git_status", "git_diff", "git_log"),
+                 "inspect_project", "git_status", "git_diff", "git_log", "git_graph"),
     "frontend": ("list_files", "read_file", "write_file", "edit_file",
                  "apply_patch", "search_text", "search_files", "run_command",
                  "run_tests", "verify_changes", "git_status", "git_diff"),
@@ -70,7 +71,7 @@ def resolve_tools_for_task(text: str) -> list[str]:
     verify_markers = ("test", "тест", "lint", "verify", "проверь", "проверить",
                       "build", "собер", "сборк")
     if any(m in t for m in git_markers):
-        out += ["git_status", "git_diff", "git_log", "git_branch"]
+        out += ["git_status", "git_diff", "git_log", "git_branch", "git_graph"]
     if any(m in t for m in file_markers) or not t.strip():
         out += ["list_files", "read_file", "write_file", "edit_file", "apply_patch",
                 "search_text", "search_files", "inspect_project", "run_command"]

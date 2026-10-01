@@ -23,6 +23,7 @@ class HeaderBar(Horizontal):
     def compose(self):
         yield Static(f"{theme.DIAMOND}  AXIOM", id="header-brand", markup=False)
         yield Static("", id="header-model", markup=False)
+        yield Static("", id="header-account", markup=False)
         yield Static("", id="header-connection", markup=False)
 
     def on_mount(self) -> None:
@@ -31,6 +32,23 @@ class HeaderBar(Horizontal):
     def update_model(self, display_name: str) -> None:
         widget = self.query_one("#header-model", Static)
         widget.update(f"{display_name}" if display_name else "")
+
+    def set_account(self, account: dict | None) -> None:
+        """``◎ name · $3.00 · PRO`` from the last real /v1/me answer."""
+        from rich.text import Text
+
+        widget = self.query_one("#header-account", Static)
+        if not account:
+            widget.update(Text("◎ /login", style="#6c6c78"))
+            return
+        minor = int(account.get("balance_minor") or 0)
+        text = Text()
+        text.append("◎ ", style="#9a9aa6")
+        text.append(str(account.get("username") or "account"), style="bold #ececf0")
+        text.append(f"  ${minor // 100}.{minor % 100:02d}", style="#56d364")
+        if account.get("pro_active"):
+            text.append("  ★ PRO", style="bold #e3b341")
+        widget.update(text)
 
     def set_connection(self, available: bool, version: str | None) -> None:
         widget = self.query_one("#header-connection", Static)
@@ -89,6 +107,23 @@ class StatusBar(Static):
             self._tokens = (self._tokens or 0) + tokens_out
         self._rate = rate
         self.refresh_status()
+
+    def set_account(self, account: dict | None) -> None:
+        """``◎ name · $3.00 · PRO`` from the last real /v1/me answer."""
+        from rich.text import Text
+
+        widget = self.query_one("#header-account", Static)
+        if not account:
+            widget.update(Text("◎ /login", style="#6c6c78"))
+            return
+        minor = int(account.get("balance_minor") or 0)
+        text = Text()
+        text.append("◎ ", style="#9a9aa6")
+        text.append(str(account.get("username") or "account"), style="bold #ececf0")
+        text.append(f"  ${minor // 100}.{minor % 100:02d}", style="#56d364")
+        if account.get("pro_active"):
+            text.append("  ★ PRO", style="bold #e3b341")
+        widget.update(text)
 
     def set_connection(self, available: bool, version: str | None) -> None:
         self._available = available

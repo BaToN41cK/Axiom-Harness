@@ -707,3 +707,41 @@ def test_permission_respond_command_reports_stale_ids(bridge: BridgeProcess) -> 
     reply = bridge.request(1, "permission_respond", {"id": "perm-1", "decision": "allow_once"})
     assert reply["ok"] is True
     assert reply["data"] == {"resolved": False}
+
+
+def test_apply_patch_respects_read_only_sandbox_and_permission_gate(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "note.txt"
+    target.write_text("before\n", encoding="utf-8")
+    proc = BridgeProcess(tmp_path / "axiom-home")
+    try:
+        switched = proc.request(1, "set_workspace", {"path": str(workspace)})
+        assert switched["ok"] is True
+        config = proc.request(2, "set_config", {"patch": {"access_mode": "read_only"}})
+        assert config["ok"] is True
+        patch = "--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-before\n+after\n"
+        reply = proc.request(3, "apply_patch", {"path": "note.txt", "patch": patch})
+        assert reply["ok"] is True
+        assert reply["data"]["ok"] is False
+        assert "sandbox" in (reply["data"]["error"] or "").lower()
+        assert target.read_text(encoding="utf-8") == "before\n"
+    finally:
+        proc.close()
+
+
+def test_apply_patch_uses_workspace_tool_gate_when_allowed(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "note.txt"
+    target.write_text("before\n", encoding="utf-8")
+    proc = BridgeProcess(tmp_path / "axiom-home")
+    try:
+        assert proc.request(1, "set_workspace", {"path": str(workspace)})["ok"] is True
+        patch = "--- a/note.txt\n+++ b/note.txt\n@@ -1 +1 @@\n-before\n+after\n"
+        reply = proc.request(2, "apply_patch", {"path": "note.txt", "patch": patch})
+        assert reply["ok"] is True
+        assert reply["data"]["ok"] is True
+        assert target.read_text(encoding="utf-8") == "after\n"
+    finally:
+        proc.close()

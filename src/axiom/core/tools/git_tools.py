@@ -17,11 +17,13 @@ GIT_STATUS_TOOL = "git_status"
 GIT_DIFF_TOOL = "git_diff"
 GIT_LOG_TOOL = "git_log"
 GIT_BRANCH_TOOL = "git_branch"
+GIT_GRAPH_TOOL = "git_graph"
 GIT_ADD_TOOL = "git_add"
+GIT_UNSTAGE_TOOL = "git_unstage"
 GIT_COMMIT_TOOL = "git_commit"
 
 GIT_TOOLS = (GIT_STATUS_TOOL, GIT_DIFF_TOOL, GIT_LOG_TOOL, GIT_BRANCH_TOOL,
-             GIT_ADD_TOOL, GIT_COMMIT_TOOL)
+             GIT_GRAPH_TOOL, GIT_ADD_TOOL, GIT_UNSTAGE_TOOL, GIT_COMMIT_TOOL)
 
 _TIMEOUT = 15.0
 _MAX_CHARS = 12_000
@@ -94,6 +96,26 @@ class GitTools:
             self._branch,
         )
         registry.register(
+            self._def(
+                GIT_GRAPH_TOOL,
+                "Show a linear branch graph (`git log --graph`).",
+                {"limit": {"type": "integer"}},
+            ),
+            self._graph,
+        )
+        registry.register(
+            ToolDefinition(
+                name=GIT_UNSTAGE_TOOL,
+                description="Unstage explicitly named workspace files (requires approval).",
+                parameters={"type": "object", "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}},
+                }, "required": []},
+                permission=ToolPermission.ASK, risk=RISK_MEDIUM, timeout=_TIMEOUT,
+                max_output=1000, workspace_scoped=True,
+            ),
+            self._unstage,
+        )
+        registry.register(
             ToolDefinition(
                 name=GIT_ADD_TOOL,
                 description="Stage explicitly named workspace files for a user-reviewed diff; never stages all files.",
@@ -151,6 +173,26 @@ class GitTools:
         all_branches = self._run_git(["branch", "--list"])
         body = f"Current: {current or '(detached)'}\n{all_branches.content}".strip()
         return ToolResult(name=GIT_BRANCH_TOOL, ok=True, content=body)
+
+    async def _graph(self, limit: int | None = None) -> ToolResult:
+        n = max(1, min(int(limit or 20), 100))
+        res = self._run_git(["log", f"-n{n}", "--graph", "--decorate", "--oneline"])
+        res.name = GIT_GRAPH_TOOL
+        return res
+
+    async def _unstage(self, paths: list[str] | None = None) -> ToolResult:
+        """Unstage explicit files for a mandatory re-review workflow."""
+        if not paths or any(not isinstance(path, str) or not path.strip() for path in paths):
+            return ToolResult(name=GIT_UNSTAGE_TOOL, ok=False, error="Explicit paths are required")
+        try:
+            for path in paths:
+                target = _resolve_in_root(self.root, path)
+                if target == self.root or target.is_dir():
+                    return ToolResult(name=GIT_UNSTAGE_TOOL, ok=False, error="Only individual files may be unstaged")
+            output = git_unstage(self.root, paths)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return ToolResult(name=GIT_UNSTAGE_TOOL, ok=False, error=str(exc))
+        return ToolResult(name=GIT_UNSTAGE_TOOL, ok=True, content=output or "Unstaged")
 
     async def _add(self, paths: list[str]) -> ToolResult:
         """Stage only explicit files, after the central approval boundary."""
@@ -338,3 +380,32 @@ def git_switch(root: Path, branch: str) -> str:
     if proc.returncode != 0:
         raise ValueError((proc.stderr or proc.stdout or "git switch failed").strip())
     return proc.stdout.strip() or f"Switched to {clean}"
+
+
+def git_revert(root: Path, path: str) -> str:
+    """Restore one file to its committed state; an untracked file is removed."""
+    if not (root / ".git").exists():
+        raise ValueError("Not a git repository")
+    target = _resolve_in_root(root, path)
+    if target == root or target.is_dir():
+        raise ValueError("Only individual files may be reverted")
+    rel = target.relative_to(root).as_posix()
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", rel],
+        cwd=root, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        timeout=_TIMEOUT, check=False,
+    )
+    if tracked.returncode == 0:
+        proc = subprocess.run(
+            ["git", "restore", "--", rel],
+            cwd=root, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=_TIMEOUT, check=False,
+        )
+        if proc.returncode != 0:
+            raise ValueError((proc.stderr or proc.stdout or "git restore failed").strip())
+        return proc.stdout.strip() or f"Reverted {path}"
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as exc:
+        raise ValueError(f"Cannot revert: {exc}") from exc
+    return f"Removed untracked {path}"

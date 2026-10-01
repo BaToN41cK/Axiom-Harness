@@ -53,8 +53,18 @@ _CRITICAL_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Prefix-based allowlists apply only to a *single* simple command. Shell
+# separators, substitutions and redirects can append a completely different
+# action after a benign-looking prefix (e.g. ``echo ok; ...``).
+_SHELL_COMPOSITION = re.compile(r"[;&|`\r\n<>]|\$\(|\$\{|%[^%\s]+%", re.IGNORECASE)
+_INLINE_INTERPRETER = re.compile(
+    r"^(?:python(?:3(?:\.\d+)?)?|py|node|ruby|perl|powershell|pwsh)(?:\.exe)?\s+"
+    r"(?:-c\b|-e\b|--eval\b|-command\b|-encodedcommand\b)",
+    re.IGNORECASE,
+)
 
-def classify_command_risk(command: str) -> tuple[str, str]:
+
+def classify_command_risk(command: str, *, shell: bool = True) -> tuple[str, str]:
     """Return ``(tier, reason)`` for a shell command (W4.9).
 
     Mirrors ``terminal.SAFE_PREFIXES``/``BLOCKED_PATTERNS`` so the visible tier
@@ -66,6 +76,8 @@ def classify_command_risk(command: str) -> tuple[str, str]:
         return "MEDIUM", "empty command runs inside the workspace sandbox"
     if _CRITICAL_PATTERNS.search(cmd):
         return "CRITICAL", "matches the destructive-command blocklist"
+    if shell and (_SHELL_COMPOSITION.search(raw) or _INLINE_INTERPRETER.search(raw)):
+        return "HIGH", "shell composition or inline code requires approval for the entire command"
     if _HIGH_PATTERNS.search(cmd):
         lowered = raw[:160]
         if "git push" in cmd:

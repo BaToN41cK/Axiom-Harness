@@ -9,6 +9,68 @@
 
 ## [Unreleased]
 
+### Added — W3.8 Localization core
+
+- New `core/i18n.py`: `Locale` (en/ru), a deterministic `TRANSLATIONS` catalog for core-emitted labels (task states, permission outcomes, autonomy presets), `translate(key, locale, **kwargs)` (falls back to the key) and `locales()`; `Config.locale` is a validated `en`/`ru` literal.
+- 5 tests in `tests/core/test_i18n.py`. Component-text replacement, command palette, portable mode and signed updates remain (W3.8 PARTIAL).
+
+### Added — W3.12 Explorer: git-aware file revert (core)
+
+- `git_tools.git_revert(root, path)` restores one file to its committed state (tracked → `git restore`, untracked → removed), guarded against the repo root and directories, and exposed as the user-initiated `git_revert` bridge command alongside stage/unstage/commit.
+- 3 tests in `tests/core/test_git_write.py` (tracked revert, untracked removal, directory rejection). Per-file M/A/U markers and E2E remain (W3.12 PARTIAL).
+
+### Added — W3.14 Git: branch graph and approval-gated unstage (core)
+
+- `GitTools` registers `git_graph` (`git log --graph --decorate --oneline`, read-only) and `git_unstage` (explicit files only, ASK permission, never unstage-all) alongside the existing `git_add`/`git_commit` reviewed-diff flow; both are wired into workspace tool scopes, agent role sets, task tool resolution and the desktop tool-kind map.
+- 2 tests in `tests/core/test_git_write.py`. git-checkpoint-based rollback remains (W3.14 PARTIAL).
+
+### Added — W3.13 Terminal history and rerun (core)
+
+- `TerminalTool` records a bounded `history` of executed commands (`command`/`exit_code`/`at`) and gains `rerun(index=-1)` to replay a command through the same execution path. stderr/exit-code capture and process-tree cleanup were already present.
+- 4 tests in `tests/core/test_terminal_history.py`. Persisted panel history and the rerun UI remain (W3.13 PARTIAL).
+
+### Added — W3.17 Artifact Workspace (core)
+
+- New `core/artifact_workspace.py`: `ArtifactWorkspace` stores editable documents under `<workspace>/.axiom/artifacts/`, and `ArtifactDocument` carries task association and version history — `edit()` appends the previous content to `history` instead of overwriting.
+- `create`/`load`/`update`/`list`/`delete`/`export`; an empty workspace lists no demo assets.
+- 5 tests in `tests/core/test_artifact_workspace.py`. Desktop Documents view and Markdown editor remain (W3.17 PARTIAL).
+
+### Added — W3.15 Task Automation Scheduler
+
+- New `core/automation.py`: `Schedule` (hourly/daily/weekly, `enabled`, `max_risk` capped at `safe`/`medium`), `AutomationStore` persisting to `.axiom/automation.json`, `due_schedules`, `create_automation_task`, `record_run` and `run_due`.
+- A due schedule becomes a real W4.1 `Task` with `source="automation"` and its capped `max_risk`; `record_run` turns any skipped interval into an explicit `missed_runs` count. `Task` gains optional `source`/`max_risk` fields.
+- 7 tests in `tests/core/test_automation.py`.
+
+### Added — W3.6 CLI/Headless Mode and Local API
+
+- `axiom run "prompt" --json` runs one prompt through the canonical `ChatSession` and prints a structured JSON result (`ok`/`answer`/`error`/`state`/`metrics`), so scripts and CI can drive the same runtime without embedding agent logic.
+- `axiom serve [--token T] [--host 127.0.0.1] [--port N]` exposes a token-protected localhost HTTP API (`GET /v1/status`, `POST /v1/run`) over the same runtime; non-local bind hosts are rejected before listening.
+- 6 tests in `tests/frontends/test_headless.py` (runner result/error, bind-host guard, token auth, run endpoint). WebSocket transport and VS Code/browser adapters remain (W3.6 PARTIAL).
+
+### Added — W4.13 performance primitives: TTL cache, EventBus filtering/backpressure, envelope validation
+
+- New `core/cache.py` `TTLCache`: bounded (`maxsize`) entries with wall-clock TTL, oldest-first eviction and `hits`/`misses`/`evictions` counters.
+- `core/bus.py` `EventBus` gains predicate filtering (`subscribe(..., predicate=...)`), an optional per-event `max_listeners` cap that drops the oldest listener (in-process backpressure), a `dropped` counter and `listener_count()`; `validate_event_envelope()` checks the common `event`/`ts` envelope for external producers.
+- 10 tests in `tests/core/test_cache.py` + `tests/core/test_bus.py`; `test_public_api.py` green. Deltas/pagination and before/after metrics remain (W4.13 PARTIAL).
+
+### Added — W3.4 Answer Artifacts (core)
+
+- New `core/artifacts.py` validates five artifact kinds — table, comparison, checklist, Mermaid diagram and chart — and rejects missing or malformed data with an explicit pydantic failure instead of rendering a placeholder.
+- `render_artifact(type, payload)` is registered in `ChatSession`; artifacts render to Markdown and export to CSV/SVG. Mermaid renders as a fenced block and refuses tabular export with an honest error. `Message.artifacts` persists validated artifacts with history.
+- 6 tests in `tests/core/test_artifacts.py`; `test_public_api.py` + `test_tools_registry.py` green. Desktop rendering UI and PNG export remain (W3.4 PARTIAL).
+
+### Added — Payments: AXIOM USD balance, YooMoney/YooKassa backend, and OAuth sign-in
+
+- YooMoney/YooKassa payment backend with signature-verified webhooks, safe configuration diagnostics, and honest payment/order states.
+- The internal balance is stored and shown as fixed-rate AXIOM USD credits (100 RUB = 1.00 USD) via a single rate source; a legacy kopeck→USD-cent migration runs once, and `POST /v1/payments/pro/balance` performs an atomic PRO purchase from credits.
+- Google and GitHub OAuth sign-in with safe configuration diagnostics; the desktop wallet shows the USD balance, RUB input and a credit preview. See `docs/payments-yoomoney.md`.
+
+### Completed — W4.11 Memory Scopes and Model Routing
+
+- `core/memory.py` grows from two scopes to four: `task` memory follows the running task and is archived with a reason on completion, and `session` memory belongs to exactly one conversation. Each store is bound to a live owner, so an ownerless scope is absent from a read instead of leaking another task's notes.
+- `core/router.py` gains roles (`coding`/`summarize`/`search`/`subagent`); a specialist agent or a search pass is routed by role first, and the Ollama runtime resolves a role to a real model through the catalog and reports the model it actually used. Unknown roles and malformed rules are ignored with a warning; with no configuration routing behaves exactly as before.
+- 46 new tests in `tests/core/test_memory_scopes_w411.py` and `tests/core/test_role_routing_w411.py`; full suite green (`696 passed, 1 skipped`).
+
 ### Fixed / Added — Safe task rejection and line-level review
 
 - Task rejection preflights all paths and compares exact post-tool snapshots before writing; later user edits and legacy tasks without snapshots are rejected safely. CRLF/LF are preserved, temporary names are unique, repeated decisions are idempotent, and filesystem failures attempt rollback with explicit recovery errors. This is not a crash-safe multi-file transaction.

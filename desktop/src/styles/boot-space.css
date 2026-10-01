@@ -1,0 +1,421 @@
+/* =================================================================
+   Boot screen — live black hole + smooth pipeline progress.
+   Imported from BootScreen.tsx. Every rule is scoped to `.boot--space`
+   so it outranks the base rules in boot.css regardless of import order.
+
+   Performance rules for this screen (it used to lag):
+     - the only full-screen animated surface is the WebGL canvas;
+     - no backdrop-filter, no mix-blend-mode, no animated filter/box-shadow
+       on large layers — pulses animate opacity/transform only;
+     - decorative base layers from boot.css are not rendered anymore.
+   ================================================================= */
+
+/* --------------------------------------------------------------- layout */
+.boot.boot--space {
+  justify-content: flex-start;
+  padding-left: clamp(24px, 9vw, 168px);
+  background: #000;
+  animation: boot-space-in 0.6s ease both;
+}
+
+@keyframes boot-space-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 860px) {
+  .boot.boot--space {
+    justify-content: center;
+    padding-left: 0;
+  }
+}
+
+.boot--space .boot-inner {
+  width: min(500px, 90vw);
+}
+
+/* Corner brackets: static (their glow animation repainted every frame) */
+.boot.boot--space::before,
+.boot.boot--space::after {
+  z-index: 4;
+  animation: none;
+  opacity: 0.45;
+}
+
+/* ------------------------------------------------------------ black hole */
+.blackhole {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  contain: strict;
+}
+
+.blackhole-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* the back-buffer is ~0.55× — let the compositor upscale it smoothly */
+  image-rendering: auto;
+}
+
+.blackhole-fallback {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: 78% 50%;
+}
+
+/* Readability: darken the column side, keep the black hole untouched */
+.boot--space .boot-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.35) 34%, rgba(0, 0, 0, 0.04) 62%, transparent 75%),
+    radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.5) 100%);
+}
+
+@media (max-width: 860px) {
+  .boot--space .boot-shade {
+    background:
+      linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)),
+      radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.6) 100%);
+  }
+}
+
+/* --------------------------------------------------------------- logo
+   The letters used to float on 5 separate infinite animations; one shared
+   breathing glow is enough and costs a single layer. */
+.boot--space .boot-mark span { animation: none; }
+.boot--space .boot-mark-glitch { animation-duration: 7s; }
+
+/* ------------------------------------------------------------ steps panel
+   Opaque glass instead of backdrop-filter: blurring a live WebGL canvas
+   re-rasterises the whole panel every frame. */
+.boot--space .boot-steps {
+  background: linear-gradient(180deg, rgba(14, 10, 12, 0.86), rgba(8, 6, 8, 0.9));
+  border-color: rgba(255, 110, 90, 0.14);
+  backdrop-filter: none;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.boot--space .boot-step {
+  transition:
+    color 0.45s ease,
+    background-color 0.45s ease,
+    border-color 0.45s ease;
+}
+
+.boot--space .boot-step.ok::before { transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Active step: breathing frame drawn by a pseudo-element whose OPACITY
+   pulses (compositor-only), plus a sheen and a glowing left bar. */
+.boot--space .boot-step.running {
+  background: rgba(230, 57, 70, 0.075);
+  box-shadow: none;
+}
+
+.boot--space .boot-step.running::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: 0;
+  top: 0;
+  width: auto;
+  height: auto;
+  border-radius: inherit;
+  background: none;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 110, 90, 0.45),
+    0 0 18px rgba(230, 57, 70, 0.35);
+  animation: boot-breathe-opacity 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes boot-breathe-opacity {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+.boot--space .boot-step.running::after {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 140, 110, 0.06) 40%,
+    rgba(255, 180, 150, 0.13) 50%,
+    rgba(255, 140, 110, 0.06) 60%,
+    transparent 100%
+  );
+  animation: boot-step-scan 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  will-change: transform;
+}
+
+.boot--space .boot-step-icon-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  animation: boot-icon-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes boot-icon-pop {
+  from { opacity: 0; transform: scale(0.4) rotate(-30deg); }
+  to { opacity: 1; transform: scale(1) rotate(0); }
+}
+
+.boot--space .boot-step-detail {
+  animation: boot-fade-slide 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes boot-fade-slide {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* --------------------------------------------------------- pipeline progress
+   A thin energy line with a node per real probe: the fill eases (JS lerp,
+   transform-only), each node ignites when its probe passes, the running node
+   pulses, and a comet rides the leading edge. */
+.boot--space .boot-pipeline {
+  margin-top: 26px;
+  gap: 14px;
+}
+
+.boot-pipeline-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.boot-pipeline-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.boot-pipeline-kicker {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+
+.boot-pipeline-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.boot-pipeline-caret {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: #ff6a4d;
+  box-shadow: 0 0 8px rgba(255, 106, 77, 0.9);
+  animation: boot-caret 1.1s ease-in-out infinite;
+}
+
+@keyframes boot-caret {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.boot-pipeline-percent {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+}
+
+.boot-pipeline-percent span {
+  font-size: 30px;
+  font-weight: 600;
+  min-width: 3ch;
+  text-align: right;
+  text-shadow: 0 0 18px rgba(255, 90, 60, 0.45);
+}
+
+.boot-pipeline-percent small {
+  font-size: 13px;
+  color: rgba(255, 140, 110, 0.85);
+}
+
+.boot-pipeline-track {
+  position: relative;
+  height: 14px;
+  margin: 0 6px;
+}
+
+.boot-pipeline-rail,
+.boot-pipeline-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+}
+
+.boot-pipeline-rail {
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.1) 0 6px, transparent 6px 10px);
+}
+
+.boot-pipeline-fill {
+  height: 3px;
+  margin-top: -1.5px;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  will-change: transform;
+  background: linear-gradient(90deg, #7a1420 0%, #e63946 45%, #ff7a45 80%, #ffd0a0 100%);
+  box-shadow: 0 0 10px rgba(255, 90, 60, 0.55);
+}
+
+/* Comet riding the leading edge */
+.boot-pipeline-comet {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.boot-pipeline-comet::before {
+  content: "";
+  position: absolute;
+  left: -46px;
+  top: -2px;
+  width: 46px;
+  height: 4px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, transparent, rgba(255, 210, 170, 0.9));
+  filter: blur(1px);
+}
+
+.boot-pipeline-comet::after {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, #ffd6b0 35%, rgba(255, 120, 70, 0) 72%);
+  box-shadow: 0 0 14px 4px rgba(255, 110, 70, 0.55);
+  animation: boot-comet-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes boot-comet-pulse {
+  0%, 100% { transform: scale(0.85); opacity: 0.85; }
+  50% { transform: scale(1.25); opacity: 1; }
+}
+
+.boot-pipeline-node {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: #0b0809;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  transition: border-color 0.4s ease, background-color 0.4s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.boot-pipeline-node.ok {
+  background: #ff7a45;
+  border-color: #ffd0a0;
+  transform: scale(1.1);
+  box-shadow: 0 0 10px rgba(255, 110, 70, 0.7);
+}
+
+.boot-pipeline-node.origin { width: 6px; height: 6px; margin: -3px 0 0 -3px; border: none; box-shadow: none; }
+
+.boot-pipeline-node.running {
+  border-color: #ff7a45;
+  transform: scale(1.15);
+}
+
+.boot-pipeline-node.running::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 122, 69, 0.8);
+  animation: boot-node-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes boot-node-ping {
+  from { transform: scale(0.6); opacity: 1; }
+  to { transform: scale(1.8); opacity: 0; }
+}
+
+.boot-pipeline-node.failed {
+  background: rgba(var(--boot-warn), 1);
+  border-color: rgba(var(--boot-warn), 1);
+}
+
+/* --------------------------------------------------------- status ticker */
+.boot--space .boot-ticker {
+  display: inline-grid;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.boot--space .boot-ticker-item {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.boot--space .boot-ticker-item.is-entering {
+  animation: boot-ticker-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.boot--space .boot-ticker-item.is-leaving {
+  animation: boot-ticker-out 0.32s ease-in both;
+}
+
+@keyframes boot-ticker-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes boot-ticker-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+/* --------------------------------------------------------- reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .boot.boot--space,
+  .boot--space .boot-step.running::before,
+  .boot--space .boot-step.running::after,
+  .boot--space .boot-step-icon-inner,
+  .boot--space .boot-step-detail,
+  .boot-pipeline-caret,
+  .boot-pipeline-comet::after,
+  .boot-pipeline-node.running::after,
+  .boot--space .boot-ticker-item {
+    animation: none !important;
+  }
+
+  .boot--space .boot-ticker-item.is-leaving { display: none; }
+}

@@ -1,0 +1,108 @@
+/* =================================================================
+   Chat — rich tool activity timeline (read / edit / search / run …).
+   ================================================================= */
+
+.ta { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+
+.ta-overview { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11.5px; color: var(--ax-text-muted); }
+.ta-overview strong { font-weight: 600; color: var(--ax-text); margin-right: 4px; }
+.ta-overview-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ax-success); }
+.ta-overview-dot.live { background: var(--ax-accent); animation: ta-pulse 1.4s ease-in-out infinite; }
+@keyframes ta-pulse { 50% { opacity: .35; } }
+.ta-chip { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border-radius: 999px; background: var(--ax-bg-active); border: 1px solid var(--ax-border); color: var(--ax-text-muted); }
+.ta-chip b { color: var(--ax-text); font-weight: 650; font-variant-numeric: tabular-nums; }
+.ta-chip svg { color: var(--ax-text-faint); }
+.ta-chip.bad { color: var(--ax-error-text); border-color: var(--ax-error-border); background: var(--ax-error-soft); }
+
+.ta-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+
+.ta-item { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 9px; padding-bottom: 6px; animation: ta-in .28s cubic-bezier(.16,1,.3,1) both; }
+@keyframes ta-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.ta-item:not(.last)::before { content: ""; position: absolute; left: 12px; top: 26px; bottom: -2px; width: 2px; border-radius: 2px; background: var(--ax-border); }
+
+.ta-node { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--ax-bg-panel); border: 1px solid var(--ax-border-strong); color: var(--ax-text-muted); position: relative; z-index: 1; }
+.ta-item.running .ta-node { color: var(--ax-accent-text); border-color: var(--ax-accent-border); box-shadow: 0 0 0 3px var(--ax-accent-softer); }
+.ta-item.failed .ta-node { color: var(--ax-error-text); border-color: var(--ax-error-border); }
+.ta-k-edit .ta-node, .ta-k-write .ta-node, .ta-k-patch .ta-node { color: #e3b341; }
+.ta-k-read .ta-node { color: #79c0ff; }
+.ta-k-search .ta-node, .ta-k-files .ta-node, .ta-k-list .ta-node { color: #d2a8ff; }
+.ta-k-run .ta-node { color: #7ee787; }
+.ta-k-delete .ta-node { color: var(--ax-error-text); }
+
+.ta-card { min-width: 0; border: 1px solid var(--ax-border); border-radius: 10px; background: var(--ax-bg-panel); overflow: hidden; transition: border-color .15s ease; }
+.ta-card:hover { border-color: var(--ax-border-strong); }
+.ta-item.running .ta-card { border-color: var(--ax-accent-border); }
+.ta-item.failed .ta-card { border-color: var(--ax-error-border); }
+
+.ta-head { width: 100%; display: flex; align-items: center; gap: 9px; min-height: 32px; padding: 5px 10px; border: 0; background: none; color: var(--ax-text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.ta-head:disabled { cursor: default; color: var(--ax-text); }
+.ta-label { font-weight: 600; white-space: nowrap; }
+.ta-target { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ax-text-muted); }
+.ta-path { font-family: var(--ax-font-mono); font-size: 11.5px; }
+.ta-path-dir { color: var(--ax-text-faint); }
+.ta-path b { color: var(--ax-text); font-weight: 600; }
+.ta-query { font-size: 12px; color: var(--ax-text); }
+.ta-query em { font-style: normal; color: var(--ax-text-faint); font-family: var(--ax-font-mono); font-size: 11px; }
+.ta-cmd { font-family: var(--ax-font-mono); font-size: 11.5px; color: var(--ax-text); }
+.ta-meta { font-size: 11px; color: var(--ax-text-faint); white-space: nowrap; }
+.ta-delta { display: inline-flex; gap: 6px; font-family: var(--ax-font-mono); font-size: 11px; white-space: nowrap; }
+.ta-delta .add { color: #56d364; font-weight: 600; }
+.ta-delta .del { color: #f47067; font-weight: 600; }
+.ta-state { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--ax-text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ta-item.ok .ta-state svg { color: var(--ax-success-text); }
+.ta-item.failed .ta-state svg { color: var(--ax-error-text); }
+.ta-chev { color: var(--ax-text-faint); transition: transform .18s ease; flex: none; }
+.ta-chev.open { transform: rotate(90deg); }
+
+.ta-body { border-top: 1px solid var(--ax-border); animation: ta-in .2s ease both; }
+.ta-error { padding: 8px 11px; font: 11.5px/1.5 var(--ax-font-mono); color: var(--ax-error-text); background: var(--ax-error-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* code / diff */
+.ta-code { max-height: 360px; overflow: auto; background: var(--ax-bg-inset); }
+.ta-code table { border-collapse: collapse; width: 100%; font: 11.5px/1.6 var(--ax-font-mono); }
+.ta-code td { padding: 0 8px; vertical-align: top; }
+.ta-ln { width: 1%; min-width: 30px; text-align: right; color: var(--ax-text-disabled); user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ta-sign { width: 1%; padding: 0 2px !important; color: var(--ax-text-faint); user-select: none; }
+.ta-src { white-space: pre; color: var(--ax-text); }
+.ta-code tr.add { background: rgba(46, 160, 67, .14); }
+.ta-code tr.add .ta-sign, .ta-code tr.add .ta-ln { color: #56d364; }
+.ta-code tr.del { background: rgba(248, 81, 73, .13); }
+.ta-code tr.del .ta-sign, .ta-code tr.del .ta-ln { color: #f47067; }
+.ta-code tr.del .ta-src { color: color-mix(in srgb, var(--ax-text) 75%, #f47067); }
+.ta-more { display: block; width: 100%; height: 28px; border: 0; border-top: 1px solid var(--ax-border); background: var(--ax-bg-panel); color: var(--ax-accent-text); font: inherit; font-size: 11.5px; cursor: pointer; position: sticky; bottom: 0; }
+.ta-more:hover { background: var(--ax-bg-hover); }
+
+.ta-pre { margin: 0; padding: 9px 11px; max-height: 260px; overflow: auto; font: 11.5px/1.55 var(--ax-font-mono); color: var(--ax-text-muted); background: var(--ax-bg-inset); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* search results */
+.ta-search { display: flex; flex-direction: column; max-height: 340px; overflow: auto; background: var(--ax-bg-inset); }
+.ta-search-file { padding: 6px 0; border-bottom: 1px solid var(--ax-border); }
+.ta-search-file:last-child { border-bottom: 0; }
+.ta-search-head { display: flex; align-items: center; gap: 7px; padding: 2px 11px 4px; color: var(--ax-text-faint); }
+.ta-count { margin-left: auto; font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: var(--ax-bg-active); color: var(--ax-text-muted); }
+.ta-search-hit { display: flex; gap: 8px; padding: 1px 11px; font: 11.5px/1.6 var(--ax-font-mono); }
+.ta-search-hit:hover { background: var(--ax-bg-hover); }
+.ta-search-hit code { white-space: pre; overflow: hidden; text-overflow: ellipsis; color: var(--ax-text-muted); }
+.ta-search-hit mark { background: rgba(227, 179, 65, .28); color: #ffd277; border-radius: 3px; padding: 0 1px; }
+.ta-search-rest { padding: 2px 11px 2px 49px; font-size: 11px; color: var(--ax-text-faint); }
+
+/* file list */
+.ta-files { display: flex; flex-wrap: wrap; gap: 5px; padding: 9px 11px; max-height: 200px; overflow: auto; background: var(--ax-bg-inset); }
+.ta-file { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--ax-bg-panel); border: 1px solid var(--ax-border); font: 11px var(--ax-font-mono); color: var(--ax-text-muted); }
+.ta-file.dir { color: #79c0ff; }
+
+/* terminal */
+.ta-term { background: #050507; }
+.ta-term-bar { display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 10px; border-bottom: 1px solid var(--ax-border); }
+.ta-term-bar span { width: 8px; height: 8px; border-radius: 50%; background: #2c2c33; }
+.ta-term-bar em { margin-left: 6px; font-style: normal; font-size: 10.5px; color: var(--ax-text-faint); }
+.ta-term pre { margin: 0; padding: 9px 12px; max-height: 300px; overflow: auto; font: 11.5px/1.55 var(--ax-font-mono); color: #c9d1d9; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ta-prompt { color: #7ee787; font-weight: 700; }
+.ta-term.failed .ta-prompt { color: #f47067; }
+
+.ta .spin { animation: ta-spin .9s linear infinite; }
+@keyframes ta-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ta-item, .ta-body, .ta-overview-dot.live { animation: none !important; }
+}

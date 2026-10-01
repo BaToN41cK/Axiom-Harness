@@ -32,6 +32,7 @@ from axiom.core.events import SourceItem
 from axiom.core.state import GenerationState
 from axiom.frontends.tui.widgets.reasoning import ReasoningPanel
 from axiom.frontends.tui.widgets.search import WebSearchPanel
+from axiom.frontends.tui.widgets.tool_view import ToolBlock
 from axiom.shared import formatting as fmt
 from axiom.shared import theme
 
@@ -78,6 +79,7 @@ class AssistantMessage(Container):
         self._search: WebSearchPanel | None = None
         self._tool_line: Static | None = None
         self._tool_active = False
+        self._tool_blocks: list[ToolBlock] = []
         self._saw_thinking = False
         self._error_box: Static | None = None
         self._stream: MarkdownStream | None = None
@@ -140,6 +142,8 @@ class AssistantMessage(Container):
             return
         self._tick += 1
         self._refresh_status()
+        if self._tool_active:
+            self._tick_tools(fmt.spinner_frame(self._tick))
 
     def _refresh_status(self) -> None:
         try:
@@ -207,8 +211,10 @@ class AssistantMessage(Container):
             self._collapse_pending_thinking(state)
         if self._search is not None:
             self._search.finish(cancelled=state == GenerationState.CANCELLED)
-        if self._tool_line is not None and self._tool_active:
-            self.tool_finished("tool", False, "interrupted")
+        for block in self._tool_blocks:
+            if block.state == "running":
+                block.finish(False, detail="interrupted")
+        self._tool_active = False
         self._refresh_status()
         summary = fmt.completion_summary(
             state,
@@ -278,38 +284,40 @@ class AssistantMessage(Container):
     # -------------------------------------------------------------------- tool
 
     def tool_started(self, name: str, arguments: dict[str, Any] | None = None) -> None:
-        """Render a real tool invocation (chronological timeline block)."""
-        if self._tool_line is None:
-            self._tool_line = Static("", classes="tool-line", markup=False)
-            anchor = self._anchor()
-            if anchor is not None:
-                self.mount(self._tool_line, before=anchor)
-            else:
-                self.mount(self._tool_line)
+        """Render a real tool invocation as its own block (chronological)."""
+        block = ToolBlock(name, arguments)
+        anchor = self._anchor()
+        if anchor is not None:
+            self.mount(block, before=anchor)
+        else:
+            self.mount(block)
+        self._tool_blocks.append(block)
+        self._tool_line = block
         self._tool_active = True
-        query = ""
-        if arguments:
-            for key in ("query", "url", "input", "text"):
-                value = arguments.get(key)
-                if isinstance(value, str) and value.strip():
-                    query = fmt.truncate(value.strip(), 72)
-                    break
-        suffix = f"  ·  {query}" if query else ""
-        self._tool_line.update(f"{theme.TOOL_GLYPH}  TOOL  ·  {name}{suffix}")
 
-    def tool_finished(self, name: str, ok: bool, detail: str = "") -> None:
-        if self._tool_line is None:
+    def tool_finished(
+        self,
+        name: str,
+        ok: bool,
+        detail: str = "",
+        *,
+        content: str = "",
+        duration_ms: int | None = None,
+    ) -> None:
+        block = next(
+            (b for b in reversed(self._tool_blocks) if b.state == "running" and (b.tool_name == name or name == "tool")),
+            None,
+        )
+        if block is None:
             self.tool_started(name)
-            if self._tool_line is None:  # pragma: no cover - defensive
-                return
-        self._tool_active = False
-        glyph = theme.TICK if ok else theme.CROSS
-        suffix = f"  ·  {detail}" if detail else ""
-        self._tool_line.update(f"{glyph}  TOOL  ·  {name}{suffix}")
-        if name == "web_search" and ok and self._search is None:
-            # Model tool ran fine but SearchResultEvent not seen yet: keep the
-            # honest mark, the search panel will extend it when results land.
-            pass
+            block = self._tool_blocks[-1]
+        block.finish(ok, content=content, detail=detail, duration_ms=duration_ms)
+        self._tool_active = any(b.state == "running" for b in self._tool_blocks)
+
+    def _tick_tools(self, spinner: str) -> None:
+        for block in self._tool_blocks:
+            if block.state == "running":
+                block.tick(spinner)
 
     def search_started(self, query: str) -> None:
         self._ensure_search().search_started(query)

@@ -47,4 +47,5 @@ desktop/temp-ps.txt
 # Local environment files and secrets.
 .env
 .env.*
-
+# Personal/agent instructions: never tracked (the repo ships no default).
+AGENTS.md

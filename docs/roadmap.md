@@ -1,6 +1,6 @@
 # AXIOM Product and Engineering Roadmap
 
-_Last synchronized: 2026-09-27. This document defines product intent and delivery order; it is not evidence that a feature is complete._
+_Last synchronized: 2026-10-01. This document defines product intent and delivery order; it is not evidence that a feature is complete._
 
 ## Status legend
 
@@ -26,8 +26,8 @@ A feature is complete only after implementation, real tests, and updated documen
 |---|---|---|
 | W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
 | W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
-| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 6 partial, 11 TODO |
-| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 12 done, 3 partial, 0 TODO |
+| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 10 partial, 6 TODO |
+| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 13 done, 2 partial, 0 TODO |
 
 ---
 
@@ -213,7 +213,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.4 Answer Artifacts
 
-**Status:** TODO · **Priority:** P1
+**Status:** PARTIAL — `core/artifacts.py` validates tables/comparisons/checklists/Mermaid/charts and exports Markdown/CSV/SVG; `render_artifact` is registered in `ChatSession` and `Message.artifacts` persists them; desktop rendering UI and PNG export remain · **Priority:** P1
 
 **Outcome:** Answers can contain structured, inspectable artifacts instead of an unstructured wall of text.
 
@@ -233,7 +233,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.6 CLI/Headless Mode and Local API
 
-**Status:** TODO · **Priority:** P2
+**Status:** PARTIAL — `axiom run "prompt" --json` (headless JSON over the canonical `ChatSession`) and a token-protected localhost HTTP API (`/v1/status`, `/v1/run`) with non-local bind rejection exist; WebSocket transport and VS Code/browser adapters remain · **Priority:** P2
 
 **Outcome:** Scripts, CI, editors, and extensions can drive the same runtime without embedding agent logic.
 
@@ -253,7 +253,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.8 Language, Command Palette, and Updates
 
-**Status:** TODO · **Priority:** P2
+**Status:** PARTIAL — `core/i18n.py` adds a RU/EN catalog for core-emitted labels (task states, permission outcomes, autonomy presets) with `translate()`/`locales()` and a validated `Config.locale`; component-text replacement, `Ctrl+Shift+P`, portable mode, backup/restore and signed updates remain · **Priority:** P2
 
 **Outcome:** RU/EN users get consistent navigation, recoverable settings, and secure updates.
 
@@ -292,7 +292,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.12 Explorer 2.0
 
-**Status:** PARTIAL — tree, search, git status, and opening exist · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — tree/search/git-status/open plus real create/rename/delete and diff exist; added `git_revert` (restore a file to its committed state via the `git_revert` bridge command); per-file `M/A/U` markers and E2E remain · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Common workspace operations are available without leaving the application.
 
@@ -302,7 +302,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.13 Terminal UI 2.0
 
-**Status:** PARTIAL — command panel exists · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — command panel exists; the core `TerminalTool` records a bounded `history` and supports `rerun(index=-1)` (with existing stderr/exit-code/process-tree-cleanup); persisted panel history and the rerun UI remain · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Interactive terminal use has process status, history, reuse, and coordinated cancellation.
 
@@ -312,7 +312,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.14 Git UI 2.0
 
-**Status:** PARTIAL — status and diff panel exist · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — status/diff/log panel and real stage/unstage/commit exist; added the `git_graph` branch-graph tool and the approval-gated `git_unstage` agent tool (explicit files only, never unstage-all) on top of the existing reviewed-diff `git_commit`; git-checkpoint-based rollback remains · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Users can review and commit real changes through a guarded workflow.
 
@@ -322,7 +322,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.15 Task Automation Scheduler
 
-**Status:** TODO · **Priority:** P3 · **Stage:** 11
+**Status:** DONE — `core/automation.py` persists schedules to `.axiom/automation.json`; `run_due` turns due schedules into real W4.1 tasks (`source="automation"`, `max_risk` capped at safe/medium) and `record_run` records skipped intervals as `missed_runs` · **Priority:** P3 · **Stage:** 11
 
 **Outcome:** Repetitive approved tasks can run on daily, weekly, or cron-like schedules.
 
@@ -342,7 +342,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.17 Artifact Workspace
 
-**Status:** TODO · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — `core/artifact_workspace.py` (`ArtifactWorkspace`/`ArtifactDocument`) persists versioned, task-associated documents under `.axiom/artifacts/` with open/edit/save/export; the Desktop Documents view and Markdown editor remain · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Generated plans, reports, diagrams, and documents remain editable project assets.
 
@@ -487,7 +487,7 @@ After every phase: tests → build/type-check → review changed files → fix r
 
 ## W4.11 Memory Scopes and Model Routing
 
-**Status:** PARTIAL — `core/router.py` exists; W2.1 landed global/project storage, Task and Session scopes are pending · **Priority:** P1 · **Phase:** 9
+**Status:** DONE — `core/memory.py` task/session scopes with live owners and archived task memory; `core/router.py` roles (coding/summarize/search/subagent) resolve through the catalog and report the model actually used · **Priority:** P1 · **Phase:** 9
 
 **Outcome:** Memory and models are selected by role and scope without hard-coded provider names.
 
@@ -522,7 +522,7 @@ inactive tasks that returns to the chat. The same view renders per-file diffs fr
 
 ## W4.13 IPC, Streaming, Memory, and Process Performance
 
-**Status:** PARTIAL — streaming, warmup, caches, and output limits exist · **Priority:** P1 · **Phase:** 11
+**Status:** PARTIAL — streaming/warmup/output limits exist; added `TTLCache` (bounded TTL/limit), `EventBus` predicate filtering plus a per-event listener cap (backpressure), and `validate_event_envelope`; deltas/pagination and before/after metrics remain · **Priority:** P1 · **Phase:** 11
 
 **Outcome:** Long tasks stay responsive and bounded on modest local hardware.
 
@@ -624,3 +624,15 @@ Network tests use explicit live markers. A skipped live test is not reported as 
 | 2026-09-28 | Completed W4.5: new `core/rules.py` — `RuleManager`/`discover_rules` across four scopes (global `~/.axiom/AXIOM.md`, project `AXIOM.md`/`.axiom/project.md`, directory `AXIOM.md`, task `@`-mentions) with deterministic precedence merging (higher scope shadows conflicting Markdown sections), heavy-dir pruning and workspace-constrained walks; directory rules attach only when the task touches their directory, user-requested rules always win, global+project rules occupy the protected `project_rules` prompt layer. `core/skills.py` extended with disk skills from `~/.axiom/skills/*.md` and `<workspace>/.axiom/skills/*.md` (optional `---` header: id/label/triggers/tools; public `parse_skill_file`/`load_skill_directory`), selected by declared triggers — never wholesale — with stale project skills dropped on workspace switch. `ChatSession` records merged rules + selected skill ids in Task State (`context_rules`/`active_skills`/`task_paths`, `task.rules` trajectory event) and `TaskRunner` injects them into every step prompt, so restarted tasks keep identical constraints. Tests: 17 deterministic tests in `tests/core/test_rules_skills.py` (discovery, relevance filtering, shadowing, determinism, rebinding, parsing, trigger selection, task contract); W4 wave `10 done, 4 partial, 1 TODO`; verified with full pytest `584 passed, 1 skipped`, Ruff and mypy on new/changed modules. |
 | 2026-09-28 | Completed W4.6: `core/agents.py` now carries the delivery set (Explorer read-only reconnaissance, Frontend, Backend) with per-role scoped tools in `tools/meta.py`; the compact report contract `RESULT/FINDINGS/FILES/ERRORS/RECOMMENDATIONS` is parsed and capped per section (600 chars) and in total (2400) by `compact_report`, never inventing content — unsectioned prose becomes one RESULT line and a real failure is appended to ERRORS. `ChatSession._subagent_runner` appends the exact model/provider, streams reasoning/answer/tool steps to the parent trajectory, enforces `SubagentBudget` (time/tokens/tool calls/retries) after every event and stops with an explicit `budget.exhausted` reason plus the partial result (`subagent.budget` trajectory event) instead of hanging or fabricating completion; worker transcripts stay in the worker's own trajectory and only `report`+`budget` leave the run. `Orchestrator` renders reviewer input and the final report from compact reports (raw worker prose never reaches the reviewer), aggregates `reports` in the run result for calls that bypass the contract, and passes the real rework iteration as the worker retry count; planning swaps the generalist `coder` for `frontend`/`backend` only when the request names one surface (word-boundary match, both surfaces keep the generalist); `TaskRunner` aggregates reports into the new `Task.subagent_reports` (one entry per step id, replaced on repair/rework, persisted for resume). Tests: 18 deterministic tests in `tests/core/test_agents_46.py` (role/scoped-tool registry, report parsing/bounding, budget reasons, real worker run with faked transport, budget-exhaustion partial result, reviewer isolation, surface-role selection, rework retry count, Task State aggregation and restart round trip); W4 wave `11 done, 3 partial, 1 TODO`; verified with full pytest `602 passed, 1 skipped`, Ruff, and mypy showing no new errors (remaining are pre-existing union-attr/assignment warnings). |
 | 2026-09-29 | Completed W4.10: new `core/hooks.py` with the nine lifecycle events (`TaskStart`, `PreToolUse`, `PreEdit`, `PostEdit`, `PostToolUse`, `PreCommit`, `PostCommit`, `ContextCompact`, `TaskComplete`). Definitions merge deterministically — builtin (shipped **disabled**, since a hook runs real commands) → `<AXIOM_HOME>/hooks/*.json` → `<workspace>/.axiom/hooks/*.json` → `config.hooks`, where an entry carrying only `id`+`enabled` toggles an existing definition without repeating its command; malformed JSON, unknown events and commandless entries are rejected, and timeouts clamp to 0.5–600 s. Hooks run sequentially in declaration order as argv without a shell (so hook arguments cannot append a second command), each classified by the W4.9 command policy and refused before execution above `hooks_max_risk` (default MEDIUM, so a project file cannot smuggle in `curl … \| sh`). Execution is fail-open: a non-zero exit, timeout, or missing executable becomes a warning in the persisted `Task.hook_results` and the next hook plus the task continue, never producing a `TaskError`. `ToolRegistry.execute` runs the tool-scoped events at the single tool choke point (post events only after a successful tool; `subset()` keeps the same runner so subagent edits are hooked too), `TaskRunner` runs `TaskStart`/`TaskComplete`/`ContextCompact` and publishes `task.hooks`, and hooks receive `AXIOM_HOOK_EVENT`/`AXIOM_TASK_ID`/`AXIOM_TOOL_NAME`/`AXIOM_FILE_PATH`/`AXIOM_WORKSPACE`; a workspace switch rebinds hooks so a previous project's commands never run. New config: `hooks_enabled`, `hooks`, `hooks_max_risk`. Tests: 27 tests in `tests/core/test_hooks_w410.py` — a real PostEdit formatter subprocess that actually rewrites the edited file, failing/timeout/missing-executable warnings with the loop continuing, risk refusal before execution, `hooks_enabled=false` starting no process, sequential ordering, event/path/tool filtering, hook env, registry pre/post ordering with an unchanged tool result, and Task State persistence. W4 wave `12 done, 3 partial, 0 TODO`; verified with the full suite, Ruff and the frontend build. |
+| 2026-09-30 | Completed W4.11: `core/memory.py` grows from two to four scopes — `task` memory follows the running task and is archived with a reason on completion, `session` memory belongs to exactly one conversation, and each store is bound to a live owner so an ownerless scope is absent from a read instead of leaking another task's notes. `core/router.py` gains roles (`coding`/`summarize`/`search`/`subagent`); a specialist agent or a search pass is routed by role first and the Ollama runtime resolves a role to a real model through the catalog, reporting the model it actually used. Unknown roles and malformed rules log a warning and are ignored; with no configuration routing behaves exactly as before. 46 new tests in `tests/core/test_memory_scopes_w411.py` + `tests/core/test_role_routing_w411.py`; full suite green (`696 passed, 1 skipped`). W4 wave now `13 done, 2 partial, 0 TODO`. |
+| 2026-09-30 | Added payments: YooMoney/YooKassa backend with signature-verified webhooks and safe configuration diagnostics; the internal balance is stored and shown as fixed-rate AXIOM USD credits (100 RUB = 1.00 USD) with a legacy kopeck→USD-cent migration and an atomic `POST /v1/payments/pro/balance` PRO purchase. Tracked in `docs/payments-yoomoney.md` (outside the W1–W4 item list). |
+| 2026-10-01 | Added Google and GitHub OAuth sign-in with safe configuration diagnostics (payments/auth). |
+| 2026-10-01 | Added W3.4 core (PARTIAL): `core/artifacts.py` with five validated artifact types (table/comparison/checklist/mermaid/chart), the `render_artifact` tool registered in `ChatSession`, a `Message.artifacts` persistence field, and Markdown/CSV/SVG export (Mermaid renders as a fenced block and refuses tabular export). Missing data fails explicitly via pydantic validation; 6 tests in `tests/core/test_artifacts.py`. Desktop rendering UI and PNG export remain. |
+| 2026-10-01 | Added W4.13 core (PARTIAL): `core/cache.py` `TTLCache` (bounded TTL/limit with oldest-first eviction and hit/miss/eviction counters), `EventBus` predicate filtering plus a per-event `max_listeners` cap that drops the oldest listener, a `dropped` counter/`listener_count()`, and `validate_event_envelope()` for the common `event`/`ts` envelope. 10 tests in `tests/core/test_cache.py` + `tests/core/test_bus.py`. Deltas/pagination and before/after metrics remain. |
+| 2026-10-01 | Added W3.6 core (PARTIAL): `axiom run "prompt" --json` headless runner over the canonical `ChatSession` and `axiom serve` — a token-protected localhost HTTP API (`/v1/status`, `/v1/run`) that rejects non-local binds. 6 tests in `tests/frontends/test_headless.py`. WebSocket transport and VS Code/browser adapters remain. |
+| 2026-10-01 | Completed W3.15: `core/automation.py` persists schedules to `.axiom/automation.json`; `run_due` turns due schedules into real W4.1 tasks (`source="automation"`, `max_risk` capped at safe/medium) and `record_run` records skipped intervals as `missed_runs`. `Task` gains `source`/`max_risk`. 7 tests in `tests/core/test_automation.py`. W3 wave now `8 partial, 8 TODO`. |
+| 2026-10-01 | Added W3.17 core (PARTIAL): `core/artifact_workspace.py` (`ArtifactWorkspace`/`ArtifactDocument`) persists versioned, task-associated documents under `.axiom/artifacts/` (create/load/update/list/delete/export, history-on-edit, empty state has no demo assets). 5 tests in `tests/core/test_artifact_workspace.py`. Desktop Documents view and Markdown editor remain. W3 wave now `9 partial, 7 TODO`. |
+| 2026-10-01 | Added W3.13 core (PARTIAL): `TerminalTool` records a bounded command `history` and gains `rerun(index=-1)`; stderr/exit-code capture and process-tree cleanup already existed. 4 tests in `tests/core/test_terminal_history.py`. Persisted panel history and the rerun UI remain. |
+| 2026-10-01 | Added W3.14 core (PARTIAL): `GitTools` gains the read-only `git_graph` branch-graph tool and the approval-gated `git_unstage` agent tool (explicit files only, never unstage-all), wired into workspace scopes/roles/task resolution and the desktop tool map; stage/unstage/commit with reviewed-diff hash already existed. 2 tests in `tests/core/test_git_write.py`. git-checkpoint-based rollback remains. |
+| 2026-10-01 | Added W3.12 core (PARTIAL): `git_tools.git_revert` restores a file to its committed state (tracked → `git restore`, untracked → removed) and is exposed as the `git_revert` bridge command; create/rename/delete/diff already existed. 3 tests in `tests/core/test_git_write.py`. Per-file M/A/U markers and E2E remain. |
+| 2026-10-01 | Added W3.8 core (PARTIAL): `core/i18n.py` adds a RU/EN `TRANSLATIONS` catalog + `translate()`/`locales()` and a validated `Config.locale` (en/ru) for core-emitted labels. 5 tests in `tests/core/test_i18n.py`. Component-text replacement, command palette, portable mode and signed updates remain. W3 wave now `10 partial, 6 TODO`. |

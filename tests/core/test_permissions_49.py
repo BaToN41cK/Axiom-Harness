@@ -35,6 +35,26 @@ def test_command_risk_tiers_mirror_the_executable_gate() -> None:
     assert classify_command("rm -rf /") is ToolPermission.ASK
 
 
+async def test_safe_prefix_cannot_hide_another_shell_command() -> None:
+    # Do not execute either command; check the effective authorization decision.
+    samples = (
+        "echo ok; Remove-Item -Recurse private",
+        "git status && git reset --hard",
+        "python -c 'import os; os.remove(\"private\")'",
+        "echo $(dangerous-command)",
+        "pytest -q > output.txt",
+    )
+    manager = PermissionManager(config=Config(access_mode="workspace", permission_mode="auto_approve_safe"))
+    from axiom.core.tools.terminal import classify_command
+
+    for command in samples:
+        assert classify_command_risk(command)[0] == "HIGH"
+        assert classify_command(command) is ToolPermission.ASK
+        assert await manager.decide("run_command", {"command": command}, ToolPermission.ALWAYS) is False
+    assert classify_command_risk("git status")[0] == "SAFE"
+    assert classify_command_risk("pytest -q")[0] == "LOW"
+
+
 def test_sandbox_presets() -> None:
     box = Sandbox()
     assert box.preset == "workspace"

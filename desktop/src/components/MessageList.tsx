@@ -15,7 +15,8 @@ import {
   Square,
 } from "lucide-react";
 import type { AxiomConfig, LiveMessage } from "../types";
-import { Favicon, MessageError, SourcesList, ToolActivityList, hostOf, pathOf } from "./ToolBits";
+import { Favicon, MessageError, SourcesList, hostOf, pathOf } from "./ToolBits";
+import { ToolActivityTimeline } from "./ToolActivity";
 import OrchestrationBoard from "./OrchestrationBoard";
 import CodeBlock, { CopyIconButton } from "./CodeBlock";
 import { formatElapsed } from "../lib/format";
@@ -378,7 +379,7 @@ const AssistantMessage = memo(function AssistantMessage({
         />
       ) : (
         <>
-          <ToolActivityList calls={message.toolCalls} />
+          <ToolActivityTimeline calls={message.toolCalls} />
 
           {message.sources.length > 0 && <SourcesList sources={message.sources} onOpen={onOpen} />}
         </>
@@ -610,4 +611,4 @@ function ThinkingSection({
       </div>
     </div>
   );
-}
+}

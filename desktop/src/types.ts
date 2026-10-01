@@ -329,6 +329,10 @@ export interface ToolActivity {
   error?: string | null;
   /** Real results of a search/fetch tool, when it produced any. */
   sources?: SourceItem[];
+  /** Arguments the model passed (large strings are capped for memory). */
+  args?: Record<string, unknown>;
+  /** Text the tool returned (capped) — drives the rich previews in chat. */
+  output?: string;
 }
 
 /** Category of an orchestration step — drives the icon and the row colour. */

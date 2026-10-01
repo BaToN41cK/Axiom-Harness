@@ -48,6 +48,7 @@ export const paymentToken = {
 async function api<T>(path: string, options: { token?: string | null; body?: unknown } = {}): Promise<T> {
   if (!API_BASE) throw new Error("Платёжный сервер не указан в этой сборке AXIOM.");
   const response = await fetch(`${API_BASE}${path}`, {
+    signal: AbortSignal.timeout(20_000),
     method: options.body === undefined ? "GET" : "POST",
     headers: {
       ...(options.body === undefined ? {} : { "content-type": "application/json" }),

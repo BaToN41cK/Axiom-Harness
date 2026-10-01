@@ -39,11 +39,32 @@ Screen {
     background: #000000;
 }
 
-#splash-column {
+#splash-body {
     width: 1fr;
     height: 1fr;
     align: center middle;
-    content-align: center middle;
+}
+
+#splash-column {
+    width: 64;
+    height: auto;
+    padding: 0 2;
+}
+
+#splash-hole {
+    width: 46;
+    height: 19;
+    margin-left: 4;
+}
+
+#splash-progress {
+    width: auto;
+    height: 1;
+    margin-bottom: 1;
+}
+
+#splash-message.ready {
+    color: #ff9a6a;
 }
 
 #splash-logo {
@@ -53,6 +74,7 @@ Screen {
 
 #splash-rule {
     color: $accent;
+    margin-top: 1;
 }
 
 #splash-subtitle {
@@ -405,7 +427,7 @@ InputBar {
 
 #command-menu {
     height: auto;
-    max-height: 12;
+    max-height: 18;
     margin: 0 1;
     border: round $secondary;
     background: #080808;
@@ -419,7 +441,7 @@ InputBar {
 
 #command-menu-list {
     height: auto;
-    max-height: 10;
+    max-height: 16;
     background: transparent;
     padding: 0 1;
 }
@@ -706,3 +728,130 @@ PanelScreen {
     border: round #3A3A3A;
     background: #050505;
 }
+
+/* ------------------------------------------------- workspace side panel */
+
+#workspace-body {
+    height: 1fr;
+}
+
+#workspace-main {
+    width: 1fr;
+    height: 1fr;
+}
+
+#activity-panel {
+    width: 38;
+    height: 1fr;
+    background: #050505;
+    border-left: solid #1A1A1A;
+    padding: 0 0 1 0;
+}
+
+#activity-title {
+    height: 1;
+    background: #0b0b0d;
+    margin-bottom: 1;
+}
+
+#activity-tree {
+    height: 1fr;
+    min-height: 6;
+    background: transparent;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+.activity-head {
+    height: 1;
+    margin-top: 1;
+    background: #0b0b0d;
+}
+
+#activity-files {
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    height: auto;
+    max-height: 11;
+    color: #777777;
+    padding: 0 0;
+}
+
+#activity-log {
+    height: auto;
+    max-height: 15;
+    color: #777777;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+.activity-empty {
+    color: #6c6c78;
+    height: auto;
+    padding: 0 1;
+}
+
+/* ---------------------------------------------------- rich tool blocks */
+
+.tool-block {
+    height: auto;
+    margin: 0 0 0 1;
+    padding: 0 1;
+    border-left: tall #26262c;
+}
+
+.tool-block.failed {
+    border-left: tall #8E3038;
+}
+
+/* ----------------------------------------------------------- folder picker */
+
+#folder-picker { align: center middle; }
+#folder-frame { width: 110; max-width: 96%; height: 34; max-height: 92%; }
+#folder-path-row { height: 3; margin: 1 0 0 0; }
+#folder-path { width: 1fr; }
+#folder-up { width: 8; min-width: 8; margin-left: 1; }
+#folder-body { height: 1fr; margin-top: 1; }
+#folder-side { width: 26; border-right: tall #24242c; }
+#folder-places { height: 1fr; border: none; background: transparent; }
+.folder-head { color: #6c6c78; height: 1; }
+#folder-tree { width: 1fr; height: 1fr; background: transparent; padding-left: 1; }
+#folder-info { height: 2; padding-top: 1; }
+#folder-actions { height: 3; align-horizontal: right; }
+#folder-actions Button { margin-left: 1; }
+
+/* side panel additions */
+#activity-tree-host { height: 1fr; }
+.activity-path { height: 1; }
+#activity-empty { height: auto; }
+
+/* ----------------------------------------------------------- account */
+
+#account-screen { align: center middle; }
+#account-frame { width: 92; max-width: 96%; height: 44; max-height: 94%; }
+#account-body { height: 1fr; }
+#account-status { height: 1; }
+.acc-tabs, .acc-row, .acc-oauth { height: 3; margin: 0 1; }
+.acc-tab { width: 1fr; background: #16161c; border: none; color: #9a9aa6; }
+.acc-tab.-active { background: #2a1a14; color: #ff8a5c; text-style: bold; }
+.acc-label { height: 1; margin-top: 1; }
+#account-body Input { margin: 0 1; }
+.acc-wide { width: 100%; margin: 1 1 0 1; }
+.acc-oauth-btn { width: 1fr; margin-right: 1; }
+.acc-row Button { margin-right: 1; }
+#account-body .acc-row Input { width: 1fr; margin: 0 1 0 0; }
+.acc-preset { min-width: 10; }
+.acc-preset.-active { background: #2a1a14; color: #ff8a5c; text-style: bold; }
+.acc-footer { margin-top: 1; }
+#acc-strength { height: 1; }
+#header-account { width: auto; padding-right: 3; }
+
+/* project actions in the side panel */
+.activity-open { width: 100%; margin: 1 1 0 1; }
+.activity-actions { height: 1; margin: 0 0 0 1; }
+.activity-btn { min-width: 0; width: auto; height: 1; border: none; padding: 0 1; margin-right: 1; background: #16161c; color: #9a9aa6; }
+.activity-btn:hover { background: #2a1a14; color: #ff8a5c; }
+.activity-btn-close:hover { background: #3a1416; color: #f47067; }
+.activity-recent-head { margin-top: 1; }
+#activity-recent { height: auto; max-height: 16; border: none; background: transparent; padding: 0; }
+.activity-tip { height: auto; }

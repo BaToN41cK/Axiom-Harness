@@ -877,11 +877,12 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             log = await session.git_tools._log(10)
             data["log"] = {"ok": log.ok, "content": log.content, "error": log.error}
         return data
-    if cmd in ("git_stage", "git_unstage", "git_commit", "git_diff_file", "git_switch"):
+    if cmd in ("git_stage", "git_unstage", "git_commit", "git_diff_file", "git_switch", "git_revert"):
         # User-initiated write ops (never agent tools, §17) — sandboxed helpers.
         from axiom.core.tools.git_tools import (
             git_commit,
             git_diff_file,
+            git_revert,
             git_stage,
             git_switch,
             git_unstage,
@@ -904,41 +905,30 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
                 }
             if cmd == "git_switch":
                 return {"ok": True, "output": git_switch(root, str(args.get("branch", "")))}
+            if cmd == "git_revert":
+                return {"ok": True, "output": git_revert(root, str(args.get("path", "")))}
             return {"ok": True, "diff": git_diff_file(root, str(args.get("path", "")))}
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
     if cmd == "apply_patch":
-        # Apply a ```diff block from an answer to a workspace file.
-        from axiom.core.patch import PatchError, apply_unified_diff
-
+        # User action from a diff block must pass the same sandbox, permission,
+        # workspace, audit and checkpoint gates as any model-initiated patch.
         root = session.workspace_root
         if root is None:
             raise ValueError("No project is open")
-        if session.config.access_mode == "read_only":
-            raise ValueError("Access mode is read-only")
         rel = str(args.get("path", "")).strip()
         patch = str(args.get("patch", ""))
         if not rel or not patch:
             raise ValueError("Both path and patch are required")
-        if any(part == ".." for part in rel.replace("\\", "/").split("/")):
-            raise ValueError(f"Path escapes the project: {rel}")
-        target = (root / rel).resolve()
-        if target != root and root not in target.parents:
-            raise ValueError(f"Path escapes the project: {rel}")
-        try:
-            original = target.read_text(encoding="utf-8") if target.exists() else ""
-        except OSError as exc:
-            return {"ok": False, "error": str(exc)}
-        try:
-            updated = apply_unified_diff(original, patch)
-        except PatchError as exc:
-            return {"ok": False, "error": str(exc)}
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(updated, encoding="utf-8")
-        except OSError as exc:
-            return {"ok": False, "error": str(exc)}
-        return {"ok": True, "path": rel}
+        name = "apply_patch"
+        if not session.sandbox.allows(name):
+            return {"ok": False, "error": "Patch blocked by sandbox policy"}
+        tool_args = {"path": rel, "patch": patch}
+        permission = session.tools.permission_for(name, tool_args)
+        if not await session.permissions.decide(name, tool_args, permission):
+            return {"ok": False, "error": "Patch permission denied"}
+        result = await session.tools.execute(name, tool_args, approved=True)
+        return {"ok": result.ok, "path": rel if result.ok else None, "error": result.error}
     if cmd == "search_chats":
         hits = session.history_store.search(str(args.get("query", "")))
         return {"hits": hits}

@@ -10,6 +10,7 @@ import os
 import secrets
 import sqlite3
 import string
+import time
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -198,7 +199,6 @@ class Settings:
             return "Оплата ещё не настроена на сервере."
         return "Оплата доступна."
 
-
     def oauth_client(self, provider: str) -> tuple[str, str] | None:
         if provider == "github" and self.github_client_id and self.github_client_secret:
             return self.github_client_id, self.github_client_secret
@@ -219,7 +219,18 @@ class PaymentStore:
         self.settings = settings
         if settings.database_path != ":memory:":
             Path(settings.database_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
-        self.initialize()
+        for attempt in range(4):
+            try:
+                self.initialize()
+                break
+            except sqlite3.OperationalError as exc:
+                # Multiple service workers can boot against the same persistent
+                # SQLite file. Retry only schema-startup lock contention; payment
+                # transactions must surface their own errors and are never retried
+                # here because settlement is deliberately idempotency-sensitive.
+                if "locked" not in str(exc).lower() or attempt == 3:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.settings.database_path, timeout=15, isolation_level=None)
@@ -230,9 +241,9 @@ class PaymentStore:
 
     def initialize(self) -> None:
         with closing(self._connect()) as db:
-            legacy_users_table = db.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
-            ).fetchone() is not None
+            legacy_users_table = (
+                db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'").fetchone() is not None
+            )
             db.executescript(
                 """
                 PRAGMA journal_mode = WAL;
@@ -319,11 +330,14 @@ class PaymentStore:
                 db.execute("ALTER TABLE oauth_flows ADD COLUMN browser_hash TEXT")
             if "pro_activated_at" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN pro_activated_at TEXT")
-            accounting = db.execute(
-                "SELECT value FROM accounting_meta WHERE key = 'balance_currency'"
-            ).fetchone()
+            if "pro_expires_at" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN pro_expires_at TEXT")
+            # Check the marker only after acquiring the write lock. Multiple
+            # service processes can initialize the same persistent SQLite DB;
+            # checking first would convert an already-migrated balance twice.
+            db.execute("BEGIN IMMEDIATE")
+            accounting = db.execute("SELECT value FROM accounting_meta WHERE key = 'balance_currency'").fetchone()
             if accounting is None:
-                db.execute("BEGIN IMMEDIATE")
                 if legacy_users_table:
                     rows = db.execute("SELECT id, balance_minor FROM users").fetchall()
                     for row in rows:
@@ -331,10 +345,8 @@ class PaymentStore:
                             "UPDATE users SET balance_minor = ? WHERE id = ?",
                             (rub_minor_to_axiom_usd_minor(int(row["balance_minor"])), row["id"]),
                         )
-                db.execute(
-                    "INSERT INTO accounting_meta(key, value) VALUES ('balance_currency', 'AXIOM_USD_cents')"
-                )
-                db.commit()
+                db.execute("INSERT INTO accounting_meta(key, value) VALUES ('balance_currency', 'AXIOM_USD_cents')")
+            db.commit()
 
     @staticmethod
     def _password_hash(password: str, salt: bytes | None = None) -> str:
@@ -361,7 +373,7 @@ class PaymentStore:
 
     @staticmethod
     def _token_hash(token: str) -> str:
-        return hashlib.sha256(token.encode("ascii")).hexdigest()
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def _issue_session(self, db: sqlite3.Connection, user_id: str) -> str:
         token = secrets.token_urlsafe(32)
@@ -714,16 +726,13 @@ class PaymentStore:
                 db.rollback()
                 raise ValueError("unknown_user")
             debited = db.execute(
-                "UPDATE users SET balance_minor = balance_minor - ? "
-                "WHERE id = ? AND balance_minor >= ?",
+                "UPDATE users SET balance_minor = balance_minor - ? WHERE id = ? AND balance_minor >= ?",
                 (PRO_PRICE_AXIOM_USD_MINOR, user_id, PRO_PRICE_AXIOM_USD_MINOR),
             )
             if debited.rowcount != 1:
                 db.rollback()
                 raise PermissionError("insufficient_balance")
-            current_expiry = (
-                datetime.fromisoformat(user["pro_expires_at"]) if user["pro_expires_at"] else None
-            )
+            current_expiry = datetime.fromisoformat(user["pro_expires_at"]) if user["pro_expires_at"] else None
             starts_at = current_expiry if current_expiry and current_expiry > now else now
             new_expiry = starts_at + timedelta(days=PRO_DAYS)
             db.execute(
@@ -864,7 +873,11 @@ class PaymentStore:
                 else:
                     method = "PC" if notification_type == "p2p-incoming" else "AC"
                     floor_minor = settlement_floor_minor(order, method)
-                    if order["type"] == "balance_topup" and amount_minor < floor_minor and amount_minor < MIN_TOPUP_MINOR:
+                    if (
+                        order["type"] == "balance_topup"
+                        and amount_minor < floor_minor
+                        and amount_minor < MIN_TOPUP_MINOR
+                    ):
                         verdict = "under_minimum"
                         failure_reason = "below_minimum"
                     elif amount_minor < floor_minor:

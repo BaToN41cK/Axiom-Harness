@@ -11,12 +11,14 @@ import axiom.__main__ as _dispatch_shim  # noqa: F401
 dispatch = _sys.modules["axiom.__main__"]
 
 
-def test_help_lists_only_tui_and_gui(capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_lists_dispatch_modes(capsys: pytest.CaptureFixture[str]) -> None:
     assert dispatch.main(["--help"]) == 0
     out, _ = capsys.readouterr()
     assert "axiom --gui" in out
+    assert "axiom run" in out
+    assert "axiom serve" in out
+    # The legacy top-level ``-p`` prompt flag stays removed.
     assert "-p" not in out
-    assert "--json" not in out
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:

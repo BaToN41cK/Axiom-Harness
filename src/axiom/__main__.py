@@ -18,6 +18,8 @@ _HELP = f"""AXIOM {__version__} — Open Local AI Coding Workspace & Agent Harne
 Usage:
   axiom                     Start the TUI workspace
   axiom --gui               Start the desktop GUI (Tauri app in desktop/)
+  axiom run "prompt" --json Run one prompt headlessly, print JSON
+  axiom serve [--token T]   Start the localhost API with token auth
   axiom --help              Show this help
   axiom benchmark --scenarios FILE --repetitions N --output FILE
 """
@@ -33,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     if "--version" in args:
         print(f"AXIOM {__version__}")
         return 0
+
+    if args and args[0] in ("run", "serve"):
+        from axiom.frontends.headless import main_run, main_serve
+
+        return main_run(args[1:]) if args[0] == "run" else main_serve(args[1:])
 
     if "--benchmark" in args:
         import asyncio

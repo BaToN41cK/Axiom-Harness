@@ -78,6 +78,8 @@ class Config(BaseModel):
     ] = "obsidian"
     #: Accessible accent shared by Desktop and TUI.
     accent: Literal["garnet", "blue", "teal", "violet", "slate", "rose", "amber"] = "garnet"
+    #: UI language for core-emitted labels (task states, permission dialogs).
+    locale: Literal["en", "ru"] = "en"
     #: Highlight interactive panel/list rows while the pointer is over them.
     panel_hover: bool = True
     #: Subtle animations (spinners, splash, transitions)

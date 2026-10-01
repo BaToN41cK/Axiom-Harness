@@ -41,6 +41,16 @@ BLOCKED_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# A benign prefix is not safe once the shell can interpret another command,
+# redirect, substitution or inline program after it. Keep the registry-level
+# classifier consistent with the visible command-risk policy.
+COMPOSED_COMMAND = re.compile(r"[;&|`\r\n<>]|\$\(|\$\{|%[^%\s]+%", re.IGNORECASE)
+INLINE_INTERPRETER = re.compile(
+    r"^(?:python(?:3(?:\.\d+)?)?|py|node|ruby|perl|powershell|pwsh)(?:\.exe)?\s+"
+    r"(?:-c\b|-e\b|--eval\b|-command\b|-encodedcommand\b)",
+    re.IGNORECASE,
+)
+
 MAX_OUTPUT_CHARS = 12_000
 DEFAULT_TIMEOUT = 120.0
 
@@ -50,6 +60,8 @@ def classify_command(command: str) -> ToolPermission:
     cmd = command.strip().lower()
     if BLOCKED_PATTERNS.search(cmd):
         return ToolPermission.ASK  # user must explicitly confirm even these
+    if COMPOSED_COMMAND.search(command) or INLINE_INTERPRETER.search(command):
+        return ToolPermission.ASK
     return ToolPermission.ALWAYS if cmd.startswith(SAFE_PREFIXES) else ToolPermission.ASK
 
 
@@ -62,6 +74,9 @@ class TerminalTool:
         self.on_process = None
         #: Called with (stream, line) for each line of real process output (W4.7).
         self.on_output = None
+        #: W3.13 — bounded record of executed commands (newest last).
+        self.history: list[dict] = []
+        self._history_limit = 200
 
     def set_root(self, root: Path) -> None:
         self.root = root.resolve()
@@ -180,9 +195,26 @@ class TerminalTool:
         if stderr:
             body = f"{body}\n[stderr]\n{stderr}".strip()
         ok = proc.returncode == 0
+        self._record_history(command, proc.returncode)
         return ToolResult(
             name=RUN_COMMAND_TOOL,
             ok=ok,
             content=body or f"(no output, exit code {proc.returncode})",
             data={"exit_code": proc.returncode, "cwd": str(self.root)},
         )
+
+    def _record_history(self, command: str, exit_code: int) -> None:
+        """Append a completed command to the bounded history (W3.13)."""
+        self.history.append({"command": command, "exit_code": exit_code, "at": time.time()})
+        if len(self.history) > self._history_limit:
+            del self.history[: len(self.history) - self._history_limit]
+
+    async def rerun(self, index: int = -1, timeout: float | None = None) -> ToolResult:
+        """Re-run a command from history (index -1 = most recent)."""
+        if not self.history:
+            return ToolResult(name=RUN_COMMAND_TOOL, ok=False, error="No command in history to rerun")
+        try:
+            command = self.history[index]["command"]
+        except IndexError:
+            return ToolResult(name=RUN_COMMAND_TOOL, ok=False, error="History index out of range")
+        return await self._run(command, timeout=timeout)

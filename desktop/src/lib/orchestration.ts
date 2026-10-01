@@ -64,6 +64,10 @@ const TOOL_KINDS: Record<string, OrchestrationStepKind> = {
   git_diff: "git",
   git_log: "git",
   git_branch: "git",
+  git_graph: "git",
+  git_add: "git",
+  git_unstage: "git",
+  git_commit: "git",
 };
 
 /** Category of a real tool name ("other" for tools the UI does not know). */

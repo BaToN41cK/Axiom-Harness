@@ -59,10 +59,14 @@ from axiom.core.tasks import Task, TaskRunner, TaskState, TaskStore
 from axiom.core.tools.base import ToolPermission
 from axiom.core.tools.filesystem import WORKSPACE_TOOLS, WorkspaceTools
 from axiom.core.tools.git_tools import (
+    GIT_ADD_TOOL,
     GIT_BRANCH_TOOL,
+    GIT_COMMIT_TOOL,
     GIT_DIFF_TOOL,
+    GIT_GRAPH_TOOL,
     GIT_LOG_TOOL,
     GIT_STATUS_TOOL,
+    GIT_UNSTAGE_TOOL,
     GitTools,
 )
 from axiom.core.tools.project_tools import INSPECT_PROJECT_TOOL, ProjectTools
@@ -85,6 +89,10 @@ WORKSPACE_TOOL_NAMES: frozenset[str] = frozenset(WORKSPACE_TOOLS) | {
     GIT_DIFF_TOOL,
     GIT_LOG_TOOL,
     GIT_BRANCH_TOOL,
+    GIT_GRAPH_TOOL,
+    GIT_ADD_TOOL,
+    GIT_UNSTAGE_TOOL,
+    GIT_COMMIT_TOOL,
     INSPECT_PROJECT_TOOL,
     RUN_COMMAND_TOOL,
 } | VERIFY_TOOL_NAMES
@@ -175,6 +183,12 @@ class ChatSession:
             )
         self.knowledge_tools = KnowledgeTools(self.knowledge)
         self.knowledge_tools.register(self.tools)
+        # W3.4 Answer Artifacts: the model can emit validated structured output
+        # (table / comparison / checklist / mermaid / chart) instead of prose.
+        from axiom.core.artifacts import ArtifactTools
+
+        self.artifact_tools = ArtifactTools()
+        self.artifact_tools.register(self.tools)
         # §8 Tool Layer: file tools + terminal tools + project tools +
         # git tools + web tools — all behind the permission system (§9-§12).
         # Workspace tools always exist: an explicit ``workspace_root`` wins,

@@ -1,0 +1,251 @@
+/* Settings — visual layer: icon tiles, grouped cards, theme/accent pickers,
+   dirty-state footer and the redesigned "About" page. Pure presentation. */
+
+.modal.axiom-settings {
+  width: min(1020px, calc(100vw - 48px));
+  height: min(740px, calc(100vh - 56px));
+  border-radius: 14px;
+  background:
+    radial-gradient(900px 260px at 100% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%),
+    var(--bg-secondary);
+}
+
+/* ---------------------------------------------------------------- header */
+.axiom-settings .axiom-settings-head { padding: 12px 18px; }
+.axiom-settings .axiom-settings-head h2 { font-size: 13.5px; font-weight: 600; gap: 12px; }
+.axiom-settings .settings-logo {
+  position: relative; width: 22px; height: 22px; border-radius: 7px; flex: none;
+  background: radial-gradient(circle at 50% 50%, #000 0 34%, transparent 36%),
+              conic-gradient(from 200deg, var(--accent), #ffb36b, var(--accent) 60%, transparent 75%, var(--accent));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.axiom-settings .settings-logo span {
+  position: absolute; inset: 3px; border-radius: 50%;
+  border: 1px solid color-mix(in srgb, #fff 30%, transparent);
+  animation: settings-logo-spin 9s linear infinite;
+}
+@keyframes settings-logo-spin { to { transform: rotate(360deg); } }
+
+/* ------------------------------------------------------------------- nav */
+.axiom-settings .axiom-settings-workspace { grid-template-columns: 214px minmax(0, 1fr); }
+.axiom-settings .settings-nav { display: flex; flex-direction: column; gap: 14px; padding: 14px 10px 18px; }
+.axiom-settings .settings-nav-search {
+  display: flex; align-items: center; gap: 7px; padding: 0 9px; height: 30px; flex: none;
+  border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-secondary); color: var(--text-muted);
+  transition: border-color .15s ease;
+}
+.axiom-settings .settings-nav-search:focus-within { border-color: var(--accent-border); }
+.axiom-settings .settings-nav-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text-primary); font-size: 12px; outline: none; padding: 0; }
+.axiom-settings .settings-nav-search input:focus-visible { outline: none; }
+.axiom-settings .settings-nav-empty { color: var(--text-muted); font-size: 11.5px; padding: 6px 8px; }
+.axiom-settings .settings-nav-group-label { text-transform: uppercase; letter-spacing: .08em; font-size: 9.5px; padding: 0 8px 6px; }
+.axiom-settings .settings-nav-item {
+  min-height: 34px; padding: 5px 8px; gap: 10px; border-radius: 8px; font-size: 12.5px;
+  transition: background .15s ease, color .15s ease;
+}
+.axiom-settings .settings-nav-item:hover:not(.active) { background: var(--bg-hover); }
+.axiom-settings .settings-nav-item.active { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: none; }
+
+.axiom-settings :is(.settings-nav-icon, .settings-section-icon) {
+  --tint: var(--accent);
+  display: inline-grid; place-items: center; flex: none;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tint) 22%, transparent);
+}
+.axiom-settings .settings-nav-icon { width: 24px; height: 24px; border-radius: 7px; }
+.axiom-settings .settings-nav-item:not(.active) .settings-nav-icon { filter: saturate(.55); opacity: .85; }
+.axiom-settings .tint-ws { --tint: #ff8a5c; }
+.axiom-settings .tint-ai { --tint: #58a6ff; }
+.axiom-settings .tint-data { --tint: #2dd4bf; }
+.axiom-settings .tint-ext { --tint: #a78bfa; }
+.axiom-settings .tint-sys { --tint: #f0a93c; }
+
+/* ------------------------------------------------------- section heading */
+.axiom-settings .settings-main { padding: 24px 28px 28px; }
+.axiom-settings .settings-section-title { justify-content: flex-start; align-items: center; gap: 14px; padding-bottom: 22px; }
+.axiom-settings .settings-section-icon { width: 40px; height: 40px; border-radius: 12px; }
+.axiom-settings .settings-section-icon svg { width: 18px; height: 18px; }
+.axiom-settings .settings-section-eyebrow { display: block; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 2px; }
+.axiom-settings .settings-section-title h3 { font-size: 19px; letter-spacing: -.02em; }
+.axiom-settings .settings-section-title p { margin-top: 3px; }
+
+/* ------------------------------------------- grouped rows become cards */
+.axiom-settings .settings-content > .settings-group-title {
+  margin: 26px 0 8px; padding: 0 2px; border: 0;
+  font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted);
+}
+.axiom-settings .settings-content > .settings-group-title:first-child { margin-top: 0; }
+.axiom-settings .settings-content > .settings-row {
+  padding: 13px 16px; margin: 0;
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  border: 1px solid var(--border-subtle); border-top-width: 0;
+  transition: background .15s ease;
+}
+.axiom-settings .settings-content > .settings-row:hover { background: color-mix(in srgb, var(--bg-hover) 55%, var(--bg-primary)); }
+.axiom-settings .settings-content > :is(.settings-group-title, .theme-picker) + .settings-row,
+.axiom-settings .settings-content > .settings-row:first-child { border-top-width: 1px; border-radius: 10px 10px 0 0; }
+.axiom-settings .settings-content > .settings-row:has(+ :is(.settings-group-title, .theme-picker)),
+.axiom-settings .settings-content > .settings-row:last-child { border-radius: 0 0 10px 10px; }
+.axiom-settings .settings-content > :is(.settings-group-title, .theme-picker) + .settings-row:has(+ :is(.settings-group-title, .theme-picker)),
+.axiom-settings .settings-content > .settings-row:only-child { border-radius: 10px; }
+
+/* Form controls */
+.axiom-settings .settings-row-control :is(input, select, textarea) { border-radius: 8px; padding: 7px 10px; transition: border-color .15s ease, box-shadow .15s ease; }
+.axiom-settings .settings-row-control :is(input, select, textarea):hover { border-color: var(--border-strong, var(--border-default)); }
+.axiom-settings .settings-row-control :is(input, select, textarea):focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.axiom-settings .switch { width: 38px; height: 22px; transition: background .18s ease, border-color .18s ease; }
+.axiom-settings .switch.on { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* ------------------------------------------------------- theme picker */
+.axiom-settings .theme-picker {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 16px;
+}
+.axiom-settings .theme-card {
+  display: flex; flex-direction: column; gap: 7px; padding: 6px 6px 8px; border-radius: 11px;
+  background: var(--bg-primary); border: 1px solid var(--border-subtle); color: var(--text-secondary);
+  cursor: pointer; text-align: left; transition: border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+}
+.axiom-settings .theme-card:hover { border-color: var(--border-default); transform: translateY(-1px); }
+.axiom-settings .theme-card.active { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text-primary); }
+.axiom-settings .theme-preview { display: flex; height: 62px; border-radius: 7px; overflow: hidden; border: 1px solid rgba(127, 127, 127, .18); }
+.axiom-settings .theme-preview-side { width: 22%; }
+.axiom-settings .theme-preview-main { position: relative; flex: 1; display: flex; flex-direction: column; gap: 5px; padding: 9px 8px; }
+.axiom-settings .theme-preview-main > span:not(.theme-preview-bubble):not(.theme-preview-accent) { height: 4px; border-radius: 2px; opacity: .8; }
+.axiom-settings .theme-preview-bubble { height: 14px; width: 70%; border-radius: 4px; margin-top: 2px; }
+.axiom-settings .theme-preview-accent { position: absolute; right: 8px; bottom: 8px; width: 22px; height: 8px; border-radius: 4px; }
+.axiom-settings .theme-card-label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11.5px; font-weight: 500; padding: 0 3px; }
+.axiom-settings .theme-card-label svg { color: var(--accent-text); }
+
+.axiom-settings .accent-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.axiom-settings .accent-dot {
+  width: 24px; height: 24px; border-radius: 50%; padding: 0; display: grid; place-items: center;
+  background: var(--dot); border: 2px solid transparent; color: #0b0b0f; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); transition: transform .15s ease, box-shadow .15s ease;
+}
+.axiom-settings .accent-dot:hover { transform: scale(1.1); }
+.axiom-settings .accent-dot.active { box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--dot); }
+.axiom-settings .accent-name { font-size: 11.5px; color: var(--text-muted); min-width: 76px; text-align: right; }
+
+/* ---------------------------------------------------------------- footer */
+.axiom-settings .axiom-settings-foot { padding: 11px 18px; background: color-mix(in srgb, var(--bg-primary) 55%, var(--bg-secondary)); }
+.axiom-settings .settings-save-hint { display: inline-flex; align-items: center; gap: 7px; max-width: 320px; }
+.axiom-settings .settings-save-hint.dirty { color: var(--text-secondary); }
+.axiom-settings .settings-dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn, #f0a93c); box-shadow: 0 0 8px var(--warn, #f0a93c); flex: none; }
+.axiom-settings .btn.settings-save { border-radius: 8px; }
+.axiom-settings .btn.settings-save.pulse { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); animation: settings-save-pulse 2.2s ease-out infinite; }
+@keyframes settings-save-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 9px transparent; }
+}
+
+/* ------------------------------------------------------------ about v2 */
+.axiom-settings .about-v2 { display: flex; flex-direction: column; }
+.axiom-settings .about-hero {
+  position: relative; display: flex; align-items: center; gap: 22px; padding: 22px 22px; overflow: hidden;
+  border-radius: 14px; border: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(420px 200px at 12% 50%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%),
+    radial-gradient(520px 240px at 100% 0%, rgba(88, 166, 255, .10), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 65%, transparent), var(--bg-primary));
+}
+.axiom-settings .about-hero::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background-image: radial-gradient(1px 1px at 20% 30%, #fff 50%, transparent 51%), radial-gradient(1px 1px at 70% 20%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 85% 70%, #fff 50%, transparent 51%), radial-gradient(1px 1px at 45% 80%, #fff 50%, transparent 51%),
+    radial-gradient(1px 1px at 60% 50%, #fff 50%, transparent 51%), radial-gradient(1px 1px at 92% 35%, #fff 50%, transparent 51%);
+}
+.axiom-settings .about-orbit { position: relative; width: 96px; height: 96px; flex: none; }
+.axiom-settings .about-ring { position: absolute; inset: 0; border-radius: 50%; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.axiom-settings .about-ring.r1 { inset: 6px; border-color: color-mix(in srgb, var(--accent) 65%, transparent); border-top-color: transparent; animation: settings-logo-spin 7s linear infinite; }
+.axiom-settings .about-ring.r2 { inset: 18px; border-style: dashed; animation: settings-logo-spin 14s linear infinite reverse; }
+.axiom-settings .about-ring.r3 { inset: -4px; transform: rotateX(70deg); border-width: 2px; border-color: color-mix(in srgb, #ffb36b 50%, transparent); }
+.axiom-settings .about-core {
+  position: absolute; inset: 32px; border-radius: 50%; background: #000;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, #ffb36b), 0 0 24px 6px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.axiom-settings .about-planet {
+  position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #fff; top: 50%; left: 50%; margin: -4px;
+  box-shadow: 0 0 10px #fff; animation: about-orbit 5s linear infinite;
+}
+@keyframes about-orbit { from { transform: rotate(0deg) translateX(44px); } to { transform: rotate(360deg) translateX(44px); } }
+.axiom-settings .about-hero-text { position: relative; z-index: 1; min-width: 0; flex: 1; }
+.axiom-settings .about-wordmark {
+  font-size: 30px; font-weight: 700; letter-spacing: .28em; line-height: 1;
+  background: linear-gradient(90deg, var(--text-primary), color-mix(in srgb, var(--accent) 70%, #ffd1b0) 55%, var(--text-primary));
+  background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: about-shimmer 6s ease-in-out infinite;
+}
+@keyframes about-shimmer { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0 0; } }
+.axiom-settings .about-tagline { margin: 10px 0 12px; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); max-width: 520px; }
+.axiom-settings .about-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.axiom-settings .about-chip { font: 10.5px var(--mono); padding: 3px 8px; border-radius: 999px; color: var(--text-secondary); background: color-mix(in srgb, var(--bg-hover) 70%, transparent); border: 1px solid var(--border-subtle); }
+.axiom-settings .about-chip.accent { color: var(--accent-text); border-color: var(--accent-border); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.axiom-settings .btn.about-copy { position: absolute; top: 14px; right: 14px; z-index: 1; gap: 6px; border-radius: 8px; background: color-mix(in srgb, var(--bg-primary) 70%, transparent); }
+
+.axiom-settings .about-h { margin: 26px 0 10px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+
+.axiom-settings .about-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.axiom-settings .about-fact {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 10px; row-gap: 2px; align-items: center;
+  padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border-subtle); background: var(--bg-primary);
+}
+.axiom-settings .about-fact-icon { grid-row: 1 / span 2; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--accent-text); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.axiom-settings .about-fact-label { font-size: 10.5px; color: var(--text-muted); }
+.axiom-settings .about-fact-value { font-size: 12px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.axiom-settings .about-fact-value.mono { font: 11.5px var(--mono); }
+
+.axiom-settings .about-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.axiom-settings .about-feature {
+  display: flex; flex-direction: column; gap: 5px; padding: 14px; border-radius: 11px;
+  border: 1px solid var(--border-subtle); background: linear-gradient(180deg, color-mix(in srgb, var(--bg-hover) 35%, transparent), var(--bg-primary));
+  transition: border-color .15s ease, transform .15s ease;
+}
+.axiom-settings .about-feature:hover { border-color: var(--accent-border); transform: translateY(-1px); }
+.axiom-settings .about-feature-icon { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; color: var(--accent-text); background: color-mix(in srgb, var(--accent) 12%, transparent); margin-bottom: 4px; }
+.axiom-settings .about-feature b { font-size: 12.5px; color: var(--text-primary); }
+.axiom-settings .about-feature span:last-child { font-size: 11.5px; line-height: 1.55; color: var(--text-muted); }
+
+.axiom-settings .about-arch { display: grid; grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1.1fr) 34px minmax(0, 1fr); align-items: center; padding: 16px; border-radius: 12px; border: 1px solid var(--border-subtle); background: var(--bg-primary); }
+.axiom-settings .about-arch-col { display: flex; flex-direction: column; gap: 8px; }
+.axiom-settings .about-node {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: center;
+  padding: 9px 10px; border-radius: 9px; border: 1px solid var(--border-subtle); background: var(--bg-secondary);
+}
+.axiom-settings .about-node svg { grid-row: 1 / span 2; color: var(--text-muted); }
+.axiom-settings .about-node b { font-size: 11.5px; color: var(--text-primary); font-weight: 600; }
+.axiom-settings .about-node span { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.axiom-settings .about-node.core { padding: 16px 12px; border-color: var(--accent-border); background: color-mix(in srgb, var(--accent) 9%, var(--bg-secondary)); box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 14%, transparent); }
+.axiom-settings .about-node.core svg { color: var(--accent-text); }
+.axiom-settings .about-arch-link { position: relative; height: 2px; }
+.axiom-settings .about-arch-link span { position: absolute; inset: 0; border-radius: 1px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 200% 100%; animation: about-flow 2.4s linear infinite; }
+@keyframes about-flow { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+.axiom-settings .about-privacy { display: flex; flex-direction: column; gap: 6px; }
+.axiom-settings .about-privacy > div { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; background: var(--bg-primary); border: 1px solid var(--border-subtle); font-size: 12px; line-height: 1.55; color: var(--text-secondary); }
+.axiom-settings .about-privacy svg { flex: none; margin-top: 2px; color: var(--ok, #56d364); }
+
+.axiom-settings .about-paths { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; }
+.axiom-settings .about-path { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 8px 7px 12px; background: var(--bg-primary); font-size: 12px; color: var(--text-muted); }
+.axiom-settings .about-path + .about-path { border-top: 1px solid var(--border-subtle); }
+.axiom-settings .about-path code { font: 11.5px var(--mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axiom-settings .about-foot { margin: 22px 0 0; text-align: center; font-size: 11px; color: var(--text-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-settings :is(.settings-logo span, .about-ring, .about-planet, .about-wordmark, .about-arch-link span, .btn.settings-save.pulse) { animation: none !important; }
+}
+:root.reduce-motion .axiom-settings :is(.settings-logo span, .about-ring, .about-planet, .about-wordmark, .about-arch-link span, .btn.settings-save.pulse) { animation: none !important; }
+
+@media (max-width: 900px) {
+  .axiom-settings .axiom-settings-workspace { grid-template-columns: 184px minmax(0, 1fr); }
+  .axiom-settings .theme-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .axiom-settings :is(.about-facts, .about-features) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .axiom-settings .about-arch { grid-template-columns: 1fr; gap: 10px; }
+  .axiom-settings .about-arch-link { display: none; }
+}
+@media (max-width: 600px) {
+  .axiom-settings .axiom-settings-workspace { grid-template-columns: 150px minmax(0, 1fr); }
+  .axiom-settings :is(.about-facts, .about-features) { grid-template-columns: 1fr; }
+  .axiom-settings .about-hero { flex-direction: column; align-items: flex-start; }
+  .axiom-settings .btn.about-copy { position: static; }
+}

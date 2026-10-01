@@ -12,6 +12,7 @@ from axiom.core.tools.git_tools import (
     GitTools,
     git_commit,
     git_diff_file,
+    git_revert,
     git_stage,
     git_switch,
     git_unstage,
@@ -154,3 +155,53 @@ def test_switch_rejects_bad_branch_names(repo: Path):
 def test_switch_unknown_branch_reports_git_error(repo: Path):
     with pytest.raises(ValueError):
         git_switch(repo, "no-such-branch")
+
+
+def test_git_revert_tracked_file(repo: Path):
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    out = git_revert(repo, "a.txt")
+    assert out
+    assert (repo / "a.txt").read_text(encoding="utf-8") == "one\n"
+
+
+def test_git_revert_untracked_file(repo: Path):
+    (repo / "fresh.txt").write_text("new\n", encoding="utf-8")
+    out = git_revert(repo, "fresh.txt")
+    assert "untracked" in out
+    assert not (repo / "fresh.txt").exists()
+
+
+def test_git_revert_rejects_directory(repo: Path):
+    (repo / "sub").mkdir()
+    with pytest.raises(ValueError, match="individual files"):
+        git_revert(repo, "sub")
+
+
+async def test_git_graph_lists_commits(repo: Path):
+    tools = GitTools(repo)
+    res = await tools._graph(10)
+    assert res.ok is True
+    assert "initial" in res.content
+
+
+async def test_agent_git_unstage_requires_approval_and_explicit_files(repo: Path):
+    (repo / "a.txt").write_text("three\n", encoding="utf-8")
+    registry = ToolRegistry()
+    GitTools(repo).register(registry)
+    assert registry.permission_for("git_unstage", {"paths": ["a.txt"]}) is ToolPermission.ASK
+
+    git_stage(repo, ["a.txt"])
+    # no approval → permission ask, still staged
+    denied = await registry.execute("git_unstage", {"paths": ["a.txt"]})
+    assert not denied.ok and denied.data == {"permission": "ask"}
+    assert git(repo, "diff", "--cached", "--name-only").strip() == "a.txt"
+
+    # empty list is rejected, never unstage-all
+    empty = await registry.execute("git_unstage", {"paths": []}, approved=True)
+    assert not empty.ok and "Explicit paths" in (empty.error or "")
+    assert git(repo, "diff", "--cached", "--name-only").strip() == "a.txt"
+
+    # explicit path + approval really unstages
+    accepted = await registry.execute("git_unstage", {"paths": ["a.txt"]}, approved=True)
+    assert accepted.ok, accepted.error
+    assert not git(repo, "diff", "--cached", "--name-only").strip()
