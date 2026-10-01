@@ -1,0 +1,17 @@
+{
+  "name": "hello-panel",
+  "version": "1.0.0",
+  "description": "Пример UI-плагина (W3.1): панель и команда, которые хост рендерит в изолированном iframe без доступа к DOM AXIOM.",
+  "author": "AXIOM Team",
+  "api_version": 1,
+  "capabilities": ["ui"],
+  "tools": [],
+  "ui": {
+    "api_version": 1,
+    "scopes": ["ui"],
+    "extensions": [
+      { "type": "panel", "id": "hello", "scopes": ["ui"], "meta": { "title": "Привет", "minWidth": 280 } },
+      { "type": "command", "id": "hello-greet", "scopes": ["ui"], "meta": { "title": "Поздороваться" } }
+    ]
+  }
+}

@@ -82,3 +82,33 @@ def test_search_is_case_insensitive(tmp_path: Path):
     store = make_store(tmp_path)
     seed(store, "t", ["The ANSWER is forty-two"])
     assert store.search("forty-TWO")
+
+
+def test_bookmarks_persist_and_toggle(tmp_path: Path):
+    store = make_store(tmp_path)
+    cid = seed(store, "chat", ["one", "two", "three"])
+
+    assert store.set_bookmark(cid, 1, True) is True
+    loaded = store.load(cid)
+    assert loaded is not None
+    assert loaded.bookmarks == [1]
+
+    # Toggling the same index off removes it.
+    assert store.set_bookmark(cid, 1, False) is True
+    assert store.load(cid).bookmarks == []
+
+    # Out-of-range index is rejected.
+    assert store.set_bookmark(cid, 99, True) is False
+    # Unknown chat is rejected.
+    assert store.set_bookmark("missing", 0, True) is False
+
+
+def test_bookmarks_survive_reload(tmp_path: Path):
+    store = make_store(tmp_path)
+    cid = seed(store, "chat", ["a", "b", "c"])
+    store.set_bookmark(cid, 0, True)
+    store.set_bookmark(cid, 2, True)
+    fresh = HistoryStore(directory=tmp_path / "history")
+    conv = fresh.load(cid)
+    assert conv is not None
+    assert conv.bookmarks == [0, 2]

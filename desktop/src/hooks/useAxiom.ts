@@ -20,7 +20,7 @@ import {
   restartCore,
 } from "../bridge";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
-import { commandByName, matchingCommands, parseCommand } from "../lib/commands";
+import { commandByName, matchingCommands, parseCommand, pluginCommandById, setPluginCommands } from "../lib/commands";
 import { clearComposerData, readComposerDraft, writeComposerDraft } from "../lib/composerStorage";
 import { stripDataUrl } from "../lib/format";
 import { playUiSound } from "../lib/sound";
@@ -55,6 +55,7 @@ import {
   orchestrationMarkdown,
 } from "../lib/orchestration";
 import type {
+  Artifact,
   AxiomConfig,
   ChatHit,
   Conversation,
@@ -93,7 +94,7 @@ import type {
 } from "../types";
 
 export type Phase = "booting" | "ready" | "unavailable" | "error";
-export type Overlay = "help" | "status" | "tools" | "context" | "harness" | null;
+export type Overlay = "help" | "status" | "tools" | "context" | "harness" | "documents" | null;
 export type SettingsSection =
   | "general"
   | "models"
@@ -224,6 +225,8 @@ export function useAxiom() {
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
   const [agentTimelineOpen, setAgentTimelineOpen] = useState(true);
   const [termHistory, setTermHistory] = useState<{ command: string; result: TerminalResult }[]>([]);
+  // W3.13: per-workspace terminal history survives switching projects and back.
+  const termHistoryByRootRef = useRef<Map<string, { command: string; result: TerminalResult }[]>>(new Map());
   const [pendingTerm, setPendingTerm] = useState<string | null>(null);
   const [gitStatus, setGitStatus] = useState<{ ok: boolean; content: string; error: string | null } | null>(null);
   const [gitLog, setGitLog] = useState<{ ok: boolean; content: string; error: string | null } | null>(null);
@@ -540,6 +543,40 @@ export function useAxiom() {
     return ok;
   }
 
+  /** Snapshot the repo so later edits can be rolled back (W3.14). */
+  async function gitCheckpoint(): Promise<boolean> {
+    try {
+      const res = await request<{ ok: boolean; ref?: string; error?: string }>("git_checkpoint", {});
+      if (!res.ok) {
+        notify(res.error ?? "Не удалось создать снимок", "error");
+        return false;
+      }
+      notify("Снимок git создан", "ok");
+      return true;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return false;
+    }
+  }
+
+  /** Roll the repo back to the last snapshot (destructive, W3.14). */
+  async function gitRollback(): Promise<boolean> {
+    try {
+      const res = await request<{ ok: boolean; error?: string }>("git_rollback", {});
+      if (!res.ok) {
+        notify(res.error ?? "Откат не выполнен", "error");
+        return false;
+      }
+      notify("Изменения откачены к снимку", "ok");
+      void loadGit();
+      void loadTree();
+      return true;
+    } catch (err) {
+      notify(errorText(err), "error");
+      return false;
+    }
+  }
+
   /** Unified diff of one file ("" when there are no changes). */
   async function gitShowDiff(path: string): Promise<string | null> {
     try {
@@ -723,6 +760,8 @@ export function useAxiom() {
       setConnected(true);
       setCoreLost(false);
       setPhase("ready");
+      // Plugin commands surface in the palette without a settings visit (W3.1).
+      void loadPluginCommands();
       // Background model warm-up: fire-and-forget, never blocks the GUI.
       void request<{ warmed: boolean; pending: boolean }>("warmup", {}).catch(() => {});
       if (list.length === 0) {
@@ -848,6 +887,12 @@ export function useAxiom() {
                 call.error = event.error;
                 if (typeof event.content === "string" && event.content) call.output = event.content.slice(0, 16_000);
               }
+              // W3.4: a validated artifact from render_artifact attaches to the
+              // assistant message and renders inline (never as a plain string).
+              if (event.name === "render_artifact" && event.ok && event.data?.artifact) {
+                if (!m.artifacts) m.artifacts = [];
+                m.artifacts.push(event.data.artifact as Artifact);
+              }
             }),
           );
           break;
@@ -894,12 +939,13 @@ export function useAxiom() {
           const last = latestTaskEventRef.current;
           if (last?.id === event.task.id && last.revision > event.task.revision) break;
           latestTaskEventRef.current = event.task;
+          const wasActive = taskActiveRef.current;
           setTasks((list) => {
             const existing = list.find((task) => task.id === event.task.id);
             if (existing && existing.revision > event.task.revision) return list;
             return [event.task, ...list.filter((task) => task.id !== event.task.id)];
           });
-          if (taskActiveRef.current) {
+          if (wasActive) {
             setActiveTaskId(event.task_id);
             if (event.kind === "task.started" || event.kind === "task.resumed") setFocusedTaskId(event.task_id);
             const labels: Record<Task["state"], string> = {
@@ -917,7 +963,8 @@ export function useAxiom() {
             const detail = event.task.detail?.trim();
             setStatusText(`Задача: ${labels[event.task.state] ?? event.task.state}${detail ? ` · ${detail.slice(0, 120)}` : ""}`);
           }
-          if (["completed", "failed", "cancelled", "waiting_for_user"].includes(event.task.state) && taskActiveRef.current) {
+          const terminal = ["completed", "failed", "cancelled", "waiting_for_user"].includes(event.task.state);
+          if (terminal && wasActive) {
             taskActiveRef.current = false;
             generatingRef.current = false;
             setGenerating(false);
@@ -927,6 +974,22 @@ export function useAxiom() {
             setLiveState("idle");
             void loadTree();
             void loadGit();
+          }
+          // W3.3: a background task finishing while the user is elsewhere gets
+          // a real completion notification. The state comes straight from the
+          // task event, so the toast never fabricates a result.
+          if (terminal && !wasActive) {
+            const title = event.task.goal?.trim();
+            const labels: Partial<Record<Task["state"], string>> = {
+              completed: "завершена",
+              failed: "завершилась с ошибкой",
+              cancelled: "остановлена",
+              waiting_for_user: "требует решения",
+            };
+            notify(
+              `Фоновая задача${title ? ` «${title.slice(0, 60)}»` : ""} — ${labels[event.task.state] ?? event.task.state}`,
+              event.task.state === "completed" ? "ok" : "error",
+            );
           }
           break;
         }
@@ -1275,6 +1338,7 @@ export function useAxiom() {
           sources: [],
           createdAt: conversation.updatedAt,
           images: Array.isArray(message.images) ? message.images.filter(Boolean) : [],
+          artifacts: Array.isArray(message.artifacts) ? message.artifacts : [],
         })),
       );
       setStatusText(null);
@@ -1803,6 +1867,7 @@ export function useAxiom() {
       for (const name of result.discovered) notify(`Найден плагин: ${name}`, "ok");
       // Built-in catalogue: plugins shipped with AXIOM, not installed yet.
       setBundledPlugins(await request<PluginRow[]>("bundled_plugins"));
+      void loadPluginCommands();
     } catch (err) { notify(errorText(err), "error"); }
     finally { setPluginLoading(false); }
   }
@@ -1833,6 +1898,16 @@ export function useAxiom() {
       for (const name of result.discovered) notify(`Найден плагин: ${name}`, "ok");
     } catch {
       // A transient bridge error must not spam the UI during background polling.
+    }
+  }
+
+  /** Load plugin-contributed commands (W3.1) into the shared palette registry. */
+  async function loadPluginCommands() {
+    try {
+      const commands = await request<{ plugin: string; id: string; title: string }[]>("plugin_commands");
+      setPluginCommands(commands);
+    } catch {
+      // No palette breakage on a transient bridge error.
     }
   }
 
@@ -2050,6 +2125,26 @@ export function useAxiom() {
   /** Runs a slash command. Returns true when the input was consumed by one. */
   async function runCommand(input: string): Promise<boolean> {
     const { name, args } = parseCommand(input);
+    // W3.1: a plugin-contributed command is routed to the plugin host — it is
+    // never hardcoded into the switch below (no host change per plugin).
+    const pluginCommand = pluginCommandById(name.replace(/^\//, ""));
+    if (pluginCommand) {
+      try {
+        const res = await request<{ ok: boolean; data?: unknown; error?: string | null }>("plugin_host", {
+          id: Date.now().toString(36),
+          plugin: pluginCommand.plugin,
+          method: "ui.command",
+          params: { command: pluginCommand.id },
+        });
+        notify(
+          res.ok ? `Команда «${pluginCommand.title}» выполнена` : `Ошибка команды: ${res.error ?? "не выполнена"}`,
+          res.ok ? "ok" : "error",
+        );
+      } catch (err) {
+        notify(errorText(err), "error");
+      }
+      return true;
+    }
     const command = commandByName(name);
     if (!command) return false;
     switch (command.name) {
@@ -2270,7 +2365,9 @@ export function useAxiom() {
     // an extra optimistic `current: null` here caused React to briefly render
     // the selector with the wrong label before the second update landed.
     setOpenFile(null);
-    setTermHistory([]);
+    const prevRoot = workspace?.current?.path;
+    if (prevRoot) termHistoryByRootRef.current.set(prevRoot, termHistory);
+    setTermHistory(termHistoryByRootRef.current.get(path) ?? []);
     setPendingTerm(null);
     setTree([]);
     setTreeLoading(true);
@@ -2362,6 +2459,8 @@ export function useAxiom() {
     // just asked for. Applying it up front also means the UI drops the project
     // instantly instead of after the backend round-trip.
     setOpenFile(null);
+    const prevRoot = workspace?.current?.path;
+    if (prevRoot) termHistoryByRootRef.current.set(prevRoot, termHistory);
     setTermHistory([]);
     setPendingTerm(null);
     setTree([]);
@@ -2452,6 +2551,11 @@ export function useAxiom() {
     const cmd = pendingTerm;
     setPendingTerm(null);
     if (allow && cmd) await runTerminal(cmd, true);
+  }
+
+  /** Re-run a previously executed command without re-prompting (W3.13). */
+  async function rerunTerminal(command: string) {
+    await runTerminal(command, true);
   }
 
   // ---------------------------------------------- interactive shell session
@@ -2629,6 +2733,8 @@ export function useAxiom() {
     gitStage,
     gitUnstage,
     gitCommit,
+    gitCheckpoint,
+    gitRollback,
     gitShowDiff,
     shellRunning,
     shellOutput,
@@ -2708,6 +2814,7 @@ export function useAxiom() {
     termHistory,
     pendingTerm,
     runTerminal,
+    rerunTerminal,
     confirmTerminal,
     gitStatus,
     gitLog,

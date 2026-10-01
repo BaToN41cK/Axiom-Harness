@@ -9,6 +9,81 @@
 
 ## [Unreleased]
 
+### Added — W3.17 Artifact Workspace: Documents view + Markdown editor (complete)
+
+- The bridge exposes `artifact_list`/`artifact_get`/`artifact_save`/`artifact_delete`/`artifact_export` over the core `ArtifactWorkspace` (rooted at the current workspace; `artifact_list` returns compact rows without content).
+- New `desktop/src/components/DocumentsPanel.tsx` adds a «Документы» tab to the workbench side panel: a document list plus a Markdown editor (textarea + sanitized `react-markdown` preview, new/save/delete/export-to-`.md`), with an honest empty state. `ArtifactMeta`/`ArtifactDocument` types added to `types.ts`.
+- Tests: new `tests/core/test_artifact_bridge.py` (3 tests — full create/list/get/update/export/delete round-trip, Global-Chat rejection, missing-id rejection). `docs/roadmap.md` marks W3.17 DONE (W3 wave `10 done, 5 partial, 3 TODO`); verified with the artifact suites, Ruff, `tsc --noEmit` and the Vite build.
+
+### Added — W3.6 CLI/Headless: streaming WebSocket transport (complete)
+
+- `axiom.frontends.headless` gains `stream_headless()` (yields normalized JSON-ready events for one prompt — reasoning/content/tool/status/search/done) and `WebSocketStreamServer` (a token-protected localhost WebSocket transport over the same canonical runtime; the client sends the token, then `{"prompt": ...}`, and receives the live event stream). `websockets` is imported lazily so the HTTP API still works without it; added `websockets>=13` to dependencies.
+- Tests: new `tests/frontends/test_websocket_stream.py` (4 tests — stream normalization, error propagation, bad-token rejection, live event streaming over a real socket). `docs/roadmap.md` marks W3.6 DONE (W3 wave `9 done, 6 partial, 3 TODO`); verified with the frontends suite `68 passed` and Ruff. The VS Code adapter is tracked in W3.16.
+
+### Added — W3.8 Language/palette/updates: portable mode + settings backup (core)
+
+- `axiom_home()` now supports portable mode (`AXIOM_PORTABLE=1` or a `.axiom-portable` marker → `<cwd>/.axiom`), still overridden by `AXIOM_HOME`; `is_portable()` reports it.
+- New `core/settings_backup.py`: `backup_settings()` archives the whitelisted settings JSON files into a zip; `restore_settings()` extracts only known filenames, validates each as JSON, and never trusts an archive path (path-traversal safe).
+- Tests: new `tests/core/test_settings_backup.py` (5 tests — portable env/marker/override, backup→restore round-trip, malformed+unknown entry skipping). `docs/roadmap.md` keeps W3.8 PARTIAL (component-text replacement and signed update channels remain); verified with Ruff.
+
+### Added — W3.9 Chat 2.0: conversation export (Markdown + JSON)
+
+- New `core/chat_export.py` exports a stored `Conversation` to real Markdown (title/model/timestamps header + every message with its thinking in a collapsible block and artifact/image counts) and JSON (`export_conversation_json` with metadata + message content); the `chat_export` bridge command returns both. `Conversation` gains a persisted `bookmarks` list and `HistoryStore.set_bookmark` toggles it (out-of-range/unknown ids rejected).
+- Tests: new `tests/core/test_chat_export.py` (3 tests) + bookmark tests in `tests/core/test_history_meta.py`. `docs/roadmap.md` keeps W3.9 PARTIAL (branch promotion, in-conversation `Ctrl+F`, quote-to-prompt, attachments and PDF remain); verified with Ruff.
+
+### Added — W3.2 Connectors: Google via one schema (complete)
+
+- New `core/connectors/` package — the one schema for external services: `base.py` (`Connector` protocol, `ConnectorTool` with per-tool scopes + `mutation` flag, `ConnectorToken` whose `repr`/`export`/`redacted()` never expose secrets, `redact`/`Redactor`), `device_flow.py` (RFC 8628 `DeviceFlowClient` with injectable transport), `credential_store.py` (user-only `0o600` file under `AXIOM_HOME`), `registry.py` (`ConnectorRegistry` — begin/finish/disconnect, per-connector scope enforcement, mutation approval, secret redaction).
+- `google.py` `GoogleConnector`: OAuth Device Flow + read-only Calendar/Gmail/Drive tools, one approval-gated mutation (`drive.upload`), and `search` via the Custom Search JSON API (opt-in keyed config). Microsoft/GitHub/Notion plug into the same schema later.
+- Tests: new `tests/core/test_connectors.py` (16 tests, deterministic fake HTTP transport — device flow, credential store round-trip + redaction, sign-in/disconnect revoke, scope/mutation enforcement, real Google tool data). `docs/roadmap.md` marks W3.2 DONE (W3 wave `8 done, 7 partial, 3 TODO`); verified with Ruff.
+
+### Added — W3.1 Plugins: typed UI host contract + scope enforcement (core slice)
+
+- New `core/plugin_host.py` owns the deterministic host-side half of the plugin UI sandbox: `SCOPE_CAPABILITIES` (scope → capability), a default-closed `ScopeGate` (fs/net/ui/clipboard — a capability is denied unless explicitly declared), typed `HostRequest`/`HostResponse`/`HostEvent` envelopes (`extra="forbid"`), `parse_request` (rejects non-objects, unknown methods, missing ids, extra fields and oversized params *before* any handler runs), and `PluginHost.handle` (routes a validated request, enforces the gate, contains handler exceptions as a structured error).
+- `allowlisted_catalog()` returns the pinned v0 catalog and `catalog_allows(name, version)` checks it; the bundled `hello-panel` example plugin declares a `panel` + `command` under scope `ui` and ships a minimal `ui/index.html`.
+- Runtime enforcement: the bridge adds `plugin_host` (routes a request through `ScopeGate` against the plugin's declared scopes, then executes real `net`/`fs`/`ui`/`clipboard` capabilities — fs is workspace-scoped and traversal-guarded) and `plugin_ui_html` (serves the plugin's `ui/index.html`).
+- Isolated UI host: new `desktop/src/components/PluginPanelHost.tsx` renders the plugin document in a sandboxed `<iframe sandbox="allow-scripts">` (opaque origin — no host DOM/IPC) and forwards only validated `postMessage` requests to the core gate; the Plugins marketplace exposes a «Панель» tab for plugins with a panel extension. `PluginRow.ui_block` gains a typed `UIExtension[]`.
+- Tests: new `tests/core/test_plugin_host.py` (19 tests: gate default-closed, typed request validation, host routing/denial/crash-containment, catalog pinning, the example plugin's manifest, bridge scope denial + fs traversal, and `plugin_commands`/`plugin_ui_html` + crash isolation). `docs/roadmap.md` marks W3.1 DONE (W3 wave `7 done, 7 partial, 4 TODO`); verified with the plugin/multitasking suites `48 passed`, Ruff and `tsc --noEmit`.
+- Command execution and hot reload: `plugin_commands` surfaces enabled plugins' `command` extensions; `desktop/src/lib/commands.ts` merges them into the palette (`setPluginCommands`/`pluginCommandById`), `useAxiom.runCommand` routes them to `plugin_host ui.command`, and `PluginPanelHost` re-fetches `plugin_ui_html` on mount plus an «Обновить» button (hot reload), complementing the existing `discover_plugins` poll.
+
+### Added — W3.3 Multitasking: concurrent background tasks + per-task cancellation (core slice)
+
+- `ChatSession` now tracks detached/background task runs in a per-task registry (`_task_runs`, a `_TaskRun` per run: worker + runner + `CancelToken`) and a worker→runner map, instead of the single `_task`/`active_task`/`active_task_runner` slot — several tasks can run at once and the foreground chat generation is no longer clobbered by them.
+- `task_start`/`task_resume` allow `detached=True` runs to start concurrently (the foreground path still waits for the in-line generation slot); `task_cancel(task_id)` stops exactly the selected task and never the chat generation or another task; new `running_task_ids()` exposes the live active-task set; `busy` now reflects any in-flight generation including background tasks.
+- The step executor resolves its runner from the current worker task, so concurrent tasks each observe their own `CancelToken`; verification permission is scoped per task (`bind_context` in `_verify_task`).
+- Desktop bridge relaxes the `busy` guard for `task_launch`/`task_continue` and adds a `running_tasks` command; the UI raises a real completion toast when a background task finishes while the user is elsewhere (state comes straight from the task event — never fabricated).
+- Tests: new `tests/core/test_multitasking.py` (4 tests: concurrent runs, isolated cancellation, honest `running_task_ids`/`busy`, foreground-slot guard); verified with the full core/bridge suite `737 passed, 1 skipped`, Ruff and `tsc --noEmit`. Chat tabs, background indexing and the tray remain (W3.3 PARTIAL). `docs/roadmap.md` marks W3.3 PARTIAL (W3 wave `6 done, 7 partial, 5 TODO`).
+
+### Added — W3.12–W3.14 Explorer / Terminal / Git 2.0 (complete)
+
+- W3.12 Explorer: per-file `M/A/U` markers already render inline; `parseGitStatus` is extracted to `desktop/src/lib/gitStatus.ts` and covered by `desktop/scripts/git-status.test.mjs` (2 tests).
+- W3.13 Terminal: the panel gains a per-entry rerun button (`rerunTerminal` re-runs a past command without re-prompting) and per-workspace history (`termHistoryByRootRef`) that survives switching projects and back.
+- W3.14 Git: new `ChatSession.git_checkpoint`/`git_rollback` (snapshot + `git reset --hard` rollback via `git_safety`) exposed as `git_checkpoint`/`git_rollback` bridge commands and surfaced in the Git panel as «Снимок»/«Откат» (rollback asks for confirmation before restoring).
+- Tests: `tests/core/test_git_write.py` gains checkpoint/rollback coverage (19 tests); verified with the targeted suite, Ruff, `tsc --noEmit`, the Vite build and the node git-status test.
+
+### Added — W3.4 Answer Artifacts: desktop rendering + PNG export (complete)
+
+- `ToolResultEvent` gains a structured `data` payload and the agent attaches it, so a validated `render_artifact` result carries its `artifact` through the bridge to the desktop instead of only its Markdown text.
+- `ChatSession` collects `render_artifact` artifacts during a turn and `_record_turn` persists them onto the assistant `Message` (survives history reload); `_conversation_full` serializes `artifacts`.
+- New `desktop/src/lib/artifacts.ts` (`artifactToMarkdown`/`artifactToCsv`/`artifactToSvg`, a canvas-based `svgToPng` rasterizer and download helpers) and `desktop/src/components/ArtifactView.tsx` render tables, comparisons, checklists, Mermaid blocks and SVG bar charts inline with MD/CSV/SVG/PNG export buttons; wired into `MessageList` and the live `tool_result` handler.
+- Tests: 3 new tests in `tests/core/test_artifacts.py` (ToolResultEvent data, `_record_turn` persistence, end-to-end artifact flow into the assistant message). `docs/roadmap.md` marks W3.4 DONE (W3 wave `3 done, 9 partial, 6 TODO`); verified with full pytest `865 passed, 2 skipped`, Ruff, `tsc --noEmit` and the Vite build.
+
+### Added — W4.13 pagination/deltas and before/after metrics (complete)
+
+- New `core/paging.py`: `Page` (a bounded window with `total`/`offset`/`limit`/`has_more`), `paginate` (validated offset/limit slicing), `paginate_lines` and `paginate_diff` (line-windowed payloads); exported from both `axiom` and `axiom.core`.
+- `Trajectory.page(offset, limit)` returns a bounded window plus the true total, and `Trajectory.since(seq)` returns only events appended after a cursor — a long run no longer resends its full state per UI chunk.
+- `project_index.list_project_files(root, offset, limit)` pages a sorted, relative, `SKIP_DIRS`-pruned file listing instead of materialising the whole tree.
+- `core/performance.py` gains `capture_metrics(**counters)`/`compare_metrics(before, after)` (wall-clock plus per-counter deltas) and a `Timer` context manager for before/after measurement.
+- Tests: new `tests/core/test_paging.py` (8 tests) plus 2 before/after metric tests in `tests/core/test_performance.py`; `docs/roadmap.md` marks W4.13 DONE (W4 wave `14 done, 1 partial, 0 TODO`); verified with full pytest `859 passed, 2 skipped` and Ruff.
+
+### Added — W4.15 deterministic offline E2E acceptance (complete)
+
+- New `core/e2e_model.py`: `scripted_coding_chat` (an async generator with the exact `ProviderChatClient.chat` shape) plays a real, fixed coding scenario — plan, read, a first (deliberately wrong) edit, a real pytest fail→repair, accept — and `install_scripted_model()` swaps it in. Nothing runs during normal use; the desktop bridge installs it only when `AXIOM_E2E_SCRIPTED_MODEL=1`.
+- The scenario makes one wrong edit (`return a * b`) so the real pytest genuinely fails once, then repairs to `return a + b` and the verifier passes — proving real files/checks, one recovered failure and broken-regression detection through the real pipeline.
+- `axiom_bridge.py` installs the scripted model at startup when the env flag is set, so the browser/Tauri harness can drive a real task without a live model or network.
+- `desktop/scripts/e2e-harness.mjs` gains Scenario 3: a throw-away project with a genuinely failing test, a `task_start` through the real bridge, and checks for the completed state, the changed file, a real per-file diff, the fail→repair test sequence, and the file actually fixed on disk — then opens the Tasks tab and verifies the UI renders the completed task.
+- Tests: new `tests/core/test_e2e_scripted.py` proves the scripted model drives a real coding task (real files, real git, real pytest fail→repair→pass, real diff) through the real bridge `_handle`, plus a plain-chat guard; verified with the targeted bridge/task suite `53 passed` and Ruff. `docs/roadmap.md` marks W4.15 DONE (W4 wave `15 done, 0 partial, 0 TODO`). The browser harness runs via `node desktop/scripts/e2e-harness.mjs` after `npm run build` with Edge; resume-after-interruption is covered by the existing backend acceptance suite.
+
 ### Added — W3.8 Localization core
 
 - New `core/i18n.py`: `Locale` (en/ru), a deterministic `TRANSLATIONS` catalog for core-emitted labels (task states, permission outcomes, autonomy presets), `translate(key, locale, **kwargs)` (falls back to the key) and `locales()`; `Config.locale` is a validated `en`/`ru` literal.

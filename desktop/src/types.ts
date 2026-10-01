@@ -50,6 +50,24 @@ export interface WorkspaceState {
   pinned: ProjectInfo[];
 }
 
+export interface ArtifactVersion {
+  version: number;
+  content: string;
+  updated_at: number;
+}
+
+export interface ArtifactDocument {
+  id: string;
+  title: string;
+  kind: string;
+  content: string;
+  task_id: string | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  history: ArtifactVersion[];
+}
+
 export interface TreeNode {
   name: string;
   dir: boolean;
@@ -113,6 +131,7 @@ export interface StoredMessage {
   thinking?: string | null;
   name?: string | null;
   images?: string[];
+  artifacts?: Artifact[];
 }
 
 export type Density = "compact" | "comfortable" | "spacious";
@@ -248,7 +267,7 @@ export type CoreEvent =
   | { type: "reasoning"; text: string }
   | { type: "content"; text: string }
   | { type: "tool_call"; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_result"; name: string; ok: boolean; content: string; error: string | null; durationMs: number }
+  | { type: "tool_result"; name: string; ok: boolean; content: string; error: string | null; durationMs: number; data?: Record<string, unknown> | null }
   | { type: "search_result"; query: string; sources: SourceItem[] }
   | { type: "status"; state: string; detail: string | null }
   | { type: "orchestration"; kind: string; actor: string; summary: string; seq: number }
@@ -454,6 +473,47 @@ export interface OrchestrationState {
   finishedAt: number | null;
 }
 
+export type ArtifactType = "table" | "comparison" | "checklist" | "mermaid" | "chart";
+
+export interface TableArtifact {
+  type: "table";
+  title?: string | null;
+  columns: string[];
+  rows: string[][];
+}
+
+export interface ComparisonArtifact {
+  type: "comparison";
+  title?: string | null;
+  items: { label: string; left: string; right: string }[];
+}
+
+export interface ChecklistArtifact {
+  type: "checklist";
+  title?: string | null;
+  items: { label: string; checked: boolean }[];
+}
+
+export interface MermaidArtifact {
+  type: "mermaid";
+  title?: string | null;
+  diagram: string;
+}
+
+export interface ChartArtifact {
+  type: "chart";
+  title?: string | null;
+  labels: string[];
+  series: { label: string; values: number[] }[];
+}
+
+export type Artifact =
+  | TableArtifact
+  | ComparisonArtifact
+  | ChecklistArtifact
+  | MermaidArtifact
+  | ChartArtifact;
+
 export interface LiveMessage {
   id: string;
   role: Role;
@@ -469,6 +529,8 @@ export interface LiveMessage {
   orchestration?: OrchestrationState;
   /** Base64 images attached by the user (vision models). */
   images?: string[];
+  /** Validated structured artifacts attached by the model (W3.4). */
+  artifacts?: Artifact[];
   /** Regenerated alternates of this answer (branch history, newest last). */
   alternates?: string[];
   /** Which branch is displayed (index into alternates, or -1 = current). */
@@ -511,6 +573,14 @@ export interface ProviderRow {
   status: string;
 }
 
+/** One declared UI extension point of a plugin's ``ui`` block (W3.1). */
+export interface UIExtension {
+  type: "panel" | "command" | "setting" | "renderer" | "theme";
+  id: string;
+  scopes: string[];
+  meta?: Record<string, unknown>;
+}
+
 export interface PluginRow {
   name: string;
   version: string;
@@ -519,7 +589,7 @@ export interface PluginRow {
   api_version: number;
   enabled: boolean;
   capabilities: string[];
-  ui_block: { scopes: string[]; extensions: { type: string; id: string; scopes: string[] }[] } | null;
+  ui_block: { scopes: string[]; extensions: UIExtension[] } | null;
   tools: string[];
   providers: string[];
   skills: string[];
@@ -594,6 +664,23 @@ export interface SearchTestResult {
   results: { title: string; url: string; snippet: string }[];
   error: string | null;
   hint: string | null;
+}
+
+/** W3.17 — a compact Documents list row (no content). */
+export interface ArtifactMeta {
+  id: string;
+  title: string;
+  kind: string;
+  version: number;
+  updated_at: number;
+  task_id: string | null;
+}
+
+/** W3.17 — a full artifact document (for the Markdown editor). */
+export interface ArtifactDocument extends ArtifactMeta {
+  content: string;
+  created_at: number;
+  history: { version: number; content: string; updated_at: number }[];
 }
 
 export interface SendResult {

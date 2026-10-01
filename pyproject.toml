@@ -26,6 +26,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.7",
     "textual>=1.0",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]

@@ -15,6 +15,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TreeNode } from "../types";
 import CodeBlock from "./CodeBlock";
+import { parseGitStatus } from "../lib/gitStatus";
 
 interface Props {
   root: string | null;
@@ -55,25 +56,6 @@ function fileIcon(name: string, dir: boolean) {
 /** Determine if a name looks like a Markdown file for preview. */
 function isMarkdown(name: string): boolean {
   return name.toLowerCase().endsWith(".md") || name.toLowerCase().endsWith(".mdx");
-}
-
-/**
- * Parse `git status --short` into `relative path -> letter` (§5).
- * Both columns are inspected: `XY path`, where X is the index state and Y the
- * worktree state. The most visible letter for the GUI wins (M/A/D/?).
- */
-function parseGitStatus(raw: string | null): Map<string, string> {
-  const map = new Map<string, string>();
-  if (!raw) return map;
-  for (const line of raw.split("\n")) {
-    if (line.length < 4 || line.startsWith("##")) continue;
-    const [x, y] = [line[0], line[1]];
-    const path = line.slice(3).trim().replace(/"/g, "");
-    if (!path) continue;
-    const code = y !== " " ? y : x;
-    map.set(path.replace(/\\/g, "/"), code === "?" ? "?" : code);
-  }
-  return map;
 }
 
 /** File explorer of the current project (§15). Real tree from the backend. */

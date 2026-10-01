@@ -16,6 +16,15 @@ export interface SlashCommand {
   shortcut?: string;
   /** Hint shown in the palette for commands that open a panel. */
   group: "chat" | "models" | "workspace" | "system" | "harness";
+  /** Set for a plugin-contributed command (W3.1) — routed to the plugin host. */
+  pluginCommand?: PluginCommand;
+}
+
+/** A command declared by a plugin's ``ui`` block (W3.1). */
+export interface PluginCommand {
+  plugin: string;
+  id: string;
+  title: string;
 }
 
 export const COMMANDS: SlashCommand[] = [
@@ -42,21 +51,50 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/exit", description: "Закрыть AXIOM", group: "system" },
 ];
 
+// ------------------------------------------------------- plugin commands (W3.1)
+
+let pluginCommands: PluginCommand[] = [];
+
+/** Replace the set of plugin-contributed commands (loaded from the core). */
+export function setPluginCommands(commands: PluginCommand[]): void {
+  pluginCommands = commands;
+}
+
+function pluginSlashCommands(): SlashCommand[] {
+  return pluginCommands.map((command) => ({
+    name: `/${command.id}`,
+    description: command.title,
+    group: "harness" as const,
+    icon: "plugin" as const,
+    pluginCommand: command,
+  }));
+}
+
+function allCommands(): SlashCommand[] {
+  return [...COMMANDS, ...pluginSlashCommands()];
+}
+
+/** Look up a plugin command by its bare id (e.g. ``hello-greet``). */
+export function pluginCommandById(id: string): PluginCommand | undefined {
+  return pluginCommands.find((c) => c.id === id);
+}
+
 export function matchingCommands(input: string): SlashCommand[] {
   const token = input.trim().split(" ")[0].toLowerCase();
   if (!token.startsWith("/")) return [];
   const prefix = token.slice(1);
-  if (!prefix) return COMMANDS;
-  const exact = COMMANDS.filter((c) => c.name.slice(1) === prefix);
+  const all = allCommands();
+  if (!prefix) return all;
+  const exact = all.filter((c) => c.name.slice(1) === prefix);
   if (exact.length) return exact;
-  const starts = COMMANDS.filter((c) => c.name.slice(1).startsWith(prefix));
+  const starts = all.filter((c) => c.name.slice(1).startsWith(prefix));
   if (starts.length) return starts;
-  return COMMANDS.filter((c) => c.name.slice(1).includes(prefix));
+  return all.filter((c) => c.name.slice(1).includes(prefix));
 }
 
 export function commandByName(name: string): SlashCommand | undefined {
   const clean = name.startsWith("/") ? name : `/${name}`;
-  return COMMANDS.find((c) => c.name === clean);
+  return allCommands().find((c) => c.name === clean);
 }
 
 /** Shared presentation metadata used by the Desktop palette and future adapters. */

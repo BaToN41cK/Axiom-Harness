@@ -8,6 +8,7 @@ import {
   Package, Puzzle, Search, Shield, ShieldAlert, Trash2, Type, Wrench,
 } from "lucide-react";
 import type { PluginInstallResult, PluginRow } from "../../types";
+import PluginPanelHost from "../PluginPanelHost";
 import calculatorCover from "../../assets/plugins/calculator.webp";
 import datetimeCover from "../../assets/plugins/datetime.webp";
 import notesCover from "../../assets/plugins/notes.webp";
@@ -63,7 +64,7 @@ function Cover({ plugin, large = false }: { plugin: PluginRow; large?: boolean }
 }
 
 type Filter = "all" | "installed" | "enabled" | "catalog";
-type Tab = "overview" | "docs" | "permissions" | "details";
+type Tab = "overview" | "docs" | "permissions" | "details" | "panel";
 
 interface Entry { plugin: PluginRow; installed: boolean }
 
@@ -229,9 +230,12 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
   const m = metaOf(plugin);
   const [tab, setTab] = useState<Tab>(plugin.readme ? "docs" : "overview");
 
+  const panel = plugin.ui_block?.extensions.find((e) => e.type === "panel");
+
   const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
     { id: "overview", label: "Обзор", icon: <Info size={13} /> },
     { id: "docs", label: "Документация", icon: <BookOpen size={13} /> },
+    ...(panel ? [{ id: "panel" as Tab, label: "Панель", icon: <Puzzle size={13} /> }] : []),
     { id: "permissions", label: "Разрешения", icon: <ShieldAlert size={13} /> },
     { id: "details", label: "Сведения", icon: <FileText size={13} /> },
   ];
@@ -358,6 +362,8 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
             <dt>Папка</dt><dd><code>{plugin.source_dir || "~/.axiom/plugins/" + plugin.name}</code></dd>
           </dl>
         )}
+
+        {tab === "panel" && panel && <PluginPanelHost plugin={plugin} extension={panel} />}
       </div>
     </div>
   );

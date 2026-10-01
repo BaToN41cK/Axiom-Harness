@@ -39,6 +39,8 @@ from axiom.core.i18n import DEFAULT_LOCALE, Locale, locales, translate
 from axiom.core.logging import get_logger, setup_logging
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.ollama import ChatStreamParser, OllamaClient
+from axiom.core.paging import Page, paginate, paginate_diff, paginate_lines
+from axiom.core.performance import MetricsSnapshot, Timer, capture_metrics, compare_metrics
 from axiom.core.permissions import PermissionManager, PermissionMode
 from axiom.core.planner import Planner, PlanStep, TaskPlan
 from axiom.core.profiles import ProfileManager
@@ -78,9 +80,11 @@ __all__ = [
     "InvalidResponseError",
     "Locale",
     "Message",
+    "MetricsSnapshot",
     "ModelInfo",
     "ModelRegistry",
     "OllamaClient",
+    "Page",
     "PermissionManager",
     "PermissionMode",
     "PlanStep",
@@ -101,15 +105,21 @@ __all__ = [
     "TaskPlan",
     "TaskState",
     "TaskStore",
+    "Timer",
     "ToolCallEvent",
     "ToolRegistry",
     "ToolResultEvent",
     "WorkspaceManager",
     "build_artifact",
+    "capture_metrics",
+    "compare_metrics",
     "create_automation_task",
     "due_schedules",
     "get_logger",
     "locales",
+    "paginate",
+    "paginate_diff",
+    "paginate_lines",
     "record_run",
     "retry_async",
     "run_due",

@@ -4,7 +4,7 @@
  * Serves desktop/dist, launches headless Edge via CDP with a Tauri `invoke`
  * shim backed by the REAL Python core (axiom_bridge.py), then drives the UI.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -159,7 +159,15 @@ mkdirSync(path.join(otherProject, "src"), { recursive: true });
 writeFileSync(path.join(otherProject, "README.md"), "# Other\n", "utf8");
 const proc = spawn("python", [BRIDGE], {
   cwd: ROOT,
-  env: { ...process.env, AXIOM_HOME: axiomHome, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+  env: {
+    ...process.env,
+    AXIOM_HOME: axiomHome,
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+    // W4.15: deterministic coding scenario — the real pipeline with a scripted
+    // model instead of a live Ollama, so the run is network-free and repeatable.
+    AXIOM_E2E_SCRIPTED_MODEL: "1",
+  },
   stdio: ["pipe", "pipe", "pipe"],
 });
 const pending = new Map();
@@ -902,6 +910,68 @@ if (pageErrors.length) {
 } else {
   check("no uncaught page errors", true);
 }
+
+// =====================================================================
+// SCENARIO 3: a real coding task end-to-end (scripted model, no network)
+// =====================================================================
+console.log("\n=== Scenario 3: real coding task (scripted model) ===");
+
+// A clean, throw-away project with a genuinely failing test: the agent must
+// read, edit, and run a real pytest, and the harness verifies the file on disk.
+const codingProject = path.join(TMP, "CodingProject");
+mkdirSync(codingProject, { recursive: true });
+writeFileSync(path.join(codingProject, "buggy.py"), "def add(a, b):\n    return a - b\n", "utf8");
+writeFileSync(
+  path.join(codingProject, "test_buggy.py"),
+  "from buggy import add\ndef test_add():\n    assert add(2, 3) == 5\n",
+  "utf8",
+);
+spawnSync("git", ["init", codingProject], { stdio: "ignore" });
+
+await coreRequest("set_workspace", { path: codingProject });
+await sleep(400);
+const codingRoot = await wsRoot();
+check(
+  "coding project opens in backend",
+  codingRoot !== null && path.resolve(codingRoot) === path.resolve(codingProject),
+  String(codingRoot),
+);
+
+// The same bridge command the UI task creator triggers; the scripted model
+// (installed because AXIOM_E2E_SCRIPTED_MODEL=1) keeps it deterministic and
+// network-free while every file/edit/check/diff stays real.
+const task = await coreRequest("task_start", { goal: "Fix buggy.py" });
+check("task reaches completed state", task?.state === "completed", JSON.stringify(task?.state));
+check(
+  "task records the changed file",
+  Array.isArray(task?.changed_files) && task.changed_files.includes("buggy.py"),
+  JSON.stringify(task?.changed_files),
+);
+check(
+  "task captures a real per-file diff",
+  !!task?.diffs && typeof task.diffs === "object" && "buggy.py" in task.diffs,
+  JSON.stringify(Object.keys(task?.diffs ?? {})),
+);
+check(
+  "task failed once, repaired, then passed (fail→repair)",
+  Array.isArray(task?.tests) && task.tests.length === 2 &&
+    task.tests[0].ok === false && task.tests[0].executed === true &&
+    task.tests[1].ok === true && task.tests[1].executed === true &&
+    /1 passed/.test(JSON.stringify(task.tests[1])),
+  JSON.stringify(task.tests),
+);
+
+const fixedOnDisk = readFileSync(path.join(codingProject, "buggy.py"), "utf8");
+check("buggy.py was really fixed on disk", fixedOnDisk.includes("return a + b"), JSON.stringify(fixedOnDisk));
+
+// The UI reflects the same real task: open the Tasks tab and read its state.
+await click(".side-tabs button:last-child");
+await sleep(700);
+const taskUi = await evaluate(`(() => ({
+  panel: !!document.querySelector(".task-panel"),
+  badge: document.querySelector(".task-status-badge")?.textContent?.trim() ?? null,
+}))()`);
+check("tasks panel renders the completed task", taskUi.panel && /Завершена/.test(taskUi.badge ?? ""), JSON.stringify(taskUi));
 
 // ------------------------------------------------------------------ summary
 const failed = results.filter((r) => !r.ok);

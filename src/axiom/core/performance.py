@@ -11,7 +11,10 @@ a series into min / median / mean / max per field, split by cold vs warm;
 
 from __future__ import annotations
 
+import dataclasses
 import statistics
+import time
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel
@@ -451,3 +454,44 @@ def thinking_level(
         budget=budget,
     )
     return level
+
+
+@dataclass
+class MetricsSnapshot:
+    """A wall-clock point plus named counters, for before/after comparison."""
+
+    ts: float
+    counters: dict[str, int] = dataclasses.field(default_factory=dict)
+
+
+def capture_metrics(**counters: int) -> MetricsSnapshot:
+    """Capture a real ``time.monotonic`` timestamp plus optional counters."""
+    return MetricsSnapshot(ts=time.monotonic(), counters={k: int(v) for k, v in counters.items()})
+
+
+def compare_metrics(before: MetricsSnapshot, after: MetricsSnapshot) -> dict:
+    """Return the before/after delta: elapsed seconds and per-counter changes."""
+    keys = sorted(set(before.counters) | set(after.counters))
+    return {
+        "elapsed_seconds": round(after.ts - before.ts, 6),
+        "counters": {
+            key: after.counters.get(key, 0) - before.counters.get(key, 0) for key in keys
+        },
+    }
+
+
+class Timer:
+    """Context manager measuring wall-clock elapsed for one block (before/after)."""
+
+    def __enter__(self) -> Timer:
+        self._start = time.monotonic()
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        self._end = time.monotonic()
+        return False
+
+    @property
+    def elapsed(self) -> float:
+        end = getattr(self, "_end", time.monotonic())
+        return max(0.0, end - self._start)

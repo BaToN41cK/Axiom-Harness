@@ -205,3 +205,41 @@ async def test_agent_git_unstage_requires_approval_and_explicit_files(repo: Path
     accepted = await registry.execute("git_unstage", {"paths": ["a.txt"]}, approved=True)
     assert accepted.ok, accepted.error
     assert not git(repo, "diff", "--cached", "--name-only").strip()
+
+
+def test_checkpoint_and_rollback_restore_committed_file(repo: Path, monkeypatch) -> None:
+    """W3.14: a session snapshot is restorable via the bridge-facing methods."""
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+    from axiom.core.history import HistoryStore
+
+    monkeypatch.setenv("AXIOM_HOME", str(repo / ".." / "home"))
+    session = ChatSession(config=Config(model="m"), history_store=HistoryStore(directory=repo / ".." / "h"))
+    session.set_workspace(str(repo))
+
+    checkpoint = session.git_checkpoint()
+    assert checkpoint["ok"], checkpoint
+
+    (repo / "a.txt").write_text("two\n", encoding="utf-8")
+    rollback = session.git_rollback()
+    assert rollback["ok"], rollback
+    assert (repo / "a.txt").read_text(encoding="utf-8") == "one\n"
+
+    # A rollback consumes the snapshot; a second one has nothing to restore.
+    assert session.git_rollback()["ok"] is False
+
+
+def test_checkpoint_fails_without_workspace(tmp_path, monkeypatch) -> None:
+    from axiom.core.chat import ChatSession
+    from axiom.core.config import Config
+    from axiom.core.history import HistoryStore
+
+    monkeypatch.setenv("AXIOM_HOME", str(tmp_path / "home"))
+    session = ChatSession(
+        config=Config(model="m", workspace_tools_enabled=False),
+        history_store=HistoryStore(directory=tmp_path / "h"),
+    )
+    assert session.workspace_root is None
+    assert session.git_checkpoint()["ok"] is False
+    assert session.git_rollback()["ok"] is False
+

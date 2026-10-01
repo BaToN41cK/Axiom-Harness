@@ -12,6 +12,8 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from axiom.core.paging import paginate
+
 ENTRY_CANDIDATES = ("main.py", "app.py", "src/main.py", "desktop/src/App.tsx",
                     "src/index.ts", "src/main.ts", "src/main.rs", "cmd/main.go",
                     "package.json", "pyproject.toml", "Cargo.toml", "go.mod")
@@ -49,6 +51,15 @@ class ProjectIndex:
 SKIP_DIRS = frozenset({".git", "node_modules", ".venv"})
 
 
+def iter_files(base: Path):
+    """Yield every non-pruned file under *base* in walk order (lazy)."""
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        here = Path(dirpath)
+        for name in filenames:
+            yield here / name
+
+
 def _collect_files(base: Path, limit: int = 4000) -> list[Path]:
     """Walk *base* collecting at most *limit* files, pruning heavy directories.
 
@@ -60,14 +71,24 @@ def _collect_files(base: Path, limit: int = 4000) -> list[Path]:
     soon as the cap is reached.
     """
     files: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        here = Path(dirpath)
-        for name in filenames:
-            files.append(here / name)
-            if len(files) >= limit:
-                return files
+    for path in iter_files(base):
+        files.append(path)
+        if len(files) >= limit:
+            break
     return files
+
+
+def list_project_files(root: Path | str, offset: int = 0, limit: int = 500) -> dict:
+    """Paginated, deterministic listing of a workspace's files.
+
+    Returns sorted, ``/``-separated relative paths as a page, so a large
+    repository can be browsed without materialising or resending the whole tree.
+    """
+    base = Path(root).resolve()
+    relative = sorted(
+        str(path.relative_to(base)).replace(os.sep, "/") for path in iter_files(base)
+    )
+    return paginate(relative, offset=offset, limit=limit).to_json()
 
 
 def index_project(root: Path | str) -> ProjectIndex:

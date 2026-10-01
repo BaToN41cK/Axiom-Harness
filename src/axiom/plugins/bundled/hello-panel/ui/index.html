@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: system-ui, sans-serif; color: #eee; background: #0b0b0e; margin: 0; padding: 16px; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    p { color: #99a; font-size: 13px; margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <h1>Привет</h1>
+  <p id="status">Подключаюсь к хосту…</p>
+  <script>
+    // Единственный канал наружу — типовой postMessage-протокол из
+    // axiom.core.plugin_host. Прямого доступа к DOM AXIOM и IPC у iframe нет.
+    function hostRequest(method, params) {
+      return new Promise(function (resolve) {
+        var id = "p" + Math.random().toString(36).slice(2);
+        function onMsg(e) {
+          var m = e.data;
+          if (m && m.id === id) { window.removeEventListener("message", onMsg); resolve(m); }
+        }
+        window.addEventListener("message", onMsg);
+        parent.postMessage({ id: id, plugin: "hello-panel", method: method, params: params || {} }, "*");
+      });
+    }
+    hostRequest("ui.render", {}).then(function (res) {
+      var el = document.getElementById("status");
+      if (res && res.ok) el.textContent = "Хост ответил: " + JSON.stringify(res.data);
+      else el.textContent = "Ошибка: " + ((res && res.error) || "нет ответа");
+    });
+  </script>
+</body>
+</html>

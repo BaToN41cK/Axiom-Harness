@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Folder, GitBranch, ListChecks, Moon, PanelLeft, PanelRight, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { Folder, FileText, GitBranch, ListChecks, Moon, PanelLeft, PanelRight, Sun, Terminal as TerminalIcon } from "lucide-react";
 import BootScreen from "./components/BootScreen";
 import ProjectSelector from "./components/ProjectSelector";
 import OverlayPanel from "./components/OverlayPanel";
@@ -21,6 +21,7 @@ import GitPanel from "./components/GitPanel";
 import TerminalPanel from "./components/TerminalPanel";
 import TaskPanel from "./components/TaskPanel";
 import ConfirmDialog from "./components/ConfirmDialog";
+import DocumentsPanel from "./components/DocumentsPanel";
 import type { AxiomStore } from "./hooks/useAxiom";
 import type { ThemePreset } from "./types";
 
@@ -41,7 +42,7 @@ const THEME_LABELS: Record<ThemePreset, string> = {
 function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => { if (panelRef.current) panelRef.current.inert = !s.rightPanelOpen; }, [s.rightPanelOpen]);
-  const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks">("files");
+  const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks" | "documents">("files");
   // A file opened from task review must be visible even from another tab.
   useEffect(() => { if (s.openFile) setTab("files"); }, [s.openFile]);
   const pickTab = (next: typeof tab) => {
@@ -99,6 +100,9 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
         <button className={tab === "tasks" ? "active" : ""} onClick={() => pickTab("tasks")}>
           <ListChecks size={13} strokeWidth={1.8} /><span>Задачи</span>
         </button>
+        <button className={tab === "documents" ? "active" : ""} onClick={() => pickTab("documents")}>
+          <FileText size={13} strokeWidth={1.8} /><span>Документы</span>
+        </button>
       </div>
       {tab === "tasks" && (
         <TaskPanel
@@ -145,6 +149,7 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
           history={s.termHistory}
           pendingConfirm={s.pendingTerm}
           onRun={(c) => void s.runTerminal(c)}
+          onRerun={(c) => void s.rerunTerminal(c)}
           onConfirm={(ok) => void s.confirmTerminal(ok)}
         />
       )}
@@ -154,7 +159,12 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
           status={s.gitStatus}
           log={s.gitLog}
           onRefresh={() => void s.loadGit()}
+          onCheckpoint={() => void s.gitCheckpoint()}
+          onRollback={() => void s.gitRollback()}
         />
+      )}
+      {tab === "documents" && (
+        <DocumentsPanel root={s.workspace?.current?.path ?? null} />
       )}
     </aside>
   );

@@ -19,6 +19,7 @@ import { Favicon, MessageError, SourcesList, hostOf, pathOf } from "./ToolBits";
 import { ToolActivityTimeline } from "./ToolActivity";
 import OrchestrationBoard from "./OrchestrationBoard";
 import CodeBlock, { CopyIconButton } from "./CodeBlock";
+import ArtifactView from "./ArtifactView";
 import { formatElapsed } from "../lib/format";
 
 interface Props {
@@ -424,6 +425,14 @@ const AssistantMessage = memo(function AssistantMessage({
             {streaming && <span className="caret" />}
           </div>
         ))}
+
+      {message.artifacts && message.artifacts.length > 0 && (
+        <div className="artifact-list">
+          {message.artifacts.map((artifact, index) => (
+            <ArtifactView key={index} artifact={artifact} />
+          ))}
+        </div>
+      )}
 
       {!streaming && cancelled && (
         <div className="msg-note cancelled-resume">

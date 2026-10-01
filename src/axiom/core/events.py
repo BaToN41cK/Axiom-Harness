@@ -66,6 +66,8 @@ class ToolResultEvent(BaseModel):
     content: str
     error: str | None = None
     duration_ms: int = 0
+    #: Structured tool data (e.g. a validated ``render_artifact`` payload).
+    data: dict[str, Any] | None = None
 
 
 class SourceItem(BaseModel):

@@ -17,11 +17,24 @@ DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 
 
 def axiom_home() -> Path:
-    """Root of AXIOM's local data (``AXIOM_HOME`` overrides the default)."""
+    """Root of AXIOM's local data.
+
+    Priority: ``AXIOM_HOME`` env override > portable mode (``AXIOM_PORTABLE=1``
+    or a ``.axiom-portable`` marker in the working directory) > ``~/.axiom``.
+    """
     override = os.environ.get("AXIOM_HOME")
     if override:
         return Path(override).expanduser()
+    if is_portable():
+        return Path.cwd() / ".axiom"
     return Path.home() / ".axiom"
+
+
+def is_portable() -> bool:
+    """True when portable mode is active (env flag or a ``.axiom-portable`` marker)."""
+    if os.environ.get("AXIOM_PORTABLE") == "1":
+        return True
+    return (Path.cwd() / ".axiom-portable").exists()
 
 
 class Config(BaseModel):

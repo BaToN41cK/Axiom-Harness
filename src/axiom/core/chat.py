@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 
 from axiom.core.agent import Agent
+from axiom.core.cancellation import CancelToken
 from axiom.core.config import Config
 from axiom.core.errors import (
     AxiomError,
@@ -81,6 +82,20 @@ from axiom.core.workspace import ProjectInfo, WorkspaceManager, detect_project
 CONTEXT_MESSAGES = 20
 
 _LOG = get_logger("chat")
+
+
+@dataclass
+class _TaskRun:
+    """One in-flight background task (W3.3).
+
+    Each entry owns its worker, its runner and its own ``CancelToken`` so that
+    ``task_cancel`` can stop exactly one task without touching the chat
+    generation or any other concurrently running task.
+    """
+
+    worker: asyncio.Task
+    runner: TaskRunner
+    token: CancelToken
 
 #: Every tool that touches the workspace filesystem. Global Chat (no project)
 #: drops exactly these from the registry; :meth:`set_workspace` puts them back.
@@ -253,6 +268,15 @@ class ChatSession:
         self._task: asyncio.Task | None = None
         self.active_task: Task | None = None
         self.active_task_runner: TaskRunner | None = None
+        #: W3.3 — detached/background task runs keyed by task id. A background
+        #: task is tracked here instead of ``self._task``/``self.active_task``,
+        #: so it runs independently of the foreground chat generation and of
+        #: other background tasks; ``task_cancel`` targets exactly one entry.
+        self._task_runs: dict[str, _TaskRun] = {}
+        #: W3.3 — maps each worker ``asyncio.Task`` to its runner, so the step
+        #: executor resolves the right CancelToken for concurrent tasks without
+        #: a shared ``active_task_runner`` slot.
+        self._task_worker_runners: dict[asyncio.Task, TaskRunner] = {}
         #: Fire-and-forget background model warm-up task. Created by the
         #: desktop bridge (``startup`` / ``set_model`` / ``warmup``); the
         #: session only keeps a reference so it can be awaited/cancelled.
@@ -943,9 +967,13 @@ class ChatSession:
             f"{role_line}{extras}"
         ).strip()
         request_registry = self.tools.subset(allowed)
-        if self.active_task_runner is not None:
-            # The worker's tools observe the task's shared CancelToken (W4.14).
-            request_registry.cancel_token = self.active_task_runner.cancel_token
+        cancel_token = kwargs.get("cancel_token")
+        if cancel_token is None and self.active_task_runner is not None:
+            # Fall back for callers that never thread a token (e.g. a foreground
+            # task run); the worker's tools observe the shared CancelToken (W4.14).
+            cancel_token = self.active_task_runner.cancel_token
+        if cancel_token is not None:
+            request_registry.cancel_token = cancel_token
         from axiom.core.tools.web_search import WebSearchTool
 
         request_web_tool = WebSearchTool(
@@ -1147,14 +1175,26 @@ class ChatSession:
         return "".join(parts)
 
     async def _execute_task_step(self, *, step, prompt: str, on_event) -> dict:
-        if self.active_task_runner is not None:
+        # W3.3: resolve the runner for the *current* worker task, so concurrent
+        # background tasks each observe their own CancelToken instead of a
+        # shared ``active_task_runner`` slot. ``active_task_runner`` is only the
+        # fallback for callers that never registered a worker mapping.
+        active = self._task_worker_runners.get(asyncio.current_task()) or self.active_task_runner
+        if active is not None:
             # Shared CancelToken: never start a model request after cancel (W4.14).
-            self.active_task_runner.cancel_token.raise_if_cancelled()
+            active.cancel_token.raise_if_cancelled()
         return await self._subagent_runner(
             agent="coder", task=prompt, tools=step.tools, trajectory=self.trajectory, on_event=on_event,
+            cancel_token=active.cancel_token if active is not None else None,
         )
 
     async def _verify_task(self, task: Task) -> dict:
+        # W3.3: verification permission is scoped to this exact task, so two
+        # concurrent background tasks never share one approval scope.
+        self.permissions.bind_context(
+            task_id=task.id,
+            project=str(self.workspace_root) if self.workspace_root else None,
+        )
         name = "verify_changes"
         if not self.sandbox.allows(name):
             return {"ok": False, "executed": False, "error": "Verification blocked by sandbox"}
@@ -1294,13 +1334,16 @@ class ChatSession:
         return task
 
     def task_delete(self, task_id: str) -> bool:
-        if self.active_task is not None and self.active_task.id == task_id:
+        if task_id in self._task_runs or (self.active_task is not None and self.active_task.id == task_id):
             self.task_cancel(task_id)
         return self.task_store.delete(task_id)
 
     async def task_start(self, goal: str, *, planning: bool | None = None, plan: dict | object | None = None,
                          detached: bool = False) -> Task:
-        if self.busy:
+        # W3.3: background (detached) tasks may run concurrently with the chat
+        # and with each other; only a foreground run occupies the single
+        # in-line generation slot and must wait for it to be free.
+        if not detached and self.busy:
             raise ValueError("A generation is already running")
         from axiom.core.planner import TaskPlan
         plan_obj: TaskPlan | None = None
@@ -1320,7 +1363,7 @@ class ChatSession:
         return await self._run_task(task, detached=detached)
 
     async def task_resume(self, task_id: str, *, acknowledge: bool = False, detached: bool = False) -> Task:
-        if self.busy:
+        if not detached and self.busy:
             raise ValueError("A generation is already running")
         task = self.task_store.load(task_id)
         if task is None:
@@ -1463,6 +1506,17 @@ class ChatSession:
             return recovered
 
     def task_cancel(self, task_id: str) -> bool:
+        # W3.3: cancel the exact background task, leaving every other running
+        # task and the chat generation untouched.
+        run = self._task_runs.get(task_id)
+        if run is not None:
+            # Cooperative signal first: the runner stops at its next checkpoint
+            # even if the hard asyncio cancel lands later (W4.14).
+            run.runner.request_cancel()
+            run.token.cancel()
+            if run.worker is not None and not run.worker.done():
+                run.worker.cancel()
+            return True
         if self.active_task is None or self.active_task.id != task_id:
             return False
         runner = self.active_task_runner
@@ -1472,10 +1526,24 @@ class ChatSession:
             runner.request_cancel()
         return self.cancel()
 
+    def running_task_ids(self) -> list[str]:
+        """Ids of tasks currently executing in the background (W3.3).
+
+        Includes the foreground run when one is active, so the UI can render an
+        honest active-task count for the tray/sidebar and completion toasts.
+        """
+        ids = [task_id for task_id, run in self._task_runs.items() if not run.worker.done()]
+        if self.active_task is not None and self.active_task.id not in ids and self.busy:
+            ids.append(self.active_task.id)
+        return sorted(ids)
+
     async def _run_task(self, task: Task, *, resume: bool = False, acknowledge: bool = False,
                         detached: bool = False) -> Task:
         from axiom.core.planner import Planner
 
+        # W3.3: every task run gets its own CancelToken so cancellation and the
+        # cooperative checkpoints stay isolated per task (never the chat slot).
+        token = CancelToken()
         runner = TaskRunner(
             store=self.task_store, planner=Planner(self._plan_task), execute=self._execute_task_step,
             verify=lambda: self._verify_task(task), tools=[d.name for d in self.tools.definitions()],
@@ -1483,6 +1551,7 @@ class ChatSession:
             workspace_root=self.workspace_root, context_max_tokens=self._context_budget(),
             max_verification_repairs=self.config.max_retries,
             skill_registry=self.skills, hooks=self.hooks,
+            cancel_token=token,
             # W4.11: only an explicit ``summarize`` role adds a model call to
             # context compaction; otherwise this stays None and compaction is
             # exactly the structured-state path it always was.
@@ -1520,31 +1589,28 @@ class ChatSession:
                     )
                 except Exception:
                     pass
-        self.active_task = task
-        self.active_task_runner = runner
-        # W4.9: task-scoped approvals live exactly as long as this run.
-        self.permissions.bind_context(
-            task_id=task.id,
-            project=str(self.workspace_root) if self.workspace_root else None,
-        )
         for tool in (self.terminal, self.verify_tools):
             if tool is not None:
                 tool.on_process = lambda event, _runner=runner, _task=task: _runner.process_event(_task, event)
         caller = asyncio.current_task()
         worker = asyncio.create_task(runner.run(task, resume=resume, acknowledge=acknowledge))
-        self._task = worker
+        # W3.3: map the worker to its runner so the step executor resolves the
+        # right CancelToken even when several tasks run concurrently.
+        self._task_worker_runners[worker] = runner
         if detached:
+            # W3.3: background tasks live in the registry, never in the single
+            # foreground slot, so they survive tab/chat switching and can run
+            # concurrently; ``task_cancel`` targets this exact entry.
+            self._task_runs[task.id] = _TaskRun(worker=worker, runner=runner, token=token)
+
             def clear(done: asyncio.Task) -> None:
-                if self._task is done:
-                    self._task = None
-                if self.active_task is task:
-                    self.active_task = None
-                    self.active_task_runner = None
-                    # W4.9: a detached run keeps its scope only while active.
-                    try:
-                        self.permissions.drop_task_scope(task.id)
-                    except Exception:
-                        pass
+                self._task_runs.pop(task.id, None)
+                self._task_worker_runners.pop(done, None)
+                # W4.9: a detached run keeps its scope only while active.
+                try:
+                    self.permissions.drop_task_scope(task.id)
+                except Exception:
+                    pass
                 # W4.11: a completed detached task archives its own memory.
                 if task.state == TaskState.COMPLETED:
                     try:
@@ -1556,6 +1622,14 @@ class ChatSession:
                     done.exception()
             worker.add_done_callback(clear)
             return task
+        self.active_task = task
+        self.active_task_runner = runner
+        # W4.9: task-scoped approvals live exactly as long as this run.
+        self.permissions.bind_context(
+            task_id=task.id,
+            project=str(self.workspace_root) if self.workspace_root else None,
+        )
+        self._task = worker
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
@@ -1572,6 +1646,7 @@ class ChatSession:
         finally:
             if self._task is worker:
                 self._task = None
+            self._task_worker_runners.pop(worker, None)
             # W4.9: leaving the run drops its task-scoped approvals.
             self.permissions.drop_task_scope(task.id)
             self.active_task = None
@@ -1744,8 +1819,15 @@ class ChatSession:
 
     @property
     def busy(self) -> bool:
-        """True while a generation is really in flight."""
-        return self._task is not None and not self._task.done()
+        """True while a generation is really in flight.
+
+        W3.3: includes every background task in the registry, so the UI still
+        reports "busy" while detached tasks run even though they never occupy
+        the single ``self._task`` foreground slot.
+        """
+        if self._task is not None and not self._task.done():
+            return True
+        return any(not run.worker.done() for run in self._task_runs.values())
 
     @property
     def model(self) -> ModelInfo | None:
@@ -2221,6 +2303,30 @@ class ChatSession:
             }
         return {"ok": False, "permission": "ask", "command": command, "risk": tier, "reason": reason}
 
+    def git_checkpoint(self) -> dict:
+        """Snapshot the workspace repo so later edits can be rolled back (W3.14)."""
+        if self.workspace_root is None:
+            return {"ok": False, "error": "No project is open"}
+        from axiom.core.git_safety import create_checkpoint
+
+        checkpoint = create_checkpoint(self.workspace_root)
+        self._checkpoint = checkpoint
+        self._checkpointed = True
+        return {"ok": checkpoint.ref not in ("no-git", "error"), "ref": checkpoint.ref}
+
+    def git_rollback(self) -> dict:
+        """Restore the workspace repo to the last checkpoint (destructive, §17)."""
+        checkpoint = getattr(self, "_checkpoint", None)
+        if checkpoint is None:
+            return {"ok": False, "error": "No checkpoint to roll back to — snapshot first"}
+        from axiom.core.git_safety import revert_to_checkpoint
+
+        result = revert_to_checkpoint(checkpoint)
+        if result.get("ok"):
+            self._checkpoint = None
+            self._checkpointed = False
+        return result
+
     def _save_conversation(self) -> None:
         if not self.config.save_history:
             return
@@ -2609,15 +2715,17 @@ class ChatSession:
             hint="Try again or switch to another model.",
         )
 
-    def _record_turn(self, user_text: str, content: str, thinking: str) -> None:
+    def _record_turn(self, user_text: str, content: str, thinking: str,
+                     artifacts: list[dict] | None = None) -> None:
         """Store the assistant turn (partial output is kept on cancellation)."""
-        if content or thinking:
+        if content or thinking or artifacts:
             self.conversation.messages.append(
                 Message(
                     role="assistant",
                     content=content,
                     thinking=thinking or None,
                     created_at=time.time(),
+                    artifacts=list(artifacts or []),
                 )
             )
         self._save_conversation()
@@ -2703,6 +2811,7 @@ class ChatSession:
         """Run the agent loop and push every real event into the queue."""
         content_parts: list[str] = []
         thinking_parts: list[str] = []
+        artifacts: list[dict] = []
         try:
             model = self.active_model
             if model is None:  # guarded by send(), kept for safety
@@ -2716,6 +2825,9 @@ class ChatSession:
                     content_parts.append(event.text)
                 elif isinstance(event, ReasoningChunk):
                     thinking_parts.append(event.text)
+                elif (isinstance(event, ToolResultEvent) and event.name == "render_artifact"
+                      and event.ok and event.data and event.data.get("artifact")):
+                    artifacts.append(dict(event.data["artifact"]))
                 queue.put_nowait(event)
 
             metrics = dict(self.agent.metrics)
@@ -2741,7 +2853,7 @@ class ChatSession:
                     load_ms=metrics.get("load_ms"),
                 )
             )
-            self._record_turn(text, content, thinking)
+            self._record_turn(text, content, thinking, artifacts=artifacts)
             try:
                 await self._auto_verify()
             except Exception:
@@ -2753,7 +2865,8 @@ class ChatSession:
                     pass
         except asyncio.CancelledError:
             self._final_status_to(queue, GenerationState.CANCELLED)
-            self._record_turn(text, "".join(content_parts).strip(), "".join(thinking_parts).strip())
+            self._record_turn(text, "".join(content_parts).strip(), "".join(thinking_parts).strip(),
+                              artifacts=artifacts)
             raise
         except AxiomError as exc:
             # Provider fallback (п.17): пока контент не стримился — пробуем цепочку.

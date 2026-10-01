@@ -10,6 +10,8 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 
+from axiom.core.paging import paginate
+
 
 @dataclass
 class TrajectoryEvent:
@@ -79,6 +81,22 @@ class Trajectory:
                 or needle in e.kind.casefold()
                 or needle in json.dumps(e.data, ensure_ascii=False).casefold()]
         return hits[:max(1, limit)]
+
+    def page(self, offset: int = 0, limit: int = 100) -> dict:
+        """One bounded window of the run plus the true total (pagination)."""
+        window = paginate(self._events, offset=offset, limit=limit)
+        return {
+            "run_id": self.run_id,
+            "total": window.total,
+            "offset": window.offset,
+            "limit": window.limit,
+            "has_more": window.has_more,
+            "events": [event.to_json() for event in window.items],
+        }
+
+    def since(self, seq: int) -> list[dict]:
+        """Return only events appended after ``seq`` (a delta, not a resend)."""
+        return [event.to_json() for event in self._events if event.seq > seq]
 
     def fork(self, *, actor: str = "") -> Trajectory:
         child = Trajectory(actor=actor or self.actor)

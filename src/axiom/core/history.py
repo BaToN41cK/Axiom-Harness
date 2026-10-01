@@ -48,6 +48,8 @@ class Conversation(BaseModel):
     #: Sidebar organisation (GUI): pinned to the top / filed under a folder.
     pinned: bool = False
     folder: str | None = None
+    #: W3.9: message indices the user bookmarked (0-based, persisted with history).
+    bookmarks: list[int] = Field(default_factory=list)
 
     def touch(self) -> None:
         self.updated_at = time.time()
@@ -279,6 +281,23 @@ class HistoryStore:
         if folder is not ...:
             clean = " ".join((folder or "").split())[:40] or None
             conversation.folder = clean
+        try:
+            self.save(conversation)
+        except OSError:
+            return False
+        return True
+
+    def set_bookmark(self, conversation_id: str, index: int, bookmarked: bool) -> bool:
+        """Persist a message bookmark (W3.9). Returns False when the chat is gone."""
+        conversation = self.load(conversation_id)
+        if conversation is None:
+            return False
+        if not 0 <= index < len(conversation.messages):
+            return False
+        marks = [i for i in conversation.bookmarks if i != index]
+        if bookmarked:
+            marks.append(index)
+        conversation.bookmarks = sorted(set(marks))
         try:
             self.save(conversation)
         except OSError:

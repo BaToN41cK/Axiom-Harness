@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CircleCheck, CircleX, Terminal, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleX, RotateCcw, Terminal, TriangleAlert } from "lucide-react";
 import type { TerminalResult } from "../types";
 
 interface Props {
@@ -8,12 +8,13 @@ interface Props {
   history: { command: string; result: TerminalResult }[];
   pendingConfirm: string | null;
   onRun: (command: string) => void;
+  onRerun: (command: string) => void;
   onConfirm: (allow: boolean) => void;
 }
 
 /** Real terminal in the workspace dir (§6–§7, §12). */
 export default function TerminalPanel(props: Props) {
-  const { cwd, enabled, history, pendingConfirm, onRun, onConfirm } = props;
+  const { cwd, enabled, history, pendingConfirm, onRun, onRerun, onConfirm } = props;
   const [draft, setDraft] = useState("");
   const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -41,6 +42,14 @@ export default function TerminalPanel(props: Props) {
             <div key={i} className="term-entry">
               <div className="term-cmd">
                 <span className="term-ps">›</span> {h.command}
+                <button
+                  className="icon-btn tiny term-rerun"
+                  title="Повторить команду"
+                  disabled={!enabled}
+                  onClick={() => onRerun(h.command)}
+                >
+                  <RotateCcw size={11} strokeWidth={1.8} />
+                </button>
               </div>
               <pre className={"term-out" + (failed ? " err" : "")}>
                 {h.result.ok ? h.result.content || "(no output)" : h.result.error ?? "(no output)"}

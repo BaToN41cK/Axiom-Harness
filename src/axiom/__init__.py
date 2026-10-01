@@ -52,7 +52,9 @@ from axiom.core.mcp import MCPClient, MCPManager, MCPServer
 from axiom.core.memory import MemoryCategory, MemoryItem, MemoryScope, MemoryStore, MemoryTools
 from axiom.core.models import ModelInfo, ModelRegistry
 from axiom.core.orchestrator import Orchestrator
+from axiom.core.paging import Page, paginate, paginate_diff, paginate_lines
 from axiom.core.parallel import ParallelResult, run_parallel
+from axiom.core.performance import MetricsSnapshot, Timer, capture_metrics, compare_metrics
 from axiom.core.planner import Planner, PlanStep, TaskPlan
 from axiom.core.plugins import PluginManifest, PluginRegistry, UIExtension, UIExtensionBlock
 from axiom.core.presets import AgentPreset, PresetStore, detect_mode
@@ -201,4 +203,12 @@ __all__ = [
     "ModelNotFoundError",
     "OllamaUnavailableError",
     "SearchUnavailableError",
+    "MetricsSnapshot",
+    "Page",
+    "Timer",
+    "capture_metrics",
+    "compare_metrics",
+    "paginate",
+    "paginate_diff",
+    "paginate_lines",
 ]

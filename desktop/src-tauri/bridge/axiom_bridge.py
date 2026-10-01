@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 from itertools import count
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from axiom.core.chat import ChatSession
 from axiom.core.config import Config
+from axiom.core.e2e_model import install_scripted_model
 from axiom.core.events import ChatEvent
 from axiom.core.models import ModelInfo
 from axiom.core.search.multi import search_provider_choices
@@ -53,6 +55,28 @@ def _model_json(m, loaded: bool = False, provider_id: str = "ollama", source: st
         "loaded": loaded,
         "providerId": provider_id,
         "source": source,
+    }
+
+
+def _artifact_workspace(session: ChatSession):
+    """Return the ArtifactWorkspace for the current workspace (or raise)."""
+    from axiom.core.artifact_workspace import ArtifactWorkspace
+
+    root = session.workspace_root
+    if root is None:
+        raise ValueError("No project is open")
+    return ArtifactWorkspace(root)
+
+
+def document_meta(document) -> dict:
+    """A compact list row (no full content) for the Documents view."""
+    return {
+        "id": document.id,
+        "title": document.title,
+        "kind": document.kind,
+        "version": document.version,
+        "updated_at": document.updated_at,
+        "task_id": document.task_id,
     }
 
 
@@ -103,6 +127,7 @@ def _conversation_full(c) -> dict:
             "thinking": m.thinking,
             "name": m.name,
             "images": list(m.images or []),
+            "artifacts": list(m.artifacts or []),
         }
         for m in c.messages
     ]
@@ -133,6 +158,7 @@ def _event_json(e: ChatEvent) -> dict:
             "content": e.content,
             "error": e.error,
             "durationMs": e.duration_ms,
+            "data": e.data,
         }
     if isinstance(e, SearchResultEvent):
         return {
@@ -374,6 +400,93 @@ async def _watch_orchestration(session: ChatSession, baseline: int,
             pass
 
 
+async def _plugin_capability(session: ChatSession, request) -> dict:
+    """Execute a validated plugin capability request (W3.1).
+
+    The scope gate has already allowed this method; each handler is bounded and
+    never raises out of the bridge — a plugin can only ever receive a structured
+    ``{ok, data, error}`` reply.
+    """
+    method = request.method
+    params = request.params or {}
+    result: dict = {"id": request.id, "plugin": request.plugin, "ok": True, "data": None, "error": None}
+    try:
+        if method in {"ui.render", "ui.command", "ui.event"}:
+            result["data"] = {"ack": True}
+        elif method in {"clipboard.read", "clipboard.write"}:
+            result["ok"] = False
+            result["error"] = "clipboard is not available in the core bridge"
+        elif method in {"net.http_get", "net.http_post"}:
+            import httpx
+
+            url = str(params.get("url") or "").strip()
+            if not url:
+                result["ok"] = False
+                result["error"] = "url is required"
+            else:
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+                    if method == "net.http_get":
+                        response = await client.get(url)
+                    else:
+                        response = await client.post(url, json=params.get("json"), data=params.get("data"))
+                result["data"] = {"status": response.status_code, "body": response.text[:4000]}
+        elif method == "fs.read":
+            root = session.workspace_root
+            if root is None:
+                result["ok"] = False
+                result["error"] = "no project is open"
+            else:
+                target = _workspace_path(root, params)
+                if target is None:
+                    result["ok"] = False
+                    result["error"] = "path is outside the workspace"
+                else:
+                    result["data"] = {"content": target.read_text(encoding="utf-8", errors="replace")[:20000]}
+        elif method == "fs.list":
+            root = session.workspace_root
+            if root is None:
+                result["ok"] = False
+                result["error"] = "no project is open"
+            else:
+                target = _workspace_path(root, params) or root
+                result["data"] = {"entries": sorted(
+                    p.relative_to(root).as_posix() for p in target.iterdir())}
+        elif method == "fs.write":
+            root = session.workspace_root
+            if root is None:
+                result["ok"] = False
+                result["error"] = "no project is open"
+            else:
+                target = _workspace_path(root, params)
+                if target is None:
+                    result["ok"] = False
+                    result["error"] = "path is outside the workspace"
+                else:
+                    content = str(params.get("content") or "")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content[:20000], encoding="utf-8")
+                    result["data"] = {"path": target.relative_to(root).as_posix()}
+        else:
+            result["ok"] = False
+            result["error"] = f"capability '{method}' is not available"
+    except Exception as exc:  # a capability must never crash the bridge
+        result["ok"] = False
+        result["data"] = None
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _workspace_path(root: Path, params: dict) -> Path | None:
+    """Resolve a plugin fs path inside ``root``; ``None`` if it escapes."""
+    rel = str(params.get("path") or "").replace("\\", "/")
+    if not rel or rel.startswith("/") or ":" in rel:
+        return None
+    target = (root / rel).resolve()
+    if target != root.resolve() and root.resolve() not in target.parents:
+        return None
+    return target
+
+
 async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
     if cmd in {"set_workspace", "clear_workspace"}:
         # A workspace belongs to the whole ChatSession. Switching it during a
@@ -399,7 +512,10 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             _write_line(json.dumps({"type": "event", "event": payload}, ensure_ascii=False))
 
         detached = cmd in {"task_launch", "task_continue"}
-        if session.busy:
+        # W3.3: background (detached) tasks may run concurrently with the chat
+        # and with each other; only a foreground task launch needs the single
+        # in-line generation slot to be free.
+        if not detached and session.busy:
             raise ValueError("A generation is already running")
         # Detached tasks use the bridge-wide subscription installed in _run;
         # a request's lifetime must not own the task's event stream.
@@ -452,6 +568,10 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         return task.model_dump(mode="json") if task is not None else None
     if cmd == "tasks":
         return [task.model_dump(mode="json") for task in session.task_store.list()]
+    if cmd == "running_tasks":
+        # W3.3: ids of tasks executing right now, for an honest active-task
+        # count in the UI (tray/sidebar/completion toasts).
+        return session.running_task_ids()
     if cmd == "health":
         available = await session.client.is_available()
         version = None
@@ -515,6 +635,59 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         if not name:
             raise ValueError("name is required")
         return {"name": name, "removed": session.remove_plugin(name)}
+    if cmd == "plugin_host":
+        # W3.1: the typed UI host gate. The desktop iframe/Worker forwards a
+        # validated request here; ScopeGate enforces least privilege against the
+        # plugin's declared scopes *before* any capability handler runs.
+        from axiom.core.plugin_host import ScopeGate, parse_request
+
+        raw = {
+            "id": str(args.get("id") or "1"),
+            "plugin": str(args.get("plugin") or ""),
+            "method": str(args.get("method") or ""),
+            "params": args.get("params") if isinstance(args.get("params"), dict) else {},
+        }
+        request = parse_request(raw)
+        if isinstance(request, str):
+            return {"id": raw["id"], "plugin": raw["plugin"], "ok": False, "error": request}
+        manifest = session.plugins.get(request.plugin) if request.plugin else None
+        scopes: frozenset[str] = frozenset()
+        if manifest is not None and manifest.ui_block is not None:
+            scopes = frozenset(manifest.ui_block.scopes)
+        if ScopeGate(declared=scopes).denied(request.method):
+            return {"id": request.id, "plugin": request.plugin, "ok": False,
+                    "error": f"scope not granted for '{request.method}'"}
+        return await _plugin_capability(session, request)
+    if cmd == "plugin_commands":
+        # W3.1: the ``command`` extensions declared by enabled plugins, so the
+        # palette can surface them without any host hardcoding.
+        commands = []
+        for manifest in session.plugins.list(enabled_only=True):
+            if manifest.ui_block is None:
+                continue
+            for extension in manifest.ui_block.extensions:
+                if extension.type != "command":
+                    continue
+                commands.append({
+                    "plugin": manifest.name,
+                    "id": extension.id,
+                    "title": str((extension.meta or {}).get("title") or extension.id),
+                })
+        return commands
+    if cmd == "plugin_ui_html":
+        # W3.1: the plugin's own UI document, served into a sandboxed iframe.
+        # Only an installed plugin with a ``ui/index.html`` has one; the host
+        # renders a declarative fallback otherwise.
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("name is required")
+        manifest = session.plugins.get(name)
+        if manifest is None or not manifest.source_dir:
+            return {"html": None}
+        ui_html = Path(manifest.source_dir) / "ui" / "index.html"
+        if not ui_html.exists():
+            return {"html": None}
+        return {"html": ui_html.read_text(encoding="utf-8")[:100_000]}
     if cmd == "model_info":
         provider_id = str(args.get("provider_id") or args.get("providerId") or "ollama")
         target = str(args.get("name") or "")
@@ -910,6 +1083,10 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             return {"ok": True, "diff": git_diff_file(root, str(args.get("path", "")))}
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+    if cmd == "git_checkpoint":
+        return session.git_checkpoint()
+    if cmd == "git_rollback":
+        return session.git_rollback()
     if cmd == "apply_patch":
         # User action from a diff block must pass the same sandbox, permission,
         # workspace, audit and checkpoint gates as any model-initiated patch.
@@ -950,6 +1127,58 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             if len(parts) >= 2:
                 hits.append({"path": parts[0].strip(), "preview": (parts[2] if len(parts) == 3 else "").strip()})
         return {"query": query, "hits": hits}
+    if cmd == "chat_export":
+        # W3.9: export a stored conversation to Markdown + JSON (real messages).
+        from axiom.core.chat_export import export_conversation
+
+        cid = str(args.get("id", "")).strip()
+        if not cid:
+            raise ValueError("id is required")
+        conversation = session.history_store.load(cid)
+        if conversation is None:
+            raise ValueError(f"conversation '{cid}' not found")
+        return export_conversation(conversation)
+    if cmd == "artifact_list":
+        # W3.17: list artifact documents for the current workspace.
+        workspace = _artifact_workspace(session)
+        return [document_meta(document) for document in workspace.list()]
+    if cmd == "artifact_get":
+        workspace = _artifact_workspace(session)
+        artifact_id = str(args.get("id", "")).strip()
+        if not artifact_id:
+            raise ValueError("id is required")
+        document = workspace.load(artifact_id)
+        if document is None:
+            raise ValueError(f"artifact '{artifact_id}' not found")
+        return document.model_dump()
+    if cmd == "artifact_save":
+        workspace = _artifact_workspace(session)
+        artifact_id = str(args.get("id", "")).strip() or None
+        title = str(args.get("title") or "").strip()
+        content = str(args.get("content") or "")
+        if artifact_id is None and not title:
+            raise ValueError("title is required for a new document")
+        if artifact_id is None:
+            document = workspace.create(title, content, task_id=args.get("task_id"),
+                                        kind=str(args.get("kind") or "markdown"))
+        else:
+            document = workspace.update(artifact_id, content)
+            if document is None:
+                raise ValueError(f"artifact '{artifact_id}' not found")
+        return document.model_dump()
+    if cmd == "artifact_delete":
+        workspace = _artifact_workspace(session)
+        artifact_id = str(args.get("id", "")).strip()
+        if not artifact_id:
+            raise ValueError("id is required")
+        return {"deleted": workspace.delete(artifact_id)}
+    if cmd == "artifact_export":
+        workspace = _artifact_workspace(session)
+        artifact_id = str(args.get("id", "")).strip()
+        path = str(args.get("path", "")).strip()
+        if not artifact_id or not path:
+            raise ValueError("id and path are required")
+        return {"ok": workspace.export(artifact_id, Path(path)), "path": path}
     if cmd == "chat_meta":
         cid = str(args.get("id", ""))
         ok = session.history_store.set_meta(
@@ -1114,6 +1343,8 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
 
 
 async def _run() -> None:
+    if os.environ.get("AXIOM_E2E_SCRIPTED_MODEL") == "1":
+        install_scripted_model()
     loop = asyncio.get_running_loop()
     session = ChatSession()
     # Keep task events flowing independently of the command that launched a

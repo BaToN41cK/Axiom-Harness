@@ -24,7 +24,16 @@ from typing import Any
 
 from axiom.core.chat import ChatSession
 from axiom.core.config import Config
-from axiom.core.events import ContentChunk, Done, ErrorEvent
+from axiom.core.events import (
+    ContentChunk,
+    Done,
+    ErrorEvent,
+    ReasoningChunk,
+    SearchResultEvent,
+    StatusChange,
+    ToolCallEvent,
+    ToolResultEvent,
+)
 
 #: A session factory builds the runtime for one run; the default uses ChatSession.
 SessionFactory = Callable[[Config], Any]
@@ -87,6 +96,53 @@ async def run_headless(
         "state": state,
         "metrics": metrics,
     }
+
+
+async def stream_headless(
+    prompt: str,
+    config: Config | None = None,
+    *,
+    session_factory: SessionFactory | None = None,
+):
+    """Yield normalized JSON-ready events for one prompt (W3.6 transport).
+
+    Same runtime as :func:`run_headless`, but streaming — every event the core
+    emits (reasoning/content/tool/status/done) is forwarded as a JSON-ready dict
+    so a WebSocket/SSE/browser adapter can render it live without re-embedding
+    agent logic.
+    """
+    cfg = config or Config.load()
+    factory = session_factory or (lambda c: ChatSession(config=c))
+    session = factory(cfg)
+    try:
+        async for event in session.send(prompt):
+            if isinstance(event, ReasoningChunk):
+                yield {"type": "reasoning", "text": event.text}
+            elif isinstance(event, ContentChunk):
+                yield {"type": "content", "text": event.text}
+            elif isinstance(event, StatusChange):
+                yield {"type": "status", "state": event.state.value, "detail": event.detail}
+            elif isinstance(event, ToolCallEvent):
+                yield {"type": "tool_call", "name": event.name, "arguments": event.arguments}
+            elif isinstance(event, ToolResultEvent):
+                yield {"type": "tool_result", "name": event.name, "ok": event.ok,
+                       "content": event.content, "error": event.error,
+                       "duration_ms": event.duration_ms}
+            elif isinstance(event, SearchResultEvent):
+                yield {"type": "search_result", "query": event.query,
+                       "sources": [source.model_dump() for source in event.sources]}
+            elif isinstance(event, ErrorEvent):
+                yield {"type": "error", "message": event.message,
+                       "kind": event.kind, "hint": event.hint}
+            elif isinstance(event, Done):
+                yield {"type": "done", "state": event.state.value,
+                       "duration_ms": event.duration_ms, "tokens_in": event.tokens_in,
+                       "tokens_out": event.tokens_out,
+                       "tokens_per_second": event.tokens_per_second,
+                       "ttft_ms": event.ttft_ms, "load_ms": event.load_ms,
+                       "stop_reason": event.stop_reason}
+    except Exception as exc:  # the stream must report, never crash the transport
+        yield {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
 
 
 def main_run(argv: list[str]) -> int:
@@ -192,6 +248,69 @@ class LocalApiServer:
             self._server = None
 
 
+class WebSocketStreamServer:
+    """Token-protected localhost WebSocket transport over the canonical runtime (W3.6).
+
+    A client connects, sends the bearer token as the first frame, then a JSON
+    ``{"prompt": "..."}``; the server streams the real event stream back as JSON
+    lines until the terminal ``done`` event. ``websockets`` is imported lazily so
+    the HTTP API keeps working without it.
+    """
+
+    def __init__(
+        self,
+        *,
+        token: str | None = None,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        session_factory: SessionFactory | None = None,
+    ) -> None:
+        problems = validate_bind_host(host)
+        if problems:
+            raise ValueError(problems[0])
+        self.token = token or secrets.token_urlsafe(24)
+        self.host = host
+        self.port = port
+        self.session_factory = session_factory
+        self._server: Any = None
+
+    async def _handle(self, websocket) -> None:
+        try:
+            first = await websocket.recv()
+        except Exception:
+            return
+        if first != self.token:
+            await websocket.send(json.dumps({"type": "error", "message": "unauthorized"}))
+            await websocket.close(code=1008, reason="unauthorized")
+            return
+        try:
+            payload = json.loads(await websocket.recv())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            await websocket.send(json.dumps({"type": "error", "message": "invalid JSON body"}))
+            return
+        prompt = str(payload.get("prompt", "")).strip()
+        if not prompt:
+            await websocket.send(json.dumps({"type": "error", "message": "missing 'prompt'"}))
+            return
+        async for event in stream_headless(prompt, session_factory=self.session_factory):
+            await websocket.send(json.dumps(event, ensure_ascii=False))
+
+    async def start(self) -> int:
+        """Bind and serve; returns the bound port (await ``stop()`` to close)."""
+        import websockets
+
+        self._server = await websockets.serve(self._handle, self.host, self.port)
+        first = self._server.sockets[0]
+        self.port = int(first.getsockname()[1])
+        return self.port
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+
 def main_serve(argv: list[str]) -> int:
     """``axiom serve [--token T] [--host 127.0.0.1] [--port N]``."""
     host = _arg(argv, "--host", "127.0.0.1") or "127.0.0.1"
@@ -219,8 +338,10 @@ def main_serve(argv: list[str]) -> int:
 __all__ = [
     "LOCAL_BINDS",
     "LocalApiServer",
+    "WebSocketStreamServer",
     "main_run",
     "main_serve",
     "run_headless",
+    "stream_headless",
     "validate_bind_host",
 ]

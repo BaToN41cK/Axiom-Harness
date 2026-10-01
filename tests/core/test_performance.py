@@ -12,9 +12,12 @@ from axiom.core.performance import (
     AGENT_MODE,
     QUICK_MODE,
     PerformanceMetrics,
+    Timer,
     adapt_level,
+    capture_metrics,
     classify_cold,
     classify_mode,
+    compare_metrics,
     complexity_of,
     diagnose,
     summarize_runs,
@@ -224,6 +227,24 @@ def test_thinking_level_presets_capability_and_adaptive():
     assert thinking_level("привет", model_supports_thinking=True) == "low"
     assert thinking_level("почему падает тест", model_supports_thinking=True) == "high"
     assert thinking_level("почему падает", model_supports_thinking=False) is None
+
+
+def test_capture_and_compare_metrics():
+    before = capture_metrics(events=3, tokens=10)
+    after = capture_metrics(events=8, tokens=25)
+    delta = compare_metrics(before, after)
+    assert delta["counters"]["events"] == 5
+    assert delta["counters"]["tokens"] == 15
+    assert delta["elapsed_seconds"] >= 0.0
+
+
+def test_timer_measures_elapsed(monkeypatch):
+    clock = {"now": 10.0}
+    monkeypatch.setattr("axiom.core.performance.time.monotonic", lambda: clock["now"])
+    with Timer() as timer:
+        clock["now"] = 10.5
+    assert timer.elapsed == 0.5
+
     assert thinking_level("x", model_supports_thinking=True, mode="deep") == "high"
     assert thinking_level("x", model_supports_thinking=True, mode="fast") == "low"
     assert thinking_level("почему падает", model_supports_thinking=True, last_ttft_ms=9000) == "medium"

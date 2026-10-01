@@ -314,6 +314,15 @@
 .pm-dl dd { overflow-wrap: anywhere; }
 .pm-dl dt:nth-last-of-type(1), .pm-dl dd:last-of-type { border-bottom: 0; }
 
+/* W3.1 — isolated plugin panel host */
+.plugin-panel { display: flex; flex-direction: column; gap: 8px; }
+.plugin-panel-bar { display: flex; align-items: center; justify-content: space-between; }
+.plugin-panel-title { font-size: 12px; font-weight: 650; color: var(--ax-text-muted); text-transform: uppercase; letter-spacing: .06em; }
+.plugin-panel-frame { width: 100%; min-height: 320px; border: 1px solid var(--ax-border); border-radius: 11px; background: #050507; display: block; }
+.plugin-panel-empty { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 18px; border: 1px dashed var(--ax-border); border-radius: 11px; color: var(--ax-text); }
+.plugin-panel-empty span { font-size: 13px; font-weight: 600; }
+.plugin-panel-empty small { font-size: 12px; color: var(--ax-text-muted); }
+
 @media (prefers-reduced-motion: reduce) {
   .pm-card, .pm-cover img, .prov-detail, .pm-detail, .pm-tab-body { transition: none !important; animation: none !important; }
 }

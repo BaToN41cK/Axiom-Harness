@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
+  Camera,
   CircleCheck,
   CircleHelp,
   FileMinus,
@@ -8,6 +9,7 @@ import {
   FolderGit2,
   GitBranch,
   RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import type { ProjectInfo } from "../types";
 
@@ -22,6 +24,8 @@ interface Props {
   status: GitState | null;
   log: GitState | null;
   onRefresh: () => void;
+  onCheckpoint: () => void;
+  onRollback: () => void;
 }
 
 /** One real change of `git status --short`: letter + path. */
@@ -118,8 +122,9 @@ function EmptyState({ title, note }: { title: string; note: string }) {
 
 /** Git panel: branch / status / log (§17). Read-only facts from the backend. */
 export default function GitPanel(props: Props) {
-  const { project, status, log, onRefresh } = props;
+  const { project, status, log, onRefresh, onCheckpoint, onRollback } = props;
   const changes = useMemo(() => parseChanges(status?.ok ? status.content : null), [status]);
+  const [confirmRollback, setConfirmRollback] = useState(false);
 
   // Global Chat: no project → no git state to show. Keep an explicit empty
   // state so the tab never looks broken/blank.
@@ -161,7 +166,31 @@ export default function GitPanel(props: Props) {
         <button className="icon-btn tiny" title="Обновить" onClick={onRefresh}>
           <RefreshCw size={12} strokeWidth={1.8} />
         </button>
+        <button className="icon-btn tiny" title="Создать снимок" onClick={onCheckpoint}>
+          <Camera size={12} strokeWidth={1.8} />
+        </button>
+        <button className="icon-btn tiny" title="Откат к снимку" onClick={() => setConfirmRollback(true)}>
+          <RotateCcw size={12} strokeWidth={1.8} />
+        </button>
       </div>
+
+      {confirmRollback && (
+        <div className="gp-rollback-confirm">
+          <span>Откатить рабочее дерево к последнему снимку? Несохранённые изменения будут потеряны.</span>
+          <button
+            className="mini-btn danger"
+            onClick={() => {
+              setConfirmRollback(false);
+              onRollback();
+            }}
+          >
+            Откатить
+          </button>
+          <button className="mini-btn" onClick={() => setConfirmRollback(false)}>
+            Отмена
+          </button>
+        </div>
+      )}
 
       {changes.length === 0 && (
         <div className="gp-clean">

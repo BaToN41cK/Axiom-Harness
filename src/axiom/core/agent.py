@@ -540,6 +540,7 @@ class Agent:
             content=result.content if result.ok else "",
             error=result.error,
             duration_ms=result.duration_ms,
+            data=result.data,
         )
         if call.name == WEB_SEARCH_TOOL and result.ok:
             query = str(call.arguments.get("query") or "")

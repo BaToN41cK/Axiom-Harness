@@ -42,6 +42,9 @@ export function updateLive(
       const copy: LiveMessage = {
         ...message,
         toolCalls: message.toolCalls.map((tool) => ({ ...tool })),
+        // W3.4: clone the artifacts array so a later push never mutates a
+        // previously-rendered message's state.
+        artifacts: message.artifacts ? [...message.artifacts] : undefined,
       };
       mutate(copy);
       const next = [...messages];

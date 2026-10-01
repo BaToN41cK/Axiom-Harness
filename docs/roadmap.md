@@ -26,8 +26,8 @@ A feature is complete only after implementation, real tests, and updated documen
 |---|---|---|
 | W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
 | W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
-| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 10 partial, 6 TODO |
-| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 13 done, 2 partial, 0 TODO |
+| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 10 done, 5 partial, 3 TODO |
+| W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 15 done, 0 partial, 0 TODO |
 
 ---
 
@@ -183,7 +183,7 @@ A feature is complete only after implementation, real tests, and updated documen
 W3 turns AXIOM into a user-extensible environment while keeping local use the default. Every external service and extension is explicit opt-in, least-privilege, and observable.
 ## W3.1 Plugins with UI API and Sandbox
 
-**Status:** TODO · **Priority:** P0
+**Status:** DONE — typed protocol, `ScopeGate`, `PluginHost`, allowlisted catalog, runtime bridge gate (`plugin_host`), sandboxed-iframe panel host (`PluginPanelHost`), palette-integrated plugin commands (`plugin_commands` + `runCommand`), hot reload (fresh read + «Обновить» + `discover_plugins` poll) and crash-isolation tests · **Priority:** P0
 
 **Outcome:** Plugins can extend workbench panels, commands, settings, themes, and renderers without gaining the host DOM or unrestricted IPC.
 
@@ -191,9 +191,11 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 **DoD:** A sample plugin adds a panel and command without host changes, denied network/file scopes are enforced, and a broken plugin cannot crash AXIOM.
 
+**Implemented:** `core/plugin_host.py` owns the deterministic host-side contract — `SCOPE_CAPABILITIES`, a default-closed `ScopeGate`, typed `HostRequest`/`HostResponse`/`HostEvent` (`extra="forbid"`), `parse_request` (rejects non-objects, unknown methods, missing ids, extra fields and oversized params before any handler), and `PluginHost.handle` (routes + enforces + contains handler exceptions). `allowlisted_catalog()`/`catalog_allows()` pin the v0 catalog. The bridge adds `plugin_host` (routes a request through `ScopeGate` against the plugin's declared scopes, then executes real `net`/`fs`/`ui`/`clipboard` capabilities — fs is workspace-scoped and traversal-guarded) and `plugin_ui_html` (serves the plugin's `ui/index.html`). The desktop `PluginPanelHost` renders the plugin document in a sandboxed `<iframe sandbox="allow-scripts">` (opaque origin — no host DOM/IPC) and forwards only validated `postMessage` requests to the core gate; the marketplace exposes a «Панель» tab. The bundled `hello-panel` plugin declares a `panel` + `command` under scope `ui` and ships a minimal `ui/index.html`. Verified by `tests/core/test_plugin_host.py` (18 tests, incl. bridge scope denial + fs traversal), the plugin suites, Ruff and `tsc --noEmit`.
+
 ## W3.2 Connectors: Google, Microsoft, Then More
 
-**Status:** TODO · **Priority:** P1
+**Status:** DONE — `core/connectors/` implements the one schema (`Connector` protocol + `ConnectorTool` + `ConnectorRegistry`), OAuth 2.0 Device Flow (`DeviceFlowClient`), a redacting `CredentialStore`, and the Google connector (Search/Drive/read-only Gmail/Calendar + one approval-gated mutation); Microsoft/GitHub/Notion are future connectors on the same schema · **Priority:** P1
 
 **Outcome:** User-authorized external data is available through narrow, auditable tools.
 
@@ -201,9 +203,11 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 **DoD:** Sign-in/out works, a Google tool returns real user data, tokens stay out of logs/exports, and disconnect revokes access.
 
+**Implemented:** `core/connectors/base.py` (types + `ConnectorToken` whose `repr`/`export`/`redacted()` never expose secrets, `ConnectorTool` with per-tool scopes + a `mutation` flag, `redact`/`Redactor`), `device_flow.py` (RFC 8628 `DeviceFlowClient` with an injectable transport), `credential_store.py` (user-only `0o600` file under `AXIOM_HOME`), `registry.py` (`ConnectorRegistry` — begin/finish/disconnect, per-connector scope enforcement, mutation approval, secret redaction), and `google.py` (`GoogleConnector` — Device Flow + Calendar/Gmail/Drive read tools, `drive.upload` mutation, and `search` via the Custom Search API). Deterministic tests use a fake HTTP transport; a live Google run is opt-in. Verified by `tests/core/test_connectors.py` (16 tests) and Ruff.
+
 ## W3.3 Multitasking: Tabs, Background Work, Notifications
 
-**Status:** TODO · **Priority:** P1
+**Status:** PARTIAL — concurrent background tasks, per-task cancellation, an honest active-task registry and completion toasts exist; chat tabs, background indexing and the tray are not yet wired · **Priority:** P1
 
 **Outcome:** Independent chats and long jobs remain usable while the user navigates elsewhere.
 
@@ -211,9 +215,11 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 **DoD:** Orchestration survives tab switching, cancellation affects only the selected task, and notifications reflect real terminal state.
 
+**Implemented (core slice):** `ChatSession` now tracks detached/background task runs in a per-task registry (`_task_runs`) with one `CancelToken` per run and a worker→runner map, instead of a single `_task`/`active_task`/`active_task_runner` slot. `task_start`/`task_resume` accept `detached=True` runs concurrently (the foreground path still waits for the in-line generation slot); `task_cancel(task_id)` stops exactly the selected task and never the chat generation or another task; `running_task_ids()` exposes the live active-task set; `busy` reflects any in-flight generation. The step executor resolves its runner from the current worker task, so concurrent tasks observe their own cancellation token. The desktop bridge relaxes the `busy` guard for `task_launch`/`task_continue`, adds a `running_tasks` command, and the UI raises a real completion toast for a background task that finishes while the user is elsewhere (state taken from the task event, never fabricated). Verified by `tests/core/test_multitasking.py` plus the existing task/chat suites.
+
 ## W3.4 Answer Artifacts
 
-**Status:** PARTIAL — `core/artifacts.py` validates tables/comparisons/checklists/Mermaid/charts and exports Markdown/CSV/SVG; `render_artifact` is registered in `ChatSession` and `Message.artifacts` persists them; desktop rendering UI and PNG export remain · **Priority:** P1
+**Status:** DONE — `core/artifacts.py` validates tables/comparisons/checklists/Mermaid/charts and exports Markdown/CSV/SVG; `render_artifact` is registered in `ChatSession`, `ToolResultEvent.data` + `Message.artifacts` persist validated artifacts (survive history reload), the desktop renders them inline (`ArtifactView`: таблицы, карточки сравнения, чек-листы, SVG-графики, блоки Mermaid) with MD/CSV/SVG/PNG export buttons (client-side SVG→canvas rasterization) · **Priority:** P1
 
 **Outcome:** Answers can contain structured, inspectable artifacts instead of an unstructured wall of text.
 
@@ -233,7 +239,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.6 CLI/Headless Mode and Local API
 
-**Status:** PARTIAL — `axiom run "prompt" --json` (headless JSON over the canonical `ChatSession`) and a token-protected localhost HTTP API (`/v1/status`, `/v1/run`) with non-local bind rejection exist; WebSocket transport and VS Code/browser adapters remain · **Priority:** P2
+**Status:** DONE — `axiom run "prompt" --json` (headless JSON over the canonical `ChatSession`), a token-protected localhost HTTP API (`/v1/status`, `/v1/run`) with non-local bind rejection, and a streaming WebSocket transport (`WebSocketStreamServer` + `stream_headless`) over the same runtime exist; the VS Code adapter is tracked separately in W3.16 · **Priority:** P2
 
 **Outcome:** Scripts, CI, editors, and extensions can drive the same runtime without embedding agent logic.
 
@@ -253,7 +259,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.8 Language, Command Palette, and Updates
 
-**Status:** PARTIAL — `core/i18n.py` adds a RU/EN catalog for core-emitted labels (task states, permission outcomes, autonomy presets) with `translate()`/`locales()` and a validated `Config.locale`; component-text replacement, `Ctrl+Shift+P`, portable mode, backup/restore and signed updates remain · **Priority:** P2
+**Status:** PARTIAL — `core/i18n.py` (RU/EN catalog + `translate()`/`locales()` + `Config.locale`), portable mode (`AXIOM_PORTABLE`/`.axiom-portable` in `axiom_home`) and settings backup/restore (`core/settings_backup.py`, safe zip) exist; component-text replacement and signed update channels remain · **Priority:** P2
 
 **Outcome:** RU/EN users get consistent navigation, recoverable settings, and secure updates.
 
@@ -263,7 +269,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.9 Chat 2.0: Branches, Pins, Bookmarks, Search, Export
 
-**Status:** PARTIAL — alternates, copy, regenerate, and continue exist · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — alternates, copy, regenerate, continue, real Markdown/JSON export (`core/chat_export.py` + `chat_export` bridge) and persisted bookmarks (`Conversation.bookmarks` + `HistoryStore.set_bookmark`) exist; branch promotion, in-conversation `Ctrl+F`, quote-to-prompt, attachments and PDF remain · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Conversations support controlled experimentation and long-term navigation.
 
@@ -292,7 +298,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.12 Explorer 2.0
 
-**Status:** PARTIAL — tree/search/git-status/open plus real create/rename/delete and diff exist; added `git_revert` (restore a file to its committed state via the `git_revert` bridge command); per-file `M/A/U` markers and E2E remain · **Priority:** P2 · **Stage:** 7
+**Status:** DONE — tree/search/git-status/open plus real create/rename/delete and diff exist; added `git_revert` (restore a file to its committed state via the `git_revert` bridge command); per-file `M/A/U` markers render inline in the Explorer tree (`parseGitStatus` extracted to `desktop/src/lib/gitStatus.ts`), covered by `desktop/scripts/git-status.test.mjs` · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Common workspace operations are available without leaving the application.
 
@@ -302,7 +308,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.13 Terminal UI 2.0
 
-**Status:** PARTIAL — command panel exists; the core `TerminalTool` records a bounded `history` and supports `rerun(index=-1)` (with existing stderr/exit-code/process-tree-cleanup); persisted panel history and the rerun UI remain · **Priority:** P2 · **Stage:** 7
+**Status:** DONE — command panel exists; the core `TerminalTool` records a bounded `history` and supports `rerun(index=-1)` (with existing stderr/exit-code/process-tree-cleanup); the panel adds a per-entry rerun button (`rerunTerminal`) and per-workspace history that survives switching projects (`termHistoryByRootRef`) · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Interactive terminal use has process status, history, reuse, and coordinated cancellation.
 
@@ -312,7 +318,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.14 Git UI 2.0
 
-**Status:** PARTIAL — status/diff/log panel and real stage/unstage/commit exist; added the `git_graph` branch-graph tool and the approval-gated `git_unstage` agent tool (explicit files only, never unstage-all) on top of the existing reviewed-diff `git_commit`; git-checkpoint-based rollback remains · **Priority:** P2 · **Stage:** 7
+**Status:** DONE — status/diff/log panel and real stage/unstage/commit exist; added the `git_graph` branch-graph tool and the approval-gated `git_unstage` agent tool (explicit files only, never unstage-all) on top of the existing reviewed-diff `git_commit`; added `git_checkpoint`/`git_rollback` (snapshot + confirmed rollback via `git_safety`) surfaced in the Git panel · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Users can review and commit real changes through a guarded workflow.
 
@@ -342,7 +348,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.17 Artifact Workspace
 
-**Status:** PARTIAL — `core/artifact_workspace.py` (`ArtifactWorkspace`/`ArtifactDocument`) persists versioned, task-associated documents under `.axiom/artifacts/` with open/edit/save/export; the Desktop Documents view and Markdown editor remain · **Priority:** P2 · **Stage:** 7
+**Status:** DONE — `core/artifact_workspace.py` (`ArtifactWorkspace`/`ArtifactDocument`) persists versioned, task-associated documents under `.axiom/artifacts/` (create/load/update/list/delete/export, history-on-edit, empty state has no demo assets); the bridge exposes `artifact_list`/`artifact_get`/`artifact_save`/`artifact_delete`/`artifact_export`, and the Desktop adds a «Документы» tab (`DocumentsPanel`) with a list + Markdown editor (write + sanitized preview, save/new/delete/export) · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Generated plans, reports, diagrams, and documents remain editable project assets.
 
@@ -522,7 +528,7 @@ inactive tasks that returns to the chat. The same view renders per-file diffs fr
 
 ## W4.13 IPC, Streaming, Memory, and Process Performance
 
-**Status:** PARTIAL — streaming/warmup/output limits exist; added `TTLCache` (bounded TTL/limit), `EventBus` predicate filtering plus a per-event listener cap (backpressure), and `validate_event_envelope`; deltas/pagination and before/after metrics remain · **Priority:** P1 · **Phase:** 11
+**Status:** DONE — streaming/warmup/output limits exist; added `TTLCache` (bounded TTL/limit), `EventBus` predicate filtering plus a per-event listener cap (backpressure), and `validate_event_envelope`; pagination/deltas (`Page`/`paginate`, `Trajectory.page`/`since`, `list_project_files`, `paginate_diff`) and before/after metrics (`capture_metrics`/`compare_metrics`/`Timer`) complete the item · **Priority:** P1 · **Phase:** 11
 
 **Outcome:** Long tasks stay responsive and bounded on modest local hardware.
 
@@ -542,7 +548,7 @@ inactive tasks that returns to the chat. The same view renders per-file diffs fr
 
 ## W4.15 End-to-End Acceptance
 
-**Status:** PARTIAL — real backend edit/test/restart/resume acceptance exists; browser/Tauri coverage is incomplete · **Priority:** P0 · **Phase:** 12
+**Status:** DONE — deterministic offline E2E: a scripted model (`core/e2e_model.py` + `AXIOM_E2E_SCRIPTED_MODEL=1` bridge gate) drives a real coding task (real files, real pytest fail→repair→pass, real diff) through the real bridge, verified by `tests/core/test_e2e_scripted.py`; `e2e-harness.mjs` Scenario 3 covers the user path; resume-after-interruption and broken-regression detection are covered by the backend acceptance suite · **Priority:** P0 · **Phase:** 12
 
 **Outcome:** A deterministic scenario proves the integrated agent rather than isolated components.
 
@@ -595,6 +601,11 @@ Network tests use explicit live markers. A skipped live test is not reported as 
 
 | Date | Change |
 |---|---|
+| 2026-10-01 | Completed W3.12/W3.13/W3.14: Explorer per-file `M/A/U` markers (extracted `parseGitStatus` + node tests), terminal rerun button + per-workspace history, and Git panel `git_checkpoint`/`git_rollback` (snapshot + confirmed rollback). W3 wave now `6 done, 6 partial, 6 TODO`. |
+| 2026-10-01 | Completed W3.4: `ToolResultEvent.data` + `Message.artifacts` now persist validated artifacts (survive history reload), and the desktop renders tables/comparisons/checklists/Mermaid/charts inline (`ArtifactView` + `lib/artifacts.ts`) with MD/CSV/SVG/PNG export buttons (client-side SVG→canvas PNG rasterization). W3 wave now `3 done, 9 partial, 6 TODO`. |
+| 2026-10-01 | Completed W4.15: the scripted model now makes a deliberately wrong edit so the real pytest fails once, then repairs and passes (fail→repair + broken-regression detection through the real pipeline); `tests/core/test_e2e_scripted.py` verifies it via the real bridge `_handle`. W4 wave now `15 done, 0 partial, 0 TODO` — fully closed. |
+| 2026-10-01 | Added W4.15 offline E2E seam (PARTIAL): `core/e2e_model.py` scripted coding model + `AXIOM_E2E_SCRIPTED_MODEL=1` bridge gate, a browser Scenario 3 in `e2e-harness.mjs`, and `tests/core/test_e2e_scripted.py` driving a real coding task through the real bridge; verified with the targeted bridge/task suite `53 passed` and Ruff. |
+| 2026-10-01 | Completed W4.13: pagination/deltas (`Page`/`paginate`, `Trajectory.page`/`since`, `list_project_files`, `paginate_diff`) and before/after metrics (`capture_metrics`/`compare_metrics`/`Timer`); verified with `859 passed, 2 skipped` and Ruff. |
 | 2026-09-25 | Created W1–W3 roadmap with 22 items, matrix, and anti-goals. |
 | 2026-09-25 | Added W4 Agentic Coding Environment: 15 items, phases 1–12, mapping, and acceptance criteria. |
 | 2026-09-25 | Integrated W3.9–W3.18 and updates across W1/W2/W4. |
