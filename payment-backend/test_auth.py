@@ -58,6 +58,43 @@ class ProviderResponse:
         return self.value[:size]
 
 
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"google_client_secret": ""}, "client_secret_missing"),
+        ({"public_url": "https://different.example.test"}, "redirect_host_mismatch"),
+        ({"public_url": "https://testserver/checkout"}, "base_url_invalid"),
+        ({"google_redirect_uri": "https://testserver/wrong"}, "redirect_path_invalid"),
+        ({"google_redirect_uri": "http://testserver/auth/google/callback"}, "redirect_not_https"),
+    ],
+)
+async def test_health_reports_specific_oauth_failure_without_values(app, changes, reason):
+    settings = replace(app.state.settings, google_redirect_uri="https://testserver/auth/google/callback")
+    settings = replace(settings, **changes)
+    diagnostic_app = main.create_app(settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=diagnostic_app), base_url="https://testserver") as c:
+        health = await c.get("/healthz")
+        diagnostic = health.json()["diagnostics"]["oauth"]["google"]
+        assert diagnostic["valid"] is False
+        assert reason in diagnostic["reasons"]
+        assert (await c.get("/v1/auth/providers")).json()["google"] is False
+        for value in (settings.google_client_id, settings.google_client_secret, settings.google_redirect_uri):
+            if value:
+                assert value not in health.text
+
+
+async def test_health_diagnostic_matches_settings_snapshot(app, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "changed-after-start")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://testserver") as c:
+        health = await c.get("/healthz")
+        diagnostic = health.json()["diagnostics"]["oauth"]["google"]
+        assert diagnostic == {
+            "client_id": "PRESENT", "client_secret": "PRESENT", "redirect_uri": "MISSING",
+            "valid": True, "reasons": [],
+        }
+        assert "changed-after-start" not in health.text
+
+
 @pytest.mark.parametrize("provider", ["github", "google"])
 async def test_provider_flow_isolated_browser_pkce_and_replay(app, monkeypatch, provider):
     transport = httpx.ASGITransport(app=app)

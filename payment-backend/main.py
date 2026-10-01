@@ -183,6 +183,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "yoomoney_wallet_id_present": bool(settings.wallet_id),
                 "payment_backend_url_present": bool(settings.public_url),
                 "environment_config_mode": f"{environment}/{payment_mode}",
+                "oauth": {provider: oauth_diagnostic(provider) for provider in ("github", "google")},
             },
         }
 
@@ -210,6 +211,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=401, detail="Неверное имя пользователя или пароль.") from exc
         return {"access_token": token, "token_type": "bearer", "account": store.account(user_id)}
+
+    def oauth_diagnostic(provider: str) -> dict[str, object]:
+        """Return safe OAuth configuration diagnostics without exposing values."""
+        client_id = settings.github_client_id if provider == "github" else settings.google_client_id
+        secret = settings.github_client_secret if provider == "github" else settings.google_client_secret
+        configured_uri = settings.github_redirect_uri if provider == "github" else settings.google_redirect_uri
+        presence = {
+            "client_id": "PRESENT" if client_id else "MISSING",
+            "client_secret": "PRESENT" if secret else "MISSING",
+            "redirect_uri": "PRESENT" if configured_uri else "MISSING",
+        }
+        client = settings.oauth_client(provider)
+        redirect_uri = settings.oauth_redirect_uri(provider)
+        base_value = settings.oauth_redirect_base or settings.public_url
+        try:
+            redirect = urlsplit(redirect_uri)
+            base = urlsplit(base_value or f"{redirect.scheme}://{redirect.netloc}")
+        except ValueError:
+            return {**presence, "valid": False, "reasons": ["url_parse_error"]}
+        reasons: list[str] = []
+        if client is None:
+            if not (settings.github_client_id if provider == "github" else settings.google_client_id):
+                reasons.append("client_id_missing")
+            if not (settings.github_client_secret if provider == "github" else settings.google_client_secret):
+                reasons.append("client_secret_missing")
+        if base.scheme != "https":
+            reasons.append("base_not_https")
+        if not base.hostname:
+            reasons.append("base_host_missing")
+        if base.path not in {"", "/"} or base.username or base.password or base.query or base.fragment:
+            reasons.append("base_url_invalid")
+        if redirect.scheme != "https":
+            reasons.append("redirect_not_https")
+        if redirect.netloc != base.netloc:
+            reasons.append("redirect_host_mismatch")
+        if redirect.path not in {f"/auth/{provider}/callback", f"/v1/auth/oauth/{provider}/callback"}:
+            reasons.append("redirect_path_invalid")
+        if redirect.query or redirect.fragment:
+            reasons.append("redirect_url_invalid")
+        return {
+            **presence,
+            "valid": not reasons,
+            "reasons": reasons,
+        }
 
     def oauth_configuration(provider: str) -> tuple[str, str, str, list[str]]:
         client = settings.oauth_client(provider)
