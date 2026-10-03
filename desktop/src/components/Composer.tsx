@@ -1,11 +1,13 @@
 import type { ReactNode, RefObject } from "react";
 import { useMemo, useEffect, useRef, useState } from "react";
-import { ArrowUp, CornerDownLeft, Globe, Image as ImageIcon, Loader2, Square, X } from "lucide-react";
-import type { AxiomConfig } from "../types";
-import { commandPresentation, matchingCommands, type SlashCommand } from "../lib/commands";
+import { ArrowUp, ChevronDown, CornerDownLeft, Globe, Image as ImageIcon, Loader2, Square, X } from "lucide-react";
+import type { AxiomConfig, RuleRow, SkillRow } from "../types";
+import { commandPresentation, localizedArgumentHint, localizedDescription, matchingCommands, type SlashCommand } from "../lib/commands";
 import { readPromptHistory, writePromptHistory } from "../lib/composerStorage";
 import { formatCount } from "../lib/format";
+import { useLocale } from "../lib/locale";
 import { extractFileMentions, removeFileMention } from "../lib/composerMentions";
+import ComposerContext from "./ComposerContext";
 import Presence from "./Presence";
 
 interface Props {
@@ -28,6 +30,17 @@ interface Props {
   chatId: string | null;
   /** Compact model selector rendered inside the composer row. */
   modelSelector?: ReactNode;
+  /** §6 context chips: rules + skills discovered by the core. */
+  rules: RuleRow[];
+  skills: SkillRow[];
+  selectedRules: string[];
+  selectedSkills: string[];
+  onToggleRule: (path: string) => void;
+  onToggleSkill: (id: string) => void;
+  onEnsureContextLoaded: () => void;
+  /** §6: autonomy mode picker (plan / edit / auto / full). */
+  autonomyMode: string;
+  onAutonomyChange: (mode: string) => void;
 }
 
 
@@ -36,7 +49,7 @@ function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error(`Не удалось прочитать ${file.name}`));
+    reader.onerror = () => reject(new Error(file.name));
     reader.readAsDataURL(file);
   });
 }
@@ -62,7 +75,19 @@ export default function Composer(props: Props) {
     composerRef,
     workspaceFiles,
     chatId,
+    rules,
+    skills,
+    selectedRules,
+    selectedSkills,
+    onToggleRule,
+    onToggleSkill,
+    onEnsureContextLoaded,
+    autonomyMode,
+    onAutonomyChange,
   } = props;
+
+  // W3.8: palette/chip labels follow the core RU/EN catalog.
+  const { t } = useLocale();
 
   const MAX_IMAGES = 3;
   const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -154,24 +179,24 @@ export default function Composer(props: Props) {
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
     if (modelSupportsVision === false) {
-      flash("Текущая модель не поддерживает изображения — переключитесь на vision-модель");
+      flash(t("ui.composer.no_vision"));
       return;
     }
     const room = MAX_IMAGES - images.length;
     if (room <= 0) {
-      flash(`Максимум ${MAX_IMAGES} изображения`);
+      flash(t("ui.composer.max_images", { n: String(MAX_IMAGES) }));
       return;
     }
     const encoded: string[] = [];
     for (const file of files.slice(0, room)) {
       if (file.size > MAX_FILE_BYTES) {
-        flash(`${file.name || "изображение"}: больше 10 МБ`);
+        flash(t("ui.composer.too_large", { name: file.name || t("ui.composer.photo") }));
         continue;
       }
       try {
         encoded.push(await fileToDataUrl(file));
       } catch (err) {
-        flash(String(err));
+        flash(t("ui.composer.read_failed", { name: String((err as Error)?.message ?? "") }));
       }
     }
     if (encoded.length) setImages((current) => [...current, ...encoded].slice(0, MAX_IMAGES));
@@ -341,8 +366,8 @@ export default function Composer(props: Props) {
   return (
     <div className="composer-area" ref={containerRef}>
       <Presence open={mentionMatches.length > 0}>
-        <div className="mention-palette" role="listbox" aria-label="Файлы проекта">
-          <div className="mention-palette-head">ФАЙЛЫ ПРОЕКТА</div>
+        <div className="mention-palette" role="listbox" aria-label={t("ui.composer.files_in_prompt")}>
+          <div className="mention-palette-head">{t("ui.composer.files_head")}</div>
           {mentionMatches.map((file, index) => (
             <button
               key={file}
@@ -358,7 +383,7 @@ export default function Composer(props: Props) {
       </Presence>
       <Presence open={paletteOpen}>
         <div className="palette" role="listbox">
-          <div className="palette-head">COMMANDS</div>
+          <div className="palette-head">{t("ui.palette.head")}</div>
           {commands.map((command, index) => (
             <button
               key={command.name}
@@ -371,14 +396,14 @@ export default function Composer(props: Props) {
               <span className="palette-name">
                 <span className={`palette-command-icon icon-${commandPresentation(command).icon}`} aria-hidden="true" />
                 {command.name}
-                {command.argumentHint ? <span className="palette-arg"> {command.argumentHint}</span> : null}
+                {localizedArgumentHint(command, t) ? <span className="palette-arg"> {localizedArgumentHint(command, t)}</span> : null}
               </span>
-              <span className="palette-desc">{command.description}</span>
+              <span className="palette-desc">{localizedDescription(command, t)}</span>
               {commandPresentation(command).shortcut && <kbd className="palette-shortcut">{commandPresentation(command).shortcut}</kbd>}
             </button>
           ))}
           <div className="palette-foot">
-            <CornerDownLeft size={11} strokeWidth={2} /> выбрать · ↑↓ навигация · Esc закрыть
+            <CornerDownLeft size={11} strokeWidth={2} /> {t("ui.palette.foot")}
           </div>
         </div>
       </Presence>
@@ -387,12 +412,26 @@ export default function Composer(props: Props) {
         {notice && <div className="composer-notice">{notice}</div>}
 
         {fileMentions.length > 0 && (
-          <div className="mention-chip-row" aria-label="Файлы в запросе">
+          <div className="mention-chip-row" aria-label={t("ui.composer.files_in_prompt")}>
             {fileMentions.map(({ file }) => (
-              <button key={file} type="button" className="file-chip" onClick={() => removeMention(file)} title={`Убрать @${file}`}>
+              <button key={file} type="button" className="file-chip" onClick={() => removeMention(file)} title={t("ui.composer.remove_mention", { file })}>
                 <span>@{file}</span><X size={11} strokeWidth={2.2} />
               </button>
             ))}
+          </div>
+        )}
+
+        {(rules.length > 0 || skills.length > 0 || selectedRules.length > 0 || selectedSkills.length > 0) && (
+          <div className="composer-ctx-row">
+            <ComposerContext
+              rules={rules}
+              skills={skills}
+              selectedRules={selectedRules}
+              selectedSkills={selectedSkills}
+              onToggleRule={onToggleRule}
+              onToggleSkill={onToggleSkill}
+              onEnsureLoaded={onEnsureContextLoaded}
+            />
           </div>
         )}
 
@@ -400,11 +439,11 @@ export default function Composer(props: Props) {
           <div className="attach-row inline">
             {images.map((image, index) => (
               <div className="attach-thumb" key={index}>
-                <img src={image} alt={`вложение ${index + 1}`} />
+                <img src={image} alt={t("ui.composer.attachment", { n: String(index + 1) })} />
                 <button
                   className="attach-remove"
                   onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
-                  title="Убрать изображение"
+                  title={t("ui.composer.remove_image")}
                 >
                   <X size={12} strokeWidth={2.2} />
                 </button>
@@ -417,7 +456,7 @@ export default function Composer(props: Props) {
           ref={composerRef}
           rows={1}
           placeholder={
-            disabled ? "Ollama недоступна — проверьте подключение" : "Спросите Axiom…  / — команды, ↑↓ — история"
+            disabled ? t("ui.composer.placeholder_disabled") : t("ui.composer.placeholder")
           }
           value={draft}
           onChange={(event) => {
@@ -446,19 +485,33 @@ export default function Composer(props: Props) {
         <div className="composer-row">
           <div className="composer-left">
             {props.modelSelector}
+            <label className="mode-select" title={t("ui.composer.mode_title")}>
+              <span className="mode-select-label">{t("ui.composer.mode")}</span>
+              <select
+                value={autonomyMode}
+                onChange={(event) => onAutonomyChange(event.target.value)}
+                aria-label={t("ui.composer.mode")}
+              >
+                <option value="plan">{t("ui.mode.plan")}</option>
+                <option value="edit">{t("ui.mode.edit")}</option>
+                <option value="auto">{t("ui.mode.auto")}</option>
+                <option value="full">{t("ui.mode.full")}</option>
+              </select>
+              <ChevronDown size={11} strokeWidth={2} />
+            </label>
             <button
               className={"chip" + (webSearchEnabled ? " on" : "")}
               onClick={onToggleWebSearch}
-              title="Веб-поиск: агент ищет в интернете, если нужно"
+              title={t("ui.composer.web_search_title")}
             >
               <Globe size={13} strokeWidth={1.8} />
               <span>Web Search</span>
               <span className={"chip-dot" + (webSearchEnabled ? " on" : "")} />
             </button>
             {modelSupportsVision !== false && (
-              <label className="chip ghost" title="Прикрепить изображение (Ctrl+V или drag & drop)">
+              <label className="chip ghost" title={t("ui.composer.attach_title")}>
                 <ImageIcon size={13} strokeWidth={1.8} />
-                <span>Фото</span>
+                <span>{t("ui.composer.photo")}</span>
                 <input
                   type="file"
                   accept="image/*"
@@ -474,7 +527,7 @@ export default function Composer(props: Props) {
           </div>
 
           <div className="composer-right">
-            <button className="ctx-chip" onClick={onOpenContext} title="Контекст: токены, сообщения, инструменты">
+            <button className="ctx-chip" onClick={onOpenContext} title={t("ui.composer.context_title")}>
               {context.used != null || context.window != null ? (
                 <span>
                   {formatCount(context.used)} / {formatCount(context.window)} tok
@@ -483,11 +536,11 @@ export default function Composer(props: Props) {
                 <span>ctx —</span>
               )}
             </button>
-            <span className="token-counter" title="Оценка токенов запроса">
+            <span className="token-counter" title={t("ui.composer.token_title")}>
               ~{estimate} tok
             </span>
             {generating ? (
-              <button className="send-btn stop" onClick={onCancel} title="Остановить (Esc)">
+              <button className="send-btn stop" onClick={onCancel} title={t("ui.composer.stop")}>
                 <Square size={13} strokeWidth={2} fill="currentColor" />
               </button>
             ) : (
@@ -495,7 +548,7 @@ export default function Composer(props: Props) {
                 className="send-btn"
                 onClick={() => submit()}
                 disabled={(!draft.trim() && images.length === 0) || disabled}
-                title="Отправить (Enter)"
+                title={t("ui.composer.send")}
               >
                 {disabled ? <Loader2 size={15} className="spin" /> : <ArrowUp size={16} strokeWidth={2.2} />}
               </button>

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Check, Clock, Cpu, MessageSquarePlus, Pencil, Search, Settings2, Trash2, X } from "lucide-react";
-import type { Conversation, ModelInfo } from "../types";
+import { Check, Clock, Cpu, FolderOpen, ListChecks, Loader2, MessageSquarePlus, Pencil, Search, Settings2, Trash2, X } from "lucide-react";
+import type { Conversation, ModelInfo, ProjectInfo, Task } from "../types";
+import { useLocale } from "../lib/locale";
+import { plural } from "../lib/i18n";
+import { playUiSound } from "../lib/sound";
+import { STATE_CONFIG } from "./TaskCard";
 
 interface Props {
   open: boolean;
@@ -23,10 +27,19 @@ interface Props {
   onOpenModels: () => void;
   onClose: () => void;
   activeModel: ModelInfo | null;
+  /** Main-task workspace: projects + tasks navigation (left rail, §4). */
+  workspace: { current: ProjectInfo | null; recent: ProjectInfo[]; pinned: ProjectInfo[] } | null;
+  onOpenWorkspaceDialog: () => void;
+  onSwitchWorkspace: (path: string) => void;
+  onClearWorkspace: () => void;
+  tasks: Task[];
+  focusedTaskId: string | null;
+  onInspectTask: (id: string) => void;
+  onOpenTaskPanel: () => void;
 }
 
 interface Group {
-  label: string;
+  key: "today" | "yesterday" | "week" | "older";
   items: Conversation[];
 }
 
@@ -34,22 +47,21 @@ interface Group {
 function groupChats(chats: Conversation[]): Group[] {
   const now = Date.now() / 1000;
   const dayStart = new Date().setHours(0, 0, 0, 0) / 1000;
-  const groups: Record<string, Conversation[]> = {
-    Сегодня: [],
-    Вчера: [],
-    "Последние 7 дней": [],
-    Ранее: [],
+  const groups: Record<Group["key"], Conversation[]> = {
+    today: [],
+    yesterday: [],
+    week: [],
+    older: [],
   };
   for (const chat of chats) {
     const stamp = chat.updatedAt;
-    if (stamp >= dayStart) groups["Сегодня"].push(chat);
-    else if (stamp >= dayStart - 86400) groups["Вчера"].push(chat);
-    else if (stamp >= now - 7 * 86400) groups["Последние 7 дней"].push(chat);
-    else groups["Ранее"].push(chat);
+    if (stamp >= dayStart) groups.today.push(chat);
+    else if (stamp >= dayStart - 86400) groups.yesterday.push(chat);
+    else if (stamp >= now - 7 * 86400) groups.week.push(chat);
+    else groups.older.push(chat);
   }
-  return Object.entries(groups)
-    .filter(([, items]) => items.length > 0)
-    .map(([label, items]) => ({ label, items }));
+  return (Object.keys(groups) as Group["key"][]).filter((key) => groups[key].length > 0)
+    .map((key) => ({ key, items: groups[key] }));
 }
 
 export default function Sidebar(props: Props) {
@@ -73,7 +85,23 @@ export default function Sidebar(props: Props) {
     onOpenModels,
     onClose,
     activeModel,
+    workspace,
+    onOpenWorkspaceDialog,
+    onSwitchWorkspace,
+    onClearWorkspace,
+    tasks,
+    focusedTaskId,
+    onInspectTask,
+    onOpenTaskPanel,
   } = props;
+  const { t, locale, strings } = useLocale();
+
+  /** Left-rail section: projects + tasks navigation, or chat history. */
+  const [section, setSection] = useState<"work" | "chats">("work");
+  const pickSection = (next: typeof section) => {
+    if (section !== next) playUiSound("panel");
+    setSection(next);
+  };
 
   const dragging = useRef(false);
   const panelRef = useRef<HTMLElement>(null);
@@ -132,43 +160,148 @@ export default function Sidebar(props: Props) {
             
           </div>
 
-          <button className="new-chat" onClick={onNewChat} title="Новый чат (Ctrl+N)">
+          <div className="side-section-tabs" role="tablist" aria-label={t("ui.sidebar.sections_aria")}>
+            <button
+              role="tab"
+              aria-selected={section === "work"}
+              className={section === "work" ? "active" : ""}
+              onClick={() => pickSection("work")}
+            >
+              <ListChecks size={13} strokeWidth={1.8} />
+              <span>{t("ui.sidebar.section.work")}</span>
+            </button>
+            <button
+              role="tab"
+              aria-selected={section === "chats"}
+              className={section === "chats" ? "active" : ""}
+              onClick={() => pickSection("chats")}
+            >
+              <MessageSquarePlus size={13} strokeWidth={1.8} />
+              <span>{t("ui.sidebar.section.chats")}</span>
+            </button>
+          </div>
+
+          {section === "work" ? (
+            <nav className="work-nav" aria-label={t("ui.project.title")}>
+              <div className="side-subhead">
+                <FolderOpen size={12} strokeWidth={1.8} />
+                <span>{t("ui.project.title")}</span>
+                <button
+                  className="icon-btn tiny"
+                  title={t("ui.project.open")}
+                  aria-label={t("ui.project.open")}
+                  onClick={onOpenWorkspaceDialog}
+                >
+                  <Pencil size={11} strokeWidth={2} />
+                </button>
+              </div>
+              <div className="ws-nav-item active">
+                <span className="ws-dot">{workspace?.current ? "◆" : "●"}</span>
+                <span className="ws-nav-text">
+                  <span className="ws-nav-name">{workspace?.current?.name ?? t("ui.chattabs.global")}</span>
+                  <span className="ws-nav-path">{workspace?.current?.path ?? t("ui.project.no_folder")}</span>
+                </span>
+              </div>
+              {(workspace?.pinned ?? []).filter((p) => p.path !== workspace?.current?.path).map((p) => (
+                <button key={p.path} className="ws-nav-item" onClick={() => onSwitchWorkspace(p.path)} title={p.path}>
+                  <span className="ws-dot">◆</span>
+                  <span className="ws-nav-text">
+                    <span className="ws-nav-name">{p.name}</span>
+                    <span className="ws-nav-path">{p.path}</span>
+                  </span>
+                </button>
+              ))}
+              {(workspace?.recent ?? []).filter((r) => r.path !== workspace?.current?.path && !workspace?.pinned.some((p) => p.path === r.path)).slice(0, 4).map((p) => (
+                <button key={p.path} className="ws-nav-item" onClick={() => onSwitchWorkspace(p.path)} title={p.path}>
+                  <span className="ws-dot">○</span>
+                  <span className="ws-nav-text">
+                    <span className="ws-nav-name">{p.name}</span>
+                    <span className="ws-nav-path">{p.path}</span>
+                  </span>
+                </button>
+              ))}
+              {workspace?.current && (
+                <button className="ws-nav-item" onClick={onClearWorkspace} title={t("ui.project.global_hint")}>
+                  <span className="ws-dot">○</span>
+                  <span className="ws-nav-text">
+                    <span className="ws-nav-name">{t("ui.chattabs.global")}</span>
+                  </span>
+                </button>
+              )}
+
+              <div className="side-subhead">
+                <ListChecks size={12} strokeWidth={1.8} />
+                <span>{t("ui.tabs.tasks")}</span>
+                {tasks.length > 0 && <span className="ws-nav-count">{tasks.length}</span>}
+                <button
+                  className="icon-btn tiny"
+                  title={t("ui.task.panel")}
+                  aria-label={t("ui.task.panel")}
+                  onClick={onOpenTaskPanel}
+                >
+                  <Pencil size={11} strokeWidth={2} />
+                </button>
+              </div>
+              <div className="ws-task-list">
+                {tasks.length === 0 && <div className="chat-list-empty">{t("ui.task.none")}</div>}
+                {tasks.map((task) => (
+                  <button
+                    key={task.id}
+                    className={"ws-task-item" + (task.id === focusedTaskId ? " active" : "")}
+                    onClick={() => onInspectTask(task.id)}
+                    title={task.goal}
+                  >
+                    <span className={"ws-task-state " + (task.review_recovery ? "warning" : STATE_CONFIG[task.state].tone)} />
+                    <span className="ws-task-goal">{task.goal}</span>
+                    {["analyzing", "planning", "executing", "verifying", "waiting_for_permission"].includes(task.state) && (
+                      <Loader2 size={10} className="spin" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </nav>
+          ) : (
+          <button className="new-chat" onClick={onNewChat} title={t("ui.sidebar.new_chat_title")}>
             <MessageSquarePlus size={16} strokeWidth={1.8} />
-            <span>Новый чат</span>
+            <span>{t("ui.sidebar.new_chat")}</span>
             <kbd>Ctrl+N</kbd>
           </button>
+          )}
 
+          {section === "chats" && (
           <div className="side-search">
             <Search size={14} strokeWidth={1.8} />
             <input
               id="chat-search"
-              placeholder="Поиск по истории…"
+              placeholder={t("ui.sidebar.search_history")}
               value={search}
               onChange={(event) => onSearch(event.target.value)}
               spellCheck={false}
             />
             {search && (
-              <button className="icon-btn tiny" onClick={() => onSearch("")} title="Очистить поиск">
+              <button className="icon-btn tiny" onClick={() => onSearch("")} title={t("ui.sidebar.clear_search")}>
                 <X size={12} strokeWidth={2} />
               </button>
             )}
           </div>
+          )}
 
+          {section === "chats" && (
           <nav className="chat-list">
             {groups.length === 0 && (
               <div className="chat-list-empty">
-                {search ? "Ничего не найдено" : "История пуста — начните разговор"}
+                {search ? t("ui.common.nothing_found") : t("ui.sidebar.empty")}
               </div>
             )}
             {groups.map((group) => (
-              <div key={group.label} className="chat-group">
-                <div className="chat-group-label">{group.label}</div>
+              <div key={group.key} className="chat-group">
+                <div className="chat-group-label">{t(`ui.sidebar.group.${group.key}`)}</div>
                 {group.items.map((chat) => (
                   <div
                     key={chat.id}
                     className={"chat-item" + (chat.id === activeChatId ? " active" : "")}
                     onClick={() => (renaming === chat.id ? undefined : onOpenChat(chat.id))}
-                    title={chat.model ? `${chat.title}\nмодель: ${chat.model}` : chat.title}
+                    title={chat.model ? `${chat.title}\n${t("ui.sidebar.model_hint", { model: chat.model })}` : chat.title}
                   >
                     {renaming === chat.id ? (
                       <input
@@ -198,7 +331,7 @@ export default function Sidebar(props: Props) {
                               setConfirmDelete(null);
                             }}
                           >
-                            Удалить
+                            {t("ui.common.delete")}
                           </button>
                           <button
                             className="mini-btn"
@@ -207,14 +340,14 @@ export default function Sidebar(props: Props) {
                               setConfirmDelete(null);
                             }}
                           >
-                            Нет
+                            {t("ui.common.no")}
                           </button>
                         </>
                       ) : (
                         <>
                           <button
                             className="chat-item-btn"
-                            title="Переименовать"
+                            title={t("ui.common.rename")}
                             onClick={(event) => {
                               event.stopPropagation();
                               setDraftTitle(chat.title);
@@ -225,7 +358,7 @@ export default function Sidebar(props: Props) {
                           </button>
                           <button
                             className="chat-item-btn"
-                            title="Удалить разговор"
+                            title={t("ui.sidebar.delete_chat")}
                             onClick={(event) => {
                               event.stopPropagation();
                               setConfirmDelete(chat.id);
@@ -241,23 +374,24 @@ export default function Sidebar(props: Props) {
               </div>
             ))}
           </nav>
+          )}
 
           <div className="side-footer">
-            <button className="side-action" onClick={onOpenModels} title="Модели Ollama">
+            <button className="side-action" onClick={onOpenModels} title={t("ui.sidebar.models_ollama")}>
               <Cpu size={15} strokeWidth={1.8} />
-              <span className="side-action-label">{activeModel?.displayName ?? "Модели"}</span>
+              <span className="side-action-label">{activeModel?.displayName ?? t("ui.common.models")}</span>
               {activeModel && <Check size={13} strokeWidth={2.2} className="side-action-ok" />}
             </button>
-            <button className="side-action" onClick={onOpenSettings} title="Настройки (Ctrl+,)">
+            <button className="side-action" onClick={onOpenSettings} title={t("ui.sidebar.settings_title")}>
               <Settings2 size={15} strokeWidth={1.8} />
-              <span className="side-action-label">Настройки</span>
+              <span className="side-action-label">{t("ui.common.settings")}</span>
               <kbd>Ctrl+,</kbd>
             </button>
             <div className="side-meta">
               {totalChats === 0 ? (
                 <>
                   <Clock size={12} strokeWidth={1.8} />
-                  <span>История пуста</span>
+                  <span>{t("ui.sidebar.history_empty")}</span>
                 </>
               ) : confirmDeleteAll ? (
                 <>
@@ -268,21 +402,21 @@ export default function Sidebar(props: Props) {
                       void onDeleteAllChats();
                     }}
                   >
-                    Удалить все ({totalChats})
+                    {t("ui.sidebar.delete_all", { n: String(totalChats) })}
                   </button>
                   <button className="mini-btn" onClick={() => setConfirmDeleteAll(false)}>
-                    Нет
+                    {t("ui.common.no")}
                   </button>
                 </>
               ) : (
                 <>
                   <Clock size={12} strokeWidth={1.8} />
                   <span>
-                    {totalChats} {totalChats === 1 ? "разговор" : "разговоров"}
+                    {plural("ui.sidebar.conversation", totalChats, locale, strings)}
                   </span>
                   <button
                     className="icon-btn tiny"
-                    title="Очистить всю историю"
+                    title={t("ui.sidebar.clear_all")}
                     onClick={() => setConfirmDeleteAll(true)}
                   >
                     <Trash2 size={12} strokeWidth={1.8} />

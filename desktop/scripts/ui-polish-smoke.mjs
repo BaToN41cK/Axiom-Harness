@@ -165,6 +165,17 @@ try {
   for (let i = 0; i < 80; i++) { if (await evaluate("!!document.querySelector('.topbar')")) break; await sleep(100); }
   check("app booted with isolated IPC", await evaluate("!!document.querySelector('.topbar')"));
   check("chat is visible after boot", await evaluate("!!document.querySelector('.chat-scroll')"));
+  // W3.9 in-conversation Ctrl+F: the bar searches the mounted transcript only.
+  // The mocked history contains no messages, so the bar must appear with an
+  // empty counter — not with sidebar hits or a fake match count.
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F', code: 'KeyF', windowsVirtualKeyCode: 70, modifiers: 2 });
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'F', code: 'KeyF', windowsVirtualKeyCode: 70, modifiers: 2 });
+  await sleep(220);
+  check("Ctrl+F opens the transcript find bar", await evaluate("!!document.querySelector('.chat-find #chat-find-input')"));
+  check("empty transcript reports no fabricated matches", await evaluate("document.querySelector('.chat-find-count')?.textContent === '' && document.querySelectorAll('.msg.find-hit').length === 0"));
+  await send('Input.dispatchKeyEvent', {type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27});
+  await sleep(120);
+  check("Esc closes the transcript find bar", await evaluate("!document.querySelector('.chat-find')"));
   await evaluate("document.querySelector('.composer textarea').focus()");
   await send('Input.insertText', { text: '@src/App.tsx' });
   await sleep(120);
@@ -178,7 +189,7 @@ try {
   check("boot is silent", await evaluate("window.__audioStarts === 0"));
   await click('.side-action[title^="Настройки"]');
   check("settings has a separate navigation/content grid", await evaluate("getComputedStyle(document.querySelector('.axiom-settings-workspace')).display === 'grid'"));
-  check("all eleven sections remain", await evaluate("document.querySelectorAll('.settings-nav-item').length === 11"));
+  check("all thirteen sections remain", await evaluate("document.querySelectorAll('.settings-nav-item').length === 13"));
   check("compact Settings header", await evaluate("document.querySelector('.axiom-settings-head').getBoundingClientRect().height <= 56"));
   check("compact section heading", await evaluate("parseFloat(getComputedStyle(document.querySelector('.settings-section-title h3')).fontSize) <= 16"));
   await click('[data-section="appearance"]');
@@ -222,7 +233,7 @@ try {
   check("provider form fits desktop content area", await evaluate("document.querySelector('.settings-main').scrollHeight <= document.querySelector('.settings-main').clientHeight + 1"));
   const providerShot = await send('Page.captureScreenshot');
   await writeFile(path.join(tmp, 'providers.png'), Buffer.from(providerShot.data,'base64'));
-  for (const section of ['general','appearance','models','memory','knowledge','chat','tools','shortcuts','about']) {
+  for (const section of ['general','appearance','models','memory','knowledge','chat','tools','shortcuts','mcp','skills','about']) {
     await click(`[data-section="${section}"]`);
     check(`section ${section} renders`, await evaluate("!!document.querySelector('.settings-content').textContent.trim()"));
   }

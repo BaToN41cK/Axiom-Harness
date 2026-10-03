@@ -9,6 +9,44 @@
 
 ## [Unreleased]
 
+### Added — W3.3 Multitasking: chat tabs, background indexing, tray (complete)
+
+- Chat tabs (project/model/context isolation): `ChatSession.tab_rows/tab_open/tab_activate/tab_close` drive the real `set_workspace`/`load_conversation`/`new_conversation` switches over the persisted `TabManager` registry (`<axiom_home>/tabs.json`, corrupt file ignored, MAX_TABS=24) — a tab is only a descriptor, the session stays the single runtime core, and background tasks keep running across switches. The bridge returns tabs + messages + conversation + workspace in one reply per tab action so the GUI switches with one round trip.
+- Background knowledge indexing: `knowledge_add_collection`/`knowledge_reindex` accept `detached=True` (bridge arg `background`), run the incremental store pass in a background asyncio task (single-flight per collection), and emit `knowledge.event` started/completed/failed/cancelled phases over the bridge-wide subscription; the reply honestly reports `pending`, and stats arrive only from the real terminal event. New `knowledge_indexing`/`knowledge_cancel_index` bridge commands expose and stop the live runs.
+- Desktop: new `ChatTabs` strip (active tab, `Ctrl+T` new tab, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, per-tab close, Global Chat globe, live running-task badge); `addKnowledgeCollection`/`reindexKnowledge` now index in the background with completion toasts from events; the running-task count refreshes on every task event; new i18n keys `ui.chattabs.*`/`ui.knowledge.*`/`ui.tray.*` in the core catalog (`i18n.ts` regenerated).
+- Tray: Rust `tauri` `tray-icon` feature — Open AXIOM/Quit menu, left-click shows the window, `tray_set_state` command keeps the tooltip mirroring the real running-task count (localized in the webview), and closing the window hides it to the tray so background work survives; a real exit remains via the tray menu or `/exit`.
+- Tests: new `tests/core/test_tabs_w33.py` cases (background indexing completes with real events/stats and is single-flight + cancellable) and 2 bridge round-trips (tabs open/activate/close across two projects; knowledge `background: true` → `pending` → searchable). Verified: `59 passed` (tabs/multitasking/i18n/bridge suites), `tsc --noEmit`, `cargo check`, Ruff clean on all changed files. `docs/roadmap.md` marks W3.3 DONE.
+
+### Security — P0 release-security audit (keys, CSP, capabilities, CI)
+
+- Provider API keys no longer rest as plaintext: new `core/secrets.py` (DPAPI user-scope via ctypes on Windows, `0o600` file boundary on POSIX, fail-closed, legacy plaintext migrates on next save); `ProviderManager.save()` writes only protected blobs, `_load()` recovers them, corrupt blobs are treated as missing. Bridge/TUI callers already handle errors safely; `status_rows()` never echoes key material (covered by tests).
+- A real dev key found in gitignored `desktop/data/providers.json` was migrated in place to a DPAPI blob (gitleaks-clean); it sat in plaintext before — rotate it if it ever left the machine.
+- Desktop webview ships a restrictive CSP (`tauri.conf.json`): `script-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`; connect/img allowlists mirror real resources only (payment API, duckduckgo favicons, Vite dev). Chat markdown stays sanitized (react-markdown + rehype-sanitize) as the first boundary. Capabilities drop unused `shell:allow-spawn`/`shell:allow-stdin-write` (shell plugin isn't initialized; OS access goes through audited Rust commands). Known tradeoff: plugin `srcdoc` panels with inline JS degrade to static cards (docs/plugins.md §11.6).
+- New `.github/workflows/ci.yml`: Python (ruff on PR diff + full deterministic pytest incl. bridge), Desktop (`tsc`, node tests, Vite build), Rust (`cargo fmt --check`, `cargo check --locked`), Security (gitleaks + `npm audit`). Fixed the CI blockers: `stateLabel` scoping in `useAxiom.ts`, `cargo fmt` drift in `lib.rs`, E501 rewrap of `core/i18n.py` (values verified identical).
+- Verified: `839 passed + 1 skipped` (tests, excl. bridge) + `37 passed` bridge, `tsc` clean, `cargo check` clean, production Vite build OK, gitleaks clean on tracked files with `.gitleaks.toml` (one test-fixture allowlist).
+
+### Added — W3.8 i18n: navigation tabs + topbar from the RU/EN catalog
+
+- `core/i18n.py` gains 12 `ui.*` keys (side-tabs files/terminal/git/tasks/documents, panel resize, sidebar/right toggles, topbar route/no-model/tools-on/off) with en+ru; the core catalog stays the single source of truth.
+- Bridge: new `i18n` command returns `{locale, locales, strings}` for the requested or configured locale (unknown → configured → en).
+- Desktop: new `src/lib/i18n.ts` projection (`t()` with key-fallback, boot snapshot, `fetchI18n()`); `App.tsx` side-tabs + topbar render via `t(key, Config.locale, strings)` with a bridge fetch per locale; `AxiomConfig` gains `locale`.
+- Tests: extended `tests/core/test_i18n.py` (both locales + frontend-snapshot drift check) and new `desktop/scripts/i18n.test.mjs`; verified with `7 passed` (pytest), node `2 passed`, Ruff and `tsc --noEmit`. Palette actions and signed updates remain (W3.8 PARTIAL).
+
+### Added — W3.9 Chat 2.0: branch promotion (complete)
+
+- `Message` gains a persisted `alternates: list[str]` (active answer stays in `content`); `ChatSession.regenerate()` preserves the previous assistant answer as a branch on the new answer (capped at 20, restored honestly if generation yields nothing) instead of dropping it.
+- New `ChatSession.list_branches()` / `promote_branch()` swap `content` with `alternates[i]` (thinking cleared to avoid mixing reasoning across branches), persist via the existing `HistoryStore`, survive reload, and touch only the target conversation — new turns build context from the promoted content.
+- Bridge: `_conversation_full` now includes `alternates`; new `branch_list` / `branch_promote` commands (snake_case + camelCase aliases, busy/unknown/bad-index rejected).
+- Tests: new `tests/core/test_chat_branches.py` (6 tests — regenerate preserves, promote swaps without loss, continuation uses promoted context, persistence after reload, per-chat isolation, validation); verified with `24 passed` (branches/chat/history) and Ruff.
+- `docs/roadmap.md` updates W3.9 (remaining: attachments, PDF).
+
+### Added — W3.5 Full MCP UX and Skills Manager (complete)
+
+- `MCPManager`/`MCPClient` (core/mcp.py) gain GUI controls: `describe()` (name/command/tools/status), `probe()` (fresh `tools/list`), `test()` (a real `tools/call`), and `restart()` (re-probe + re-register) over the stateless stdio JSON-RPC client, with honest `last_error`/`last_log` captured from stderr — a missing binary is reported as an error, never as a fabricated "connected" state.
+- Bridge commands `mcp_servers`/`mcp_add`/`mcp_remove`/`mcp_restart`/`mcp_test` persist servers to `Config.mcp_servers` and register/unregister their tools live in the agent's registry; `skills_list`/`skills_pin`/`skills_unpin`/`skills_suggest` expose the `SkillRegistry`, with manual pins persisted to a new `Config.pinned_skills` and re-applied on boot.
+- Desktop settings gain `MCP` and `Навыки` panels (`McpPanel.tsx`, `SkillsPanel.tsx`, `settings-harness.css`): add/remove/restart/test a server (clicking a tool chip runs a real MCP tool call and shows its result), skill content inspection (collapsible instructions + triggers/tools/source), enable (pin to "always in context"), and task-based suggestion via `resolve_for_task`.
+- Tests: 3 new bridge tests (`mcp_add` honest-probe/list/remove round-trip, skills list/pin/unpin/suggest, config persistence for `mcp_servers` + `pinned_skills`). `docs/roadmap.md` marks W3.5 DONE (W3 wave `11 done, 4 partial, 3 TODO`); verified with Ruff, the bridge/core suites and `tsc --noEmit` + Vite build.
+
 ### Added — W3.17 Artifact Workspace: Documents view + Markdown editor (complete)
 
 - The bridge exposes `artifact_list`/`artifact_get`/`artifact_save`/`artifact_delete`/`artifact_export` over the core `ArtifactWorkspace` (rooted at the current workspace; `artifact_list` returns compact rows without content).
@@ -29,7 +67,19 @@
 ### Added — W3.9 Chat 2.0: conversation export (Markdown + JSON)
 
 - New `core/chat_export.py` exports a stored `Conversation` to real Markdown (title/model/timestamps header + every message with its thinking in a collapsible block and artifact/image counts) and JSON (`export_conversation_json` with metadata + message content); the `chat_export` bridge command returns both. `Conversation` gains a persisted `bookmarks` list and `HistoryStore.set_bookmark` toggles it (out-of-range/unknown ids rejected).
-- Tests: new `tests/core/test_chat_export.py` (3 tests) + bookmark tests in `tests/core/test_history_meta.py`. `docs/roadmap.md` keeps W3.9 PARTIAL (branch promotion, in-conversation `Ctrl+F`, quote-to-prompt, attachments and PDF remain); verified with Ruff.
+- Tests: new `tests/core/test_chat_export.py` (3 tests) + bookmark tests in `tests/core/test_history_meta.py`. `docs/roadmap.md` keeps W3.9 PARTIAL (branch promotion, quote-to-prompt, attachments and PDF remain; Desktop in-conversation `Ctrl+F` transcript find landed later in this cycle); verified with Ruff.
+
+### Added — W3.9 Chat 2.0: in-conversation Ctrl+F transcript find (Desktop)
+
+- `desktop/src/components/MessageList.tsx` gains a `chat-find` bar: `Ctrl+F` (via an `axiom-find-chat` window event from the store shortcut handler) opens the bar, which searches only the mounted transcript of the current chat (content + thinking, case-insensitive, live `n/m` counter with an honest `нет совпадений` empty state). `Enter`/`Shift+Enter` and the ↑/↓ buttons cycle through matching messages via `data-message-id` scroll-into-view; matching bubbles get an accent `find-hit` edge; `Esc` closes the bar (native browser behavior is preserved inside inputs/the composer).
+- Store wiring in `useAxiom.ts` skips editable fields when handling `Ctrl+F`; the shortcut is registered in the shared `SHORTCUTS` table (`lib/commands.ts`), the Help overlay and `SettingsModal.tsx` (`Ctrl+F — Поиск по текущему разговору`); styles live in `styles.css` (`.chat-find`, `.msg.find-hit`).
+- Smoke: `desktop/scripts/ui-polish-smoke.mjs` gains Ctrl+F assertions (bar opens on empty transcript with an empty counter and no fabricated `find-hit`, Esc closes it); `tsc --noEmit` and the Vite build pass; the full frontend smoke stops at the pre-existing `compact Settings header` failure (also failing without this change).
+- `docs/roadmap.md` updates W3.9 (Ctrl+F now delivered on Desktop; remaining: branch promotion, quote-to-prompt, attachments, PDF).
+
+### Added — W3.9 Chat 2.0: quote-to-prompt (Desktop)
+
+- Each message in `MessageList` gains a `Цитировать` action: it quotes the current text selection (falling back to the whole message) into the composer draft as a `> ` blockquote and focuses the composer. The store hook exposes `quoteToPrompt` (appends the blockquote to the existing draft, preserving prior text) wired through `App.tsx`.
+- `tsc --noEmit` and the Vite build pass; `docs/roadmap.md` updates W3.9 (remaining: branch promotion, attachments, PDF).
 
 ### Added — W3.2 Connectors: Google via one schema (complete)
 

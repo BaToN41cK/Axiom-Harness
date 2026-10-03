@@ -3,17 +3,18 @@ import type { ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { StatusPill } from "./Status";
 import type { PillState } from "./Status";
+import { useLocale } from "../../lib/locale";
 
 export type ToolCardState = PillState;
 
 const STATE_LABEL: Record<ToolCardState, string> = {
-  idle: "Ожидает",
-  queued: "В очереди",
-  running: "Выполняется",
-  completed: "Готово",
-  failed: "Ошибка",
-  denied: "Отклонено",
-  cancelled: "Прервано",
+  idle: "ui.toolcall.idle",
+  queued: "ui.toolcall.queued",
+  running: "ui.toolcall.running",
+  completed: "ui.toolcall.completed",
+  failed: "ui.toolcall.failed",
+  denied: "ui.toolcall.denied",
+  cancelled: "ui.toolcall.cancelled",
 };
 
 interface ToolCallCardProps {
@@ -69,6 +70,7 @@ export function ToolCallCard({
   className = "",
 }: ToolCallCardProps) {
   const [open, setOpen] = useState(defaultOpen);
+  const { t } = useLocale();
   const hasDetails =
     !!children ||
     !!error ||
@@ -92,7 +94,7 @@ export function ToolCallCard({
           >
             <ChevronRight size={13} strokeWidth={2} aria-hidden />
             <span className="ax-sr-only">
-              {open ? "Скрыть детали вызова" : "Показать детали вызова"}
+              {open ? t("ui.toolcall.hide_details") : t("ui.toolcall.show_details")}
             </span>
           </button>
         ) : (
@@ -108,9 +110,9 @@ export function ToolCallCard({
           </span>
           {subtitle && <span className="ax-tool-target">{subtitle}</span>}
         </div>
-        <StatusPill state={state} label={STATE_LABEL[state]} className="ax-tool-state" />
+        <StatusPill state={state} label={t(STATE_LABEL[state])} className="ax-tool-state" />
         {durationMs != null && state !== "running" && (
-          <span className="ax-tool-duration" title="Фактическая длительность">
+          <span className="ax-tool-duration" title={t("ui.toolcall.duration")}>
             {formatDuration(durationMs)}
           </span>
         )}
@@ -120,13 +122,13 @@ export function ToolCallCard({
         <div className="ax-tool-body">
           {error && (
             <section className="ax-tool-section is-error">
-              <h4>Ошибка</h4>
+              <h4>{t("ui.toolcall.error")}</h4>
               <pre>{error}</pre>
             </section>
           )}
           {args && Object.keys(args).length > 0 && (
             <section className="ax-tool-section">
-              <h4>Аргументы</h4>
+              <h4>{t("ui.toolcall.args")}</h4>
               <pre>{JSON.stringify(args, null, 2)}</pre>
             </section>
           )}

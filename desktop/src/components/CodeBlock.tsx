@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { copyText } from "../lib/format";
+import { useLocale } from "../lib/locale";
 
 interface Props {
   code: string;
@@ -10,6 +11,7 @@ interface Props {
 /** Fenced code block with a real copy action and the detected language. */
 export default function CodeBlock({ code, language }: Props) {
   const [copied, setCopied] = useState(false);
+  const { t } = useLocale();
 
   const copy = async () => {
     const ok = await copyText(code);
@@ -22,9 +24,9 @@ export default function CodeBlock({ code, language }: Props) {
     <div className="code-block">
       <div className="code-head">
         <span className="code-lang">{language || "text"}</span>
-        <button className="code-copy" onClick={copy} title="Скопировать код">
+        <button className="code-copy" onClick={copy} title={t("ui.code.copy_code")}>
           {copied ? <Check size={12} strokeWidth={2.2} /> : <Copy size={12} strokeWidth={1.9} />}
-          <span>{copied ? "Скопировано" : "Копировать"}</span>
+          <span>{copied ? t("ui.code.copied") : t("ui.code.copy")}</span>
         </button>
       </div>
       <pre>
@@ -37,7 +39,7 @@ export default function CodeBlock({ code, language }: Props) {
 /** Small icon-only copy button (used for whole answers). */
 export function CopyIconButton({
   text,
-  title = "Копировать",
+  title,
   className = "",
 }: {
   text: string;
@@ -45,10 +47,12 @@ export function CopyIconButton({
   className?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const { t } = useLocale();
+  const label = title ?? t("ui.code.copy");
   return (
     <button
       className={"msg-action " + className}
-      title={copied ? "Скопировано" : title}
+      title={copied ? t("ui.code.copied") : label}
       onClick={async () => {
         if (await copyText(text)) {
           setCopied(true);
@@ -57,7 +61,7 @@ export function CopyIconButton({
       }}
     >
       {copied ? <Check size={13} strokeWidth={2.2} /> : <Copy size={13} strokeWidth={1.9} />}
-      <span>{copied ? "Скопировано" : title}</span>
+      <span>{copied ? t("ui.code.copied") : label}</span>
     </button>
   );
 }

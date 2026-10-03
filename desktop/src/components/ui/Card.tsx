@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useLocale } from "../../lib/locale";
 
 interface CardProps {
   children: ReactNode;
@@ -125,8 +126,9 @@ export function Skeleton({
 
 /** Value that is genuinely unknown. Renders an em dash, never a guess. */
 export function Unknown({ title }: { title?: string }) {
+  const { t } = useLocale();
   return (
-    <span className="ax-unknown" title={title ?? "Нет данных"}>
+    <span className="ax-unknown" title={title ?? t("ui.card.no_data")}>
       —
     </span>
   );

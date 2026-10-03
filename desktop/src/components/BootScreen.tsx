@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { AlertTriangle, Check, Loader2, RefreshCw, Settings2 } from "lucide-react";
 import type { BootStep, Phase } from "../hooks/useAxiom";
+import { useLocale } from "../lib/locale";
 import BlackHole from "./BlackHole";
 import "../styles/boot-space.css";
 
@@ -134,17 +135,18 @@ function StatusTicker({ text }: { text: string }) {
   );
 }
 
-function statusLine(steps: BootStep[]): string {
+function statusLine(steps: BootStep[], t: (key: string) => string): string {
   const running = steps.find((s) => s.state === "running");
-  if (running) return `${running.label}…`;
-  if (steps.length > 0 && steps.every((s) => s.state === "ok")) return "Система готова";
+  if (running) return `${t(running.label)}…`;
+  if (steps.length > 0 && steps.every((s) => s.state === "ok")) return t("ui.boot.ready");
   const next = steps.find((s) => s.state === "pending");
-  if (next) return `${next.label}…`;
-  return "Запуск AXIOM…";
+  if (next) return `${t(next.label)}…`;
+  return t("ui.boot.starting");
 }
 
 /** The real boot sequence — every status is a probe that actually ran. */
 export default function BootScreen({ phase, steps, error, onRetry, onRestartCore, onOpenSettings }: Props) {
+  const { t } = useLocale();
   const failed = phase === "unavailable" || phase === "error";
   const { barRef, headRef, percentRef } = useSmoothProgress(steps);
   const doneCount = steps.filter((step) => step.state === "ok").length;
@@ -200,7 +202,7 @@ export default function BootScreen({ phase, steps, error, onRetry, onRestartCore
                       {step.state === "failed" && <AlertTriangle size={13} strokeWidth={2.2} />}
                     </span>
                   </span>
-                  <span className="boot-step-label">{step.label}</span>
+                  <span className="boot-step-label">{t(step.label)}</span>
                   {step.detail && (
                     <span key={step.detail} className="boot-step-detail">
                       {step.detail}
@@ -211,15 +213,15 @@ export default function BootScreen({ phase, steps, error, onRetry, onRestartCore
             </div>
 
             <div className="boot-progress boot-pipeline">
-              <div className="boot-pipeline-head">
-                <div className="boot-pipeline-status">
-                  <span className="boot-pipeline-kicker">Инициализация системы · {doneCount}/{steps.length}</span>
-                  <span className="boot-pipeline-line">
-                    <span className="boot-pipeline-caret" aria-hidden />
-                    <StatusTicker text={statusLine(steps)} />
-                  </span>
-                </div>
-                <div className="boot-pipeline-percent" aria-label="Прогресс загрузки">
+                <div className="boot-pipeline-head">
+                  <div className="boot-pipeline-status">
+                    <span className="boot-pipeline-kicker">{t("ui.boot.init", { done: String(doneCount), total: String(steps.length) })}</span>
+                    <span className="boot-pipeline-line">
+                      <span className="boot-pipeline-caret" aria-hidden />
+                      <StatusTicker text={statusLine(steps, t)} />
+                    </span>
+                  </div>
+                  <div className="boot-pipeline-percent" aria-label={t("ui.boot.progress")}>
                   <span ref={percentRef}>0</span>
                   <small>%</small>
                 </div>
@@ -232,9 +234,9 @@ export default function BootScreen({ phase, steps, error, onRetry, onRestartCore
                 {steps.map((step, index) => (
                   <span
                     key={step.id}
-                    className={"boot-pipeline-node " + step.state}
-                    style={{ left: `${((index + 1) / steps.length) * 100}%` }}
-                    title={step.label}
+                      className={"boot-pipeline-node " + step.state}
+                      style={{ left: `${((index + 1) / steps.length) * 100}%` }}
+                      title={t(step.label)}
                   />
                 ))}
                 <span className="boot-pipeline-node origin ok" style={{ left: "0%" }} />
@@ -249,7 +251,7 @@ export default function BootScreen({ phase, steps, error, onRetry, onRestartCore
                 design, so a tint alone can never carry "this is a problem". */}
             <div className="boot-error-badge">
               <AlertTriangle size={12} strokeWidth={2.6} aria-hidden />
-              <span>Запуск остановлен</span>
+              <span>{t("ui.boot.stopped")}</span>
             </div>
             <div className="boot-error-title">
               <AlertTriangle size={16} strokeWidth={2} aria-hidden />
@@ -258,26 +260,26 @@ export default function BootScreen({ phase, steps, error, onRetry, onRestartCore
             {error.hint && <div className="boot-error-hint">{error.hint}</div>}
             {phase === "unavailable" && (
               <>
-                <p className="boot-error-causes-title">Вероятные причины</p>
+                <p className="boot-error-causes-title">{t("ui.boot.causes")}</p>
                 <ul className="boot-error-causes">
-                  <li>Ollama не запущена — выполните <code>ollama serve</code></li>
-                  <li>неверный адрес API в настройках</li>
-                  <li>порт 11434 занят или соединение отклонено</li>
+                  <li>{t("ui.boot.cause1")}</li>
+                  <li>{t("ui.boot.cause2")}</li>
+                  <li>{t("ui.boot.cause3")}</li>
                 </ul>
               </>
             )}
             <div className="boot-error-actions">
               <button className="btn primary" onClick={onRetry}>
                 <RefreshCw size={14} strokeWidth={1.9} />
-                <span>Повторить</span>
+                <span>{t("ui.boot.retry")}</span>
               </button>
               <button className="btn ghost" onClick={onRestartCore}>
                 <RefreshCw size={14} strokeWidth={1.9} />
-                <span>Перезапустить ядро</span>
+                <span>{t("ui.boot.restart_core")}</span>
               </button>
               <button className="btn ghost" onClick={onOpenSettings}>
                 <Settings2 size={14} strokeWidth={1.9} />
-                <span>Настройки</span>
+                <span>{t("ui.common.settings")}</span>
               </button>
             </div>
           </div>

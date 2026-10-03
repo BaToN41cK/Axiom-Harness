@@ -20,6 +20,7 @@ import {
   MessageSquare,
   RefreshCw,
   Search,
+  Server,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -38,15 +39,22 @@ import type {
   MemoryRow,
   KnowledgeRow,
   KnowledgeHit,
+  McpServerRow,
+  SkillRow,
 } from "../types";
 import type { SettingsSection } from "../hooks/useAxiom";
 import { isSoundEnabled, playUiSound, setSoundEnabled } from "../lib/sound";
 import type { UiSound } from "../lib/sound";
+import { localizedShortcutLabel } from "../lib/commands";
+import { useLocale } from "../lib/locale";
 import ProvidersPanel from "./settings/ProvidersPanel";
 import PluginsMarketplace from "./settings/PluginsMarketplace";
+import McpPanel from "./settings/McpPanel";
+import SkillsPanel from "./settings/SkillsPanel";
 import "../styles/settings.css";
 import "../styles/settings-market.css";
 import "../styles/settings-polish.css";
+import "../styles/settings-harness.css";
 import pkg from "../../package.json";
 
 interface Props {
@@ -91,28 +99,43 @@ interface Props {
   onReindexKnowledge: (name: string) => Promise<boolean>;
   onRemoveKnowledge: (name: string) => Promise<boolean>;
   onSearchKnowledge: (query: string) => Promise<KnowledgeHit[]>;
+  // W3.5 MCP servers + Skills Manager.
+  mcpRows: McpServerRow[];
+  mcpLoading: boolean;
+  onLoadMcp: () => Promise<void>;
+  onAddMcp: (name: string, command: string[]) => Promise<McpServerRow | null>;
+  onRemoveMcp: (name: string) => Promise<boolean>;
+  onRestartMcp: (name: string) => Promise<McpServerRow | null>;
+  onTestMcp: (name: string, tool?: string, argumentsJson?: string) => Promise<{ ok: boolean; content: string; error: string | null }>;
+  skillRows: SkillRow[];
+  skillLoading: boolean;
+  onLoadSkills: () => Promise<void>;
+  onToggleSkill: (id: string, pinned: boolean) => Promise<void>;
+  onSuggestSkills: (text: string) => Promise<string[]>;
 }
 
-const SECTIONS: { key: SettingsSection; label: string; icon: ReactNode }[] = [
-  { key: "general", label: "Общие", icon: <Settings2 size={14} strokeWidth={1.8} /> },
-  { key: "appearance", label: "Вид", icon: <Sparkles size={14} strokeWidth={1.8} /> },
-  { key: "models", label: "Модели", icon: <SlidersHorizontal size={14} strokeWidth={1.8} /> },
-  { key: "providers", label: "Провайдеры", icon: <Globe size={14} strokeWidth={1.8} /> },
-  { key: "plugins", label: "Плагины", icon: <Wrench size={14} strokeWidth={1.8} /> },
-  { key: "memory", label: "Память", icon: <Brain size={14} strokeWidth={1.8} /> },
-  { key: "knowledge", label: "Знания", icon: <BookOpen size={14} strokeWidth={1.8} /> },
-  { key: "chat", label: "Чат", icon: <MessageSquare size={14} strokeWidth={1.8} /> },
-  { key: "tools", label: "Инструменты", icon: <Wrench size={14} strokeWidth={1.8} /> },
-  { key: "shortcuts", label: "Горячие клавиши", icon: <Keyboard size={14} strokeWidth={1.8} /> },
-  { key: "about", label: "О программе", icon: <Info size={14} strokeWidth={1.8} /> },
+const SECTIONS: { key: SettingsSection; labelKey: string; icon: ReactNode }[] = [
+  { key: "general", labelKey: "ui.settings.nav.general", icon: <Settings2 size={14} strokeWidth={1.8} /> },
+  { key: "appearance", labelKey: "ui.settings.nav.appearance", icon: <Sparkles size={14} strokeWidth={1.8} /> },
+  { key: "models", labelKey: "ui.settings.nav.models", icon: <SlidersHorizontal size={14} strokeWidth={1.8} /> },
+  { key: "providers", labelKey: "ui.settings.nav.providers", icon: <Globe size={14} strokeWidth={1.8} /> },
+  { key: "plugins", labelKey: "ui.settings.nav.plugins", icon: <Wrench size={14} strokeWidth={1.8} /> },
+  { key: "mcp", labelKey: "ui.settings.nav.mcp", icon: <Server size={14} strokeWidth={1.8} /> },
+  { key: "skills", labelKey: "ui.settings.nav.skills", icon: <Layers size={14} strokeWidth={1.8} /> },
+  { key: "memory", labelKey: "ui.settings.nav.memory", icon: <Brain size={14} strokeWidth={1.8} /> },
+  { key: "knowledge", labelKey: "ui.settings.nav.knowledge", icon: <BookOpen size={14} strokeWidth={1.8} /> },
+  { key: "chat", labelKey: "ui.settings.nav.chat", icon: <MessageSquare size={14} strokeWidth={1.8} /> },
+  { key: "tools", labelKey: "ui.settings.nav.tools", icon: <Wrench size={14} strokeWidth={1.8} /> },
+  { key: "shortcuts", labelKey: "ui.settings.nav.shortcuts", icon: <Keyboard size={14} strokeWidth={1.8} /> },
+  { key: "about", labelKey: "ui.settings.nav.about", icon: <Info size={14} strokeWidth={1.8} /> },
 ];
 
-const SECTION_GROUPS: { label: string; keys: SettingsSection[] }[] = [
-  { label: "Рабочее пространство", keys: ["general", "appearance", "chat", "shortcuts"] },
-  { label: "AI и подключения", keys: ["models", "providers", "tools"] },
-  { label: "Данные", keys: ["memory", "knowledge"] },
-  { label: "Расширения", keys: ["plugins"] },
-  { label: "Система", keys: ["about"] },
+const SECTION_GROUPS: { labelKey: string; keys: SettingsSection[] }[] = [
+  { labelKey: "ui.settings.group.workspace", keys: ["general", "appearance", "chat", "shortcuts"] },
+  { labelKey: "ui.settings.group.ai", keys: ["models", "providers", "tools"] },
+  { labelKey: "ui.settings.group.data", keys: ["memory", "knowledge"] },
+  { labelKey: "ui.settings.group.ext", keys: ["plugins", "mcp", "skills"] },
+  { labelKey: "ui.settings.group.system", keys: ["about"] },
 ];
 
 /** Colour family of each group — drives the icon tiles in nav and header. */
@@ -120,22 +143,24 @@ const SECTION_TINT: Record<SettingsSection, string> = {
   general: "ws", appearance: "ws", chat: "ws", shortcuts: "ws",
   models: "ai", providers: "ai", tools: "ai",
   memory: "data", knowledge: "data",
-  plugins: "ext",
+  plugins: "ext", mcp: "ext", skills: "ext",
   about: "sys",
 };
 
-const SECTION_META: Record<SettingsSection, { eyebrow: string; title: string; description: string }> = {
-  general: { eyebrow: "Рабочее пространство", title: "Общие", description: "История, системный промпт и базовое поведение AXIOM." },
-  appearance: { eyebrow: "Рабочее пространство", title: "Вид", description: "Тема, акцент, плотность интерфейса и анимации." },
-  chat: { eyebrow: "Рабочее пространство", title: "Чат", description: "Как AXIOM отображает и сопровождает поток ответа." },
-  shortcuts: { eyebrow: "Рабочее пространство", title: "Горячие клавиши", description: "Быстрые команды для навигации и работы с диалогом." },
-  models: { eyebrow: "AI и подключения", title: "Модели", description: "Ollama endpoint, reasoning и параметры генерации." },
-  providers: { eyebrow: "AI и подключения", title: "Провайдеры", description: "Подключения к локальным моделям и внешним API." },
-  tools: { eyebrow: "AI и подключения", title: "Инструменты", description: "Web search, файлы, terminal и режимы разрешений." },
-  memory: { eyebrow: "Данные", title: "Память", description: "Сохранённые факты и предпочтения, доступные для редактирования." },
-  knowledge: { eyebrow: "Данные", title: "Знания", description: "Коллекции документов и цитируемый локальный поиск." },
-  plugins: { eyebrow: "Расширения", title: "Плагины", description: "Установка, доверие и управление кодом расширений AXIOM." },
-  about: { eyebrow: "Система", title: "О программе", description: "Локальная архитектура AXIOM и сведения о безопасности." },
+const SECTION_META: Record<SettingsSection, { eyebrowKey: string; titleKey: string; descriptionKey: string }> = {
+  general: { eyebrowKey: "ui.settings.group.workspace", titleKey: "ui.settings.nav.general", descriptionKey: "ui.settings.desc.general" },
+  appearance: { eyebrowKey: "ui.settings.group.workspace", titleKey: "ui.settings.nav.appearance", descriptionKey: "ui.settings.desc.appearance" },
+  chat: { eyebrowKey: "ui.settings.group.workspace", titleKey: "ui.settings.nav.chat", descriptionKey: "ui.settings.desc.chat" },
+  shortcuts: { eyebrowKey: "ui.settings.group.workspace", titleKey: "ui.settings.nav.shortcuts", descriptionKey: "ui.settings.desc.shortcuts" },
+  models: { eyebrowKey: "ui.settings.group.ai", titleKey: "ui.settings.nav.models", descriptionKey: "ui.settings.desc.models" },
+  providers: { eyebrowKey: "ui.settings.group.ai", titleKey: "ui.settings.nav.providers", descriptionKey: "ui.settings.desc.providers" },
+  tools: { eyebrowKey: "ui.settings.group.ai", titleKey: "ui.settings.nav.tools", descriptionKey: "ui.settings.desc.tools" },
+  memory: { eyebrowKey: "ui.settings.group.data", titleKey: "ui.settings.nav.memory", descriptionKey: "ui.settings.desc.memory" },
+  knowledge: { eyebrowKey: "ui.settings.group.data", titleKey: "ui.settings.nav.knowledge", descriptionKey: "ui.settings.desc.knowledge" },
+  plugins: { eyebrowKey: "ui.settings.group.ext", titleKey: "ui.settings.nav.plugins", descriptionKey: "ui.settings.desc.plugins" },
+  mcp: { eyebrowKey: "ui.settings.group.ext", titleKey: "ui.settings.nav.mcp", descriptionKey: "ui.settings.desc.mcp" },
+  skills: { eyebrowKey: "ui.settings.group.ext", titleKey: "ui.settings.nav.skills", descriptionKey: "ui.settings.desc.skills" },
+  about: { eyebrowKey: "ui.settings.group.system", titleKey: "ui.settings.nav.about", descriptionKey: "ui.settings.desc.about" },
 };
 
 /** Settings-local dialog focus scope; nested confirmations take precedence. */
@@ -180,26 +205,28 @@ function useSettingsFocus(onClose: () => void) {
 
 function SettingsConfirmation({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useSettingsFocus(onClose);
+  const { t } = useLocale();
   const titleId = useId();
   return <div className="modal-backdrop settings-confirm-backdrop" onClick={(e) => { e.stopPropagation(); onClose(); }}>
     <div className="modal confirm settings-confirm" ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
-      <div className="modal-head"><h2 id={titleId}>{title}</h2><button className="icon-btn" aria-label="Закрыть подтверждение" onClick={onClose}><X size={16} /></button></div>
+      <div className="modal-head"><h2 id={titleId}>{title}</h2><button className="icon-btn" aria-label={t("ui.common.close")} onClick={onClose}><X size={16} /></button></div>
       {children}
     </div>
   </div>;
 }
 
-const SHORTCUTS: { keys: [string, string] | string; label: string }[] = [
-  { keys: "Ctrl+N", label: "Новый разговор" },
-  { keys: "Ctrl+B", label: "Показать/скрыть боковую панель" },
-  { keys: "Ctrl+K", label: "Поиск по разговорам" },
-  { keys: "Ctrl+,", label: "Настройки" },
-  { keys: "Ctrl+/", label: "Фокус в поле ввода" },
-  { keys: "Enter", label: "Отправить сообщение" },
-  { keys: "Shift+Enter", label: "Перенос строки" },
-  { keys: "Ctrl+Enter", label: "Отправить с веб-поиском" },
-  { keys: "Esc", label: "Остановить генерацию / закрыть окно" },
-  { keys: "Ctrl+V", label: "Вставить изображение (vision-модели)" },
+const SHORTCUTS: { keys: [string, string] | string; label: string; labelKey?: string }[] = [
+  { keys: "Ctrl+N", label: "Новый разговор", labelKey: "ui.shortcut.new_conversation" },
+  { keys: "Ctrl+B", label: "Показать/скрыть боковую панель", labelKey: "ui.shortcut.panel" },
+  { keys: "Ctrl+K", label: "Поиск по разговорам", labelKey: "ui.shortcut.history_search_pl" },
+  { keys: "Ctrl+F", label: "Поиск по текущему разговору", labelKey: "ui.shortcut.chat_search" },
+  { keys: "Ctrl+,", label: "Настройки", labelKey: "ui.shortcut.settings" },
+  { keys: "Ctrl+/", label: "Фокус в поле ввода", labelKey: "ui.shortcut.focus_input" },
+  { keys: "Enter", label: "Отправить сообщение", labelKey: "ui.shortcut.send" },
+  { keys: "Shift+Enter", label: "Перенос строки", labelKey: "ui.shortcut.newline" },
+  { keys: "Ctrl+Enter", label: "Отправить с веб-поиском", labelKey: "ui.shortcut.send_web" },
+  { keys: "Esc", label: "Остановить генерацию / закрыть окно", labelKey: "ui.shortcut.close" },
+  { keys: "Ctrl+V", label: "Вставить изображение (vision-модели)", labelKey: "ui.shortcut.paste_image" },
 ];
 
 export default function SettingsModal({
@@ -242,8 +269,21 @@ export default function SettingsModal({
   onReindexKnowledge,
   onRemoveKnowledge,
   onSearchKnowledge,
+  mcpRows,
+  mcpLoading,
+  onLoadMcp,
+  onAddMcp,
+  onRemoveMcp,
+  onRestartMcp,
+  onTestMcp,
+  skillRows,
+  skillLoading,
+  onLoadSkills,
+  onToggleSkill,
+  onSuggestSkills,
 }: Props) {
   const [draft, setDraft] = useState<AxiomConfig>(config);
+  const { t } = useLocale();
   const dialogRef = useSettingsFocus(onClose);
   const contentRef = useRef<HTMLElement>(null);
   const meta = SECTION_META[section];
@@ -259,11 +299,11 @@ export default function SettingsModal({
         keys: group.keys.filter((key) => {
           const item = SECTIONS.find((candidate) => candidate.key === key)!;
           const m = SECTION_META[key];
-          return [item.label, m.title, m.description, group.label].some((text) => text.toLowerCase().includes(q));
+          return [t(item.labelKey), t(m.titleKey), t(m.descriptionKey), t(group.labelKey)].some((text) => text.toLowerCase().includes(q));
         }),
       }))
       .filter((group) => group.keys.length > 0);
-  }, [navQuery]);
+  }, [navQuery, t]);
   const saveRef = useRef<() => void>(() => undefined);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -283,6 +323,8 @@ export default function SettingsModal({
   useEffect(() => {
     if (section === "providers") void onLoadProviders();
     if (section === "plugins") void onLoadPlugins();
+    if (section === "mcp") void onLoadMcp();
+    if (section === "skills") void onLoadSkills();
     if (section === "tools") void onLoadSearchProviders();
     if (section === "memory") void onLoadMemory();
     if (section === "knowledge") void onLoadKnowledge();
@@ -334,6 +376,7 @@ export default function SettingsModal({
       permission_mode: draft.permission_mode,
       autonomy_mode: draft.autonomy_mode,
       router_enabled: draft.router_enabled,
+      locale: draft.locale,
     };
     onSave(patch);
     onClose();
@@ -346,21 +389,21 @@ export default function SettingsModal({
         <div className="axiom-settings-head">
           <h2 id="axiom-settings-title">
             <span className="settings-logo" aria-hidden="true"><span /></span>
-            <span className="settings-wordmark">AXIOM</span>Настройки
+            <span className="settings-wordmark">AXIOM</span>{t("ui.common.settings")}
           </h2>
-          <button className="icon-btn" aria-label="Закрыть настройки" title="Закрыть (Esc)" onClick={onClose}>
+          <button className="icon-btn" aria-label={t("ui.settings.close")} title={t("ui.settings.close_title")} onClick={onClose}>
             <X size={16} strokeWidth={1.8} />
           </button>
         </div>
 
         <div className="axiom-settings-workspace">
-          <nav className="settings-nav" aria-label="Разделы настроек">
+          <nav className="settings-nav" aria-label={t("ui.settings.nav_aria")}>
             <label className="settings-nav-search">
               <Search size={13} strokeWidth={1.8} />
               <input
                 value={navQuery}
-                placeholder="Найти раздел"
-                aria-label="Найти раздел настроек"
+                placeholder={t("ui.settings.search_placeholder")}
+                aria-label={t("ui.settings.search_aria")}
                 onChange={(e) => setNavQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && navGroups[0]?.keys[0]) { setSection(navGroups[0].keys[0]); }
@@ -368,10 +411,10 @@ export default function SettingsModal({
                 }}
               />
             </label>
-            {navGroups.length === 0 && <div className="settings-nav-empty">Ничего не найдено</div>}
+            {navGroups.length === 0 && <div className="settings-nav-empty">{t("ui.common.nothing_found")}</div>}
             {navGroups.map((group) => (
-              <div className="settings-nav-group" key={group.label}>
-                <div className="settings-nav-group-label">{group.label}</div>
+              <div className="settings-nav-group" key={group.labelKey}>
+                <div className="settings-nav-group-label">{t(group.labelKey)}</div>
                 {group.keys.map((key) => {
                   const item = SECTIONS.find((candidate) => candidate.key === key)!;
                   return (
@@ -383,7 +426,7 @@ export default function SettingsModal({
                       onClick={() => { if (section !== item.key) playUiSound("panel"); setSection(item.key); }}
                     >
                       <span className={"settings-nav-icon tint-" + SECTION_TINT[item.key]}>{item.icon}</span>
-                      <span>{item.label}</span>
+                      <span>{t(item.labelKey)}</span>
                     </button>
                   );
                 })}
@@ -395,9 +438,9 @@ export default function SettingsModal({
             <header className="settings-section-title">
               <span className={"settings-section-icon tint-" + SECTION_TINT[section]} aria-hidden="true">{sectionItem?.icon}</span>
               <div>
-                <span className="settings-section-eyebrow">{meta.eyebrow}</span>
-                <h3 id="settings-section-heading">{meta.title}</h3>
-                <p>{meta.description}</p>
+                <span className="settings-section-eyebrow">{t(meta.eyebrowKey)}</span>
+                <h3 id="settings-section-heading">{t(meta.titleKey)}</h3>
+                <p>{t(meta.descriptionKey)}</p>
               </div>
             </header>
             <div className="settings-content" key={section}>
@@ -405,6 +448,8 @@ export default function SettingsModal({
             {section === "models" && <ModelsSection draft={draft} set={set} config={config} onRestartCore={onRestartCore} />}
             {section === "providers" && <ProvidersPanel rows={providerRows} models={providerModels} loading={providerLoading} activeModel={config.model} onSave={onProviderSaveSettings} onPickModel={onProviderPickModel} />}
             {section === "plugins" && <PluginsSection rows={pluginRows} bundled={bundledPlugins} loading={pluginLoading} onInstall={onInstallPlugin} onInstallBundled={onInstallBundledPlugin} onToggle={onTogglePlugin} onRemove={onRemovePlugin} />}
+            {section === "mcp" && <McpPanel rows={mcpRows} loading={mcpLoading} onLoad={onLoadMcp} onAdd={onAddMcp} onRemove={onRemoveMcp} onRestart={onRestartMcp} onTest={onTestMcp} />}
+            {section === "skills" && <SkillsPanel rows={skillRows} loading={skillLoading} onLoad={onLoadSkills} onToggle={onToggleSkill} onSuggest={onSuggestSkills} />}
             {section === "memory" && <MemorySection rows={memoryRows} loading={memoryLoading} onLoad={onLoadMemory} onAdd={onAddMemory} onEdit={onEditMemory} onDelete={onDeleteMemory} />}
             {section === "knowledge" && (
               <KnowledgeSection
@@ -430,19 +475,19 @@ export default function SettingsModal({
         <div className="axiom-settings-foot">
           <button className="btn ghost settings-restart" onClick={onRestartCore}>
             <RefreshCw size={14} strokeWidth={1.8} />
-            <span>Перезапустить ядро</span>
+            <span>{t("ui.settings.restart_core")}</span>
           </button>
           <span className={"settings-save-hint" + (dirty ? " dirty" : "")}>
             {dirty
-              ? <><span className="settings-dirty-dot" />Есть несохранённые изменения · Ctrl+S</>
-              : ["providers", "plugins", "memory", "knowledge"].includes(section) ? "Действия в этом разделе применяются сразу" : "Все изменения сохранены"}
+              ? <><span className="settings-dirty-dot" />{t("ui.settings.save_hint.dirty")}</>
+              : ["providers", "plugins", "mcp", "skills", "memory", "knowledge"].includes(section) ? t("ui.settings.save_hint.immediate") : t("ui.settings.save_hint.saved")}
           </span>
           <div className="modal-foot-spacer" />
           <button className="btn ghost" onClick={onClose}>
-            Отмена
+            {t("ui.common.cancel")}
           </button>
           <button className={"btn primary settings-save" + (dirty ? " pulse" : "")} onClick={save}>
-            Сохранить
+            {t("ui.common.save")}
           </button>
         </div>
       </div>
@@ -475,6 +520,7 @@ function PluginsSection({
 }) {
   const [pendingTrust, setPendingTrust] = useState<{ plugin: PluginRow | null; action: "install" | "run"; run: () => Promise<unknown> } | null>(null);
   const [pendingRemove, setPendingRemove] = useState<PluginRow | null>(null);
+  const { t } = useLocale();
 
   const requestTrust = (plugin: PluginRow | null, action: "install" | "run", run: () => Promise<unknown>) => {
     setPendingTrust({ plugin, action, run });
@@ -499,27 +545,27 @@ function PluginsSection({
         onRequestRemove={setPendingRemove}
       />
       {pendingTrust && (
-        <SettingsConfirmation title="Подтвердить доверие к плагину" onClose={() => setPendingTrust(null)}>
+        <SettingsConfirmation title={t("ui.settings.plugins.trust_title")} onClose={() => setPendingTrust(null)}>
             <div className="modal-body">
-              <strong>{pendingTrust.plugin ? `${pendingTrust.plugin.name} v${pendingTrust.plugin.version}` : "Плагин из выбранной папки"}</strong>
+              <strong>{pendingTrust.plugin ? `${pendingTrust.plugin.name} v${pendingTrust.plugin.version}` : t("ui.settings.plugins.from_folder")}</strong>
               {pendingTrust.plugin?.description && <p className="about-text">{pendingTrust.plugin.description}</p>}
-              {pendingTrust.plugin?.tools.length ? <p className="about-text">Объявленные инструменты: {pendingTrust.plugin.tools.join(", ")}</p> : null}
-              {pendingTrust.plugin?.capabilities.length ? <p className="about-text">Возможности манифеста: {pendingTrust.plugin.capabilities.join(", ")}</p> : null}
-              {pendingTrust.plugin?.ui_block?.scopes?.length ? <p className="about-text">Заявленные UI scopes (не применяются как ограничения Python): {pendingTrust.plugin.ui_block.scopes.join(", ")}</p> : null}
-              <p className="about-text">После импорта Python-код может действовать с правами пользователя и процесса AXIOM: читать и изменять доступные файлы, обращаться к сети, переменным окружения и запускать процессы. AXIOM не изолирует код плагина.</p>
-              <p className="about-text">{pendingTrust.action === "run" ? "Подтвердите запуск этого кода. Разрешение сохраняется, пока плагин включён." : "Подтверждение разрешает только установку. Плагин останется выключенным; запуск потребует отдельного подтверждения."}</p>
+              {pendingTrust.plugin?.tools.length ? <p className="about-text">{t("ui.settings.plugins.declared_tools", { tools: pendingTrust.plugin.tools.join(", ") })}</p> : null}
+              {pendingTrust.plugin?.capabilities.length ? <p className="about-text">{t("ui.settings.plugins.capabilities", { caps: pendingTrust.plugin.capabilities.join(", ") })}</p> : null}
+              {pendingTrust.plugin?.ui_block?.scopes?.length ? <p className="about-text">{t("ui.settings.plugins.ui_scopes", { scopes: pendingTrust.plugin.ui_block.scopes.join(", ") })}</p> : null}
+              <p className="about-text">{t("ui.settings.plugins.import_warning")}</p>
+              <p className="about-text">{pendingTrust.action === "run" ? t("ui.settings.plugins.run_confirm") : t("ui.settings.plugins.install_confirm")}</p>
             </div>
             <div className="modal-foot">
-              <button className="btn ghost" onClick={() => setPendingTrust(null)}>Отмена</button>
+              <button className="btn ghost" onClick={() => setPendingTrust(null)}>{t("ui.common.cancel")}</button>
               <div className="modal-foot-spacer" />
-              <button className="btn danger" onClick={() => void acceptTrust()}>{pendingTrust.action === "run" ? "Доверять и запустить" : "Подтвердить установку"}</button>
+              <button className="btn danger" onClick={() => void acceptTrust()}>{pendingTrust.action === "run" ? t("ui.settings.plugins.trust_run") : t("ui.settings.plugins.confirm_install")}</button>
             </div>
         </SettingsConfirmation>
       )}
       {pendingRemove && (
-        <SettingsConfirmation title="Удалить плагин?" onClose={() => setPendingRemove(null)}>
-          <div className="modal-body"><strong>{pendingRemove.name}</strong><p className="about-text">Плагин будет удалён из AXIOM. Его инструменты и расширения станут недоступны. Для повторного использования потребуется установка.</p></div>
-          <div className="modal-foot"><button className="btn ghost" onClick={() => setPendingRemove(null)}>Отмена</button><div className="modal-foot-spacer" /><button className="btn danger" onClick={() => { const name = pendingRemove.name; setPendingRemove(null); void onRemove(name); }}>Удалить плагин</button></div>
+        <SettingsConfirmation title={t("ui.settings.plugins.remove_title")} onClose={() => setPendingRemove(null)}>
+          <div className="modal-body"><strong>{pendingRemove.name}</strong><p className="about-text">{t("ui.settings.plugins.remove_body")}</p></div>
+          <div className="modal-foot"><button className="btn ghost" onClick={() => setPendingRemove(null)}>{t("ui.common.cancel")}</button><div className="modal-foot-spacer" /><button className="btn danger" onClick={() => { const name = pendingRemove.name; setPendingRemove(null); void onRemove(name); }}>{t("ui.settings.plugins.remove_plugin")}</button></div>
         </SettingsConfirmation>
       )}
     </div>
@@ -547,6 +593,7 @@ function MemorySection({
   const [scope, setScope] = useState("global");
   const [editing, setEditing] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const { t } = useLocale();
 
   const submit = async () => {
     if (!content.trim()) return;
@@ -566,15 +613,12 @@ function MemorySection({
     <div className="memory-settings">
       <div className="settings-section-head">
         <div>
-          <h3>Память</h3>
-          <p>
-            Факты и предпочтения, которые AXIOM помнит между запусками. Модель читает и пишет память
-            только через инструменты, а всё, что здесь сохранено, можно изменить или удалить вручную.
-          </p>
+          <h3>{t("ui.settings.memory.title")}</h3>
+          <p>{t("ui.settings.memory.desc")}</p>
         </div>
         <button className="btn ghost" disabled={loading} onClick={() => void onLoad()}>
           <RefreshCw size={13} strokeWidth={1.8} />
-          {loading ? "Обновление…" : "Обновить"}
+          {loading ? t("ui.common.refreshing") : t("ui.common.refresh")}
         </button>
       </div>
 
@@ -582,31 +626,31 @@ function MemorySection({
         <textarea
           className="memory-input"
           rows={2}
-          placeholder="Например: в этом проекте тесты запускаются через pytest"
+          placeholder={t("ui.settings.memory.placeholder")}
           value={content}
           onChange={(e) => setContent(e.target.value)}
         />
         <div className="memory-form-controls">
           <select className="memory-select" value={category} onChange={(e) => setCategory(e.target.value)}>
-            <option value="normal">обычный факт</option>
-            <option value="sensitive">личное предпочтение</option>
+            <option value="normal">{t("ui.settings.memory.cat.normal")}</option>
+            <option value="sensitive">{t("ui.settings.memory.cat.sensitive")}</option>
           </select>
           <select className="memory-select" value={scope} onChange={(e) => setScope(e.target.value)}>
-            <option value="global">глобально</option>
-            <option value="project">в проекте</option>
+            <option value="global">{t("ui.settings.memory.scope.global")}</option>
+            <option value="project">{t("ui.settings.memory.scope.project")}</option>
           </select>
           <button className="btn primary" disabled={!content.trim()} onClick={() => void submit()}>
-            Запомнить
+            {t("ui.settings.memory.remember")}
           </button>
         </div>
         <div className="settings-row-hint">
-          Категория «запрещённая» недоступна для записи: такие записи никогда не попадают на диск.
+          {t("ui.settings.memory.banned_hint")}
         </div>
       </div>
 
       {rows.length === 0 ? (
         <div className="settings-empty">
-          Память пуста. Добавьте факт вручную или попросите модель запомнить что-то в диалоге.
+          {t("ui.settings.memory.empty")}
         </div>
       ) : (
         <div className="memory-list">
@@ -624,9 +668,9 @@ function MemorySection({
                   <div className="memory-card-text">{row.content}</div>
                 )}
                 <div className="memory-card-meta">
-                  <span className="memory-badge">{row.scope === "project" ? "проект" : "глобально"}</span>
+                  <span className="memory-badge">{row.scope === "project" ? t("ui.settings.memory.badge.project") : t("ui.settings.memory.scope.global")}</span>
                   <span className="memory-badge">
-                    {row.category === "sensitive" ? "предпочтение" : "факт"}
+                    {row.category === "sensitive" ? t("ui.settings.memory.badge.preference") : t("ui.settings.memory.badge.fact")}
                   </span>
                   {row.tags.map((tag) => (
                     <span className="memory-badge" key={tag}>
@@ -639,23 +683,23 @@ function MemorySection({
                 {editing === row.id ? (
                   <>
                     <button className="btn primary small" onClick={() => void saveEdit(row.id)}>
-                      Сохранить
+                      {t("ui.common.save")}
                     </button>
                     <button className="btn ghost small" onClick={() => setEditing(null)}>
-                      Отмена
+                      {t("ui.common.cancel")}
                     </button>
                   </>
                 ) : (
                   <>
                     <button className="btn ghost small" onClick={() => startEdit(row)}>
-                      Изменить
+                      {t("ui.common.edit")}
                     </button>
                     <button
                       className="btn danger small"
                       onClick={() => void onDelete(row.id)}
-                      aria-label={`Удалить запись памяти: ${row.content}`}
+                      aria-label={t("ui.settings.memory.delete_aria", { content: row.content })}
                     >
-                      Удалить
+                      {t("ui.common.delete")}
                     </button>
                   </>
                 )}
@@ -691,6 +735,7 @@ function KnowledgeSection({
   const [path, setPath] = useState("");
   const [query, setQuery] = useState("");
   const [searched, setSearched] = useState(false);
+  const { t } = useLocale();
 
   const submitAdd = async () => {
     const trimmedName = name.trim() || path.trim().split(/[\\/]/).filter(Boolean).pop() || "collection";
@@ -711,16 +756,12 @@ function KnowledgeSection({
     <div className="memory-settings">
       <div className="settings-section-head">
         <div>
-          <h3>База знаний</h3>
-          <p>
-            Локальные папки и документы индексируются в SQLite/FTS5 (BM25 работает полностью
-            офлайн). Эмбеддинги Ollama — необязательный слой переранжирования: когда они
-            недоступны, статус честно показывает это. Модель получает только цитируемые фрагменты.
-          </p>
+          <h3>{t("ui.settings.knowledge.title")}</h3>
+          <p>{t("ui.settings.knowledge.desc")}</p>
         </div>
         <button className="btn ghost" disabled={loading} onClick={() => void onLoad()}>
           <RefreshCw size={13} strokeWidth={1.8} />
-          {loading ? "Обновление…" : "Обновить"}
+          {loading ? t("ui.common.refreshing") : t("ui.common.refresh")}
         </button>
       </div>
 
@@ -728,30 +769,28 @@ function KnowledgeSection({
         <div className="memory-form-controls">
           <input
             className="memory-input"
-            placeholder="Имя коллекции (напр. docs)"
+            placeholder={t("ui.settings.knowledge.name_placeholder")}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
           <input
             className="memory-input"
-            placeholder="Путь к папке или файлу…"
+            placeholder={t("ui.settings.knowledge.path_placeholder")}
             value={path}
             onChange={(e) => setPath(e.target.value)}
           />
           <button className="btn primary" disabled={!path.trim() || loading} onClick={() => void submitAdd()}>
-            Индексировать
+            {t("ui.settings.knowledge.index")}
           </button>
         </div>
         <div className="settings-row-hint">
-          Повторная индексация читает только изменённые файлы; секреты (.env, ключи) никогда
-          не попадают в индекс.
+          {t("ui.settings.knowledge.hint")}
         </div>
       </div>
 
       {rows.length === 0 ? (
         <div className="settings-empty">
-          Коллекций пока нет. Укажите папку выше — после индексации модель сможет искать
-          по ней через инструмент knowledge_search.
+          {t("ui.settings.knowledge.empty")}
         </div>
       ) : (
         <div className="memory-list">
@@ -760,18 +799,18 @@ function KnowledgeSection({
               <div className="memory-card-main">
                 <div className="memory-card-text">{row.name}</div>
                 <div className="memory-card-meta">
-                  <span className="memory-badge">{row.files} файлов</span>
-                  <span className="memory-badge">{row.chunks} фрагментов</span>
-                  <span className="memory-badge">эмбеддинги: {row.embeddings}</span>
+                  <span className="memory-badge">{row.files} {t("ui.settings.knowledge.files")}</span>
+                  <span className="memory-badge">{row.chunks} {t("ui.settings.knowledge.chunks")}</span>
+                  <span className="memory-badge">{t("ui.settings.knowledge.embeddings", { v: row.embeddings })}</span>
                 </div>
                 <div className="settings-row-hint">{row.path}</div>
               </div>
               <div className="memory-card-actions">
                 <button className="btn ghost small" disabled={loading} onClick={() => void onReindex(row.name)}>
-                  Переиндексировать
+                  {t("ui.settings.knowledge.reindex")}
                 </button>
                 <button className="btn danger small" onClick={() => void onRemove(row.name)}>
-                  Удалить
+                  {t("ui.common.delete")}
                 </button>
               </div>
             </div>
@@ -783,19 +822,19 @@ function KnowledgeSection({
         <div className="memory-form-controls">
           <input
             className="memory-input"
-            placeholder="Поисковый запрос по базе знаний…"
+            placeholder={t("ui.settings.knowledge.search_placeholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void submitSearch(); }}
           />
           <button className="btn ghost" disabled={!query.trim() || rows.length === 0} onClick={() => void submitSearch()}>
             <Search size={13} strokeWidth={1.8} />
-            Найти
+            {t("ui.common.search")}
           </button>
         </div>
       </div>
       {searched && hits.length === 0 && (
-        <div className="settings-empty">Фрагментов по запросу не найдено.</div>
+        <div className="settings-empty">{t("ui.settings.knowledge.no_hits")}</div>
       )}
       {hits.length > 0 && (
         <div className="memory-list">
@@ -826,11 +865,11 @@ const RowLabel = createContext<string | undefined>(undefined);
  * failure, a blocked tool call and a user stop. UI chrome sounds (panels,
  * settings) are intentionally not previewable — they are heard while clicking.
  */
-const SOUND_PREVIEWS: { kind: UiSound; label: string }[] = [
-  { kind: "complete", label: "Ответ готов" },
-  { kind: "error", label: "Ошибка" },
-  { kind: "permission", label: "Запрос разрешения" },
-  { kind: "stopped", label: "Остановлено" },
+const SOUND_PREVIEWS: { kind: UiSound; labelKey: string }[] = [
+  { kind: "complete", labelKey: "ui.settings.sound.complete" },
+  { kind: "error", labelKey: "ui.settings.sound.error" },
+  { kind: "permission", labelKey: "ui.settings.sound.permission" },
+  { kind: "stopped", labelKey: "ui.settings.sound.stopped" },
 ];
 
 function GroupTitle({ children }: { children: ReactNode }) {
@@ -869,13 +908,21 @@ function Toggle({ value, onChange, label }: { value: boolean | null; onChange: (
 }
 
 function GeneralSection({ draft, set }: SectionProps) {
+  const { t } = useLocale();
   return (
     <>
-      <GroupTitle>История и хранение</GroupTitle>
-      <Row label="Сохранять историю" hint="Разговоры хранятся локально в ~/.axiom">
+      <GroupTitle>{t("ui.settings.grp.language")}</GroupTitle>
+      <Row label={t("ui.settings.language")} hint={t("ui.settings.language_hint")}>
+        <select value={draft.locale} onChange={(e) => set("locale", e.target.value as AxiomConfig["locale"])}>
+          <option value="ru">{t("ui.settings.lang.ru")}</option>
+          <option value="en">{t("ui.settings.lang.en")}</option>
+        </select>
+      </Row>
+      <GroupTitle>{t("ui.settings.grp.history")}</GroupTitle>
+      <Row label={t("ui.settings.save_history")} hint={t("ui.settings.save_history_hint")}>
         <Toggle value={draft.save_history} onChange={(v) => set("save_history", v)} />
       </Row>
-      <Row label="Лимит истории" hint="Сколько последних разговоров хранить">
+      <Row label={t("ui.settings.history_limit")} hint={t("ui.settings.history_limit_hint")}>
         <input
           type="number"
           min={0}
@@ -884,23 +931,23 @@ function GeneralSection({ draft, set }: SectionProps) {
           onChange={(e) => set("history_limit", Number(e.target.value))}
         />
       </Row>
-      <GroupTitle>Поведение ассистента</GroupTitle>
-      <Row label="Temperature" hint="Пусто — значение модели по умолчанию">
+      <GroupTitle>{t("ui.settings.grp.behavior")}</GroupTitle>
+      <Row label="Temperature" hint={t("ui.settings.temperature_hint")}>
         <input
           type="number"
           step={0.1}
           min={0}
           max={2}
           value={draft.temperature ?? ""}
-          placeholder="auto"
+          placeholder={t("ui.settings.auto_placeholder")}
           onChange={(e) => set("temperature", e.target.value === "" ? null : Number(e.target.value))}
         />
       </Row>
-      <Row label="Системный промпт" hint="Пусто — встроенный промпт AXIOM">
+      <Row label={t("ui.settings.system_prompt")} hint={t("ui.settings.system_prompt_hint")}>
         <textarea
           rows={3}
           value={draft.system_prompt ?? ""}
-          placeholder="по умолчанию"
+          placeholder={t("ui.settings.default_placeholder")}
           onChange={(e) => set("system_prompt", e.target.value || null)}
         />
       </Row>
@@ -909,18 +956,19 @@ function GeneralSection({ draft, set }: SectionProps) {
 }
 
 function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { config: AxiomConfig; onRestartCore: () => void }) {
+  const { t } = useLocale();
   return (
     <>
-      <GroupTitle>Подключение к Ollama</GroupTitle>
-      <Row label="Ollama URL" hint={`Текущее соединение: ${config.ollama_url}`}>
+      <GroupTitle>{t("ui.settings.grp.ollama")}</GroupTitle>
+      <Row label="Ollama URL" hint={t("ui.settings.ollama_url_hint", { url: config.ollama_url })}>
         <input
           value={draft.ollama_url}
           spellCheck={false}
           onChange={(e) => set("ollama_url", e.target.value)}
         />
       </Row>
-      <GroupTitle>Рассуждение и генерация</GroupTitle>
-      <Row label="Think-режим" hint="Уровень рассуждений: авто — решает ядро по запросу">
+      <GroupTitle>{t("ui.settings.grp.reasoning")}</GroupTitle>
+      <Row label={t("ui.settings.think")} hint={t("ui.settings.think_hint")}>
         <select
           value={
             draft.think === null || draft.think === false
@@ -937,64 +985,64 @@ function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { c
             );
           }}
         >
-          <option value="auto">Авто</option>
-          <option value="on">Всегда</option>
-          <option value="low">Низкий</option>
-          <option value="medium">Средний</option>
-          <option value="high">Высокий</option>
-          <option value="max">Максимум</option>
+          <option value="auto">{t("ui.settings.think.auto")}</option>
+          <option value="on">{t("ui.settings.think.on")}</option>
+          <option value="low">{t("ui.settings.think.low")}</option>
+          <option value="medium">{t("ui.settings.think.medium")}</option>
+          <option value="high">{t("ui.settings.think.high")}</option>
+          <option value="max">{t("ui.settings.think.max")}</option>
         </select>
       </Row>
-      <Row label="Режим мышления" hint="Пресет глубины reasoning, когда Think = Авто">
+      <Row label={t("ui.settings.thinking_mode")} hint={t("ui.settings.thinking_mode_hint")}>
         <select
           value={draft.thinking_mode}
           onChange={(e) =>
             set("thinking_mode", e.target.value as AxiomConfig["thinking_mode"])
           }
         >
-          <option value="auto">Авто (по запросу)</option>
-          <option value="fast">Быстрый</option>
-          <option value="normal">Обычный</option>
-          <option value="deep">Глубокий</option>
+          <option value="auto">{t("ui.settings.thinking_mode.auto")}</option>
+          <option value="fast">{t("ui.settings.thinking_mode.fast")}</option>
+          <option value="normal">{t("ui.settings.thinking_mode.normal")}</option>
+          <option value="deep">{t("ui.settings.thinking_mode.deep")}</option>
         </select>
       </Row>
-      <GroupTitle>Память и лимиты</GroupTitle>
-      <Row label="Прогрев модели" hint="Загрузить модель в память сразу после старта">
+      <GroupTitle>{t("ui.settings.grp.memory_limits")}</GroupTitle>
+      <Row label={t("ui.settings.warmup")} hint={t("ui.settings.warmup_hint")}>
         <Toggle value={draft.warmup_model} onChange={(v) => set("warmup_model", v)} />
       </Row>
-      <Row label="Держать модель в памяти" hint='Ollama keep_alive, например "30m" или "1h"'>
+      <Row label={t("ui.settings.keep_alive")} hint={t("ui.settings.keep_alive_hint")}>
         <input
           value={draft.keep_alive}
           spellCheck={false}
           onChange={(e) => set("keep_alive", e.target.value)}
         />
       </Row>
-      <Row label="Контекстное окно" hint="Пусто — по умолчанию модели (num_ctx)">
+      <Row label={t("ui.settings.num_ctx")} hint={t("ui.settings.num_ctx_hint")}>
         <input
           type="number"
           min={512}
           max={131072}
           step={512}
           value={draft.num_ctx ?? ""}
-          placeholder="auto"
+          placeholder={t("ui.settings.auto_placeholder")}
           onChange={(e) => set("num_ctx", e.target.value === "" ? null : Number(e.target.value))}
         />
       </Row>
-      <Row label="Максимум ответа" hint="Лимит токенов генерации (num_predict), пусто — авто">
+      <Row label={t("ui.settings.num_predict")} hint={t("ui.settings.num_predict_hint")}>
         <input
           type="number"
           min={16}
           max={131072}
           value={draft.num_predict ?? ""}
-          placeholder="auto"
+          placeholder={t("ui.settings.auto_placeholder")}
           onChange={(e) =>
             set("num_predict", e.target.value === "" ? null : Number(e.target.value))
           }
         />
       </Row>
-      <Row label="Ядро AXIOM" hint="Перезапуск Python-ядра и повторная проверка Ollama">
+      <Row label={t("ui.settings.core")} hint={t("ui.settings.core_hint")}>
         <button className="btn ghost" onClick={onRestartCore}>
-          Перезапустить
+          {t("ui.settings.restart")}
         </button>
       </Row>
     </>
@@ -1002,29 +1050,30 @@ function ModelsSection({ draft, set, config, onRestartCore }: SectionProps & { c
 }
 
 function ChatSection({ draft, set }: SectionProps) {
+  const { t } = useLocale();
   return (
     <>
-      <GroupTitle>Отображение ответа</GroupTitle>
-      <Row label="Markdown" hint="Рендеринг ответов в Markdown с подсветкой кода">
+      <GroupTitle>{t("ui.settings.grp.response")}</GroupTitle>
+      <Row label="Markdown" hint={t("ui.settings.markdown_hint")}>
         <Toggle value={draft.render_markdown} onChange={(v) => set("render_markdown", v)} />
       </Row>
-      <Row label="Показывать reasoning" hint="Отображать thinking-блоки модели, когда они есть">
+      <Row label={t("ui.settings.show_reasoning")} hint={t("ui.settings.show_reasoning_hint")}>
         <Toggle value={draft.show_reasoning} onChange={(v) => set("show_reasoning", v)} />
       </Row>
-      <Row label="Раскрывать reasoning" hint="Thinking-блоки развёрнуты по умолчанию">
+      <Row label={t("ui.settings.reasoning_expanded")} hint={t("ui.settings.reasoning_expanded_hint")}>
         <Toggle value={draft.reasoning_expanded} onChange={(v) => set("reasoning_expanded", v)} />
       </Row>
-      <Row label="Автоскролл" hint="Следить за потоком генерации">
+      <Row label={t("ui.settings.auto_scroll")} hint={t("ui.settings.auto_scroll_hint")}>
         <Toggle value={draft.auto_scroll} onChange={(v) => set("auto_scroll", v)} />
       </Row>
-      <GroupTitle>Контекст и метрики</GroupTitle>
-      <Row label="Метрики ответа" hint="Время, токены, скорость после генерации">
+      <GroupTitle>{t("ui.settings.grp.context")}</GroupTitle>
+      <Row label={t("ui.settings.show_metrics")} hint={t("ui.settings.show_metrics_hint")}>
         <Toggle value={draft.show_metrics} onChange={(v) => set("show_metrics", v)} />
       </Row>
-      <Row label="Индикатор контекста" hint="Заполнение контекстного окна модели">
+      <Row label={t("ui.settings.show_context")} hint={t("ui.settings.show_context_hint")}>
         <Toggle value={draft.show_context} onChange={(v) => set("show_context", v)} />
       </Row>
-      <Row label="Сообщений в контексте" hint="Сколько последних сообщений отправлять модели">
+      <Row label={t("ui.settings.context_messages")} hint={t("ui.settings.context_messages_hint")}>
         <input
           type="number"
           min={4}
@@ -1051,13 +1100,14 @@ function ToolsSection({
   searchTesting: boolean;
 }) {
   const [testQuery, setTestQuery] = useState("AXIOM local AI");
+  const { t } = useLocale();
   return (
     <>
-      <GroupTitle>Поиск в интернете</GroupTitle>
-      <Row label="Веб-поиск" hint="Инструмент поиска в интернете (требует сеть, остальное — локально)">
+      <GroupTitle>{t("ui.settings.grp.web")}</GroupTitle>
+      <Row label={t("ui.settings.web_search")} hint={t("ui.settings.web_search_hint")}>
         <Toggle value={draft.web_search_enabled} onChange={(v) => set("web_search_enabled", v)} />
       </Row>
-      <Row label="Движок поиска" hint="Auto — устойчивая цепочка; можно закрепить один движок">
+      <Row label={t("ui.settings.search_provider")} hint={t("ui.settings.search_provider_hint")}>
         <select
           value={draft.search_provider}
           onChange={(e) => set("search_provider", e.target.value as AxiomConfig["search_provider"])}
@@ -1072,13 +1122,13 @@ function ToolsSection({
           ))}
         </select>
       </Row>
-      <Row label="Проверка поиска" hint="Реальный запрос: движок, задержка и результаты или ошибка">
+      <Row label={t("ui.settings.search_test")} hint={t("ui.settings.search_test_hint")}>
         <div className="search-test-control">
           <input
             value={testQuery}
-            aria-label="Запрос для проверки веб-поиска"
+            aria-label={t("ui.settings.search_query_aria")}
             spellCheck={false}
-            placeholder="запрос"
+            placeholder={t("ui.settings.query_placeholder")}
             onChange={(e) => setTestQuery(e.target.value)}
           />
           <button
@@ -1086,7 +1136,7 @@ function ToolsSection({
             disabled={searchTesting}
             onClick={() => void onRunSearchTest(testQuery)}
           >
-            {searchTesting ? "Проверка…" : "Проверить"}
+            {searchTesting ? t("ui.settings.testing") : t("ui.settings.test")}
           </button>
         </div>
       </Row>
@@ -1098,7 +1148,7 @@ function ToolsSection({
             </span>
             {searchTestResult.provider && <span>{searchTestResult.provider}</span>}
             <span>{searchTestResult.latency_ms} ms</span>
-            <span>{searchTestResult.result_count} результатов</span>
+            <span>{searchTestResult.result_count} {t("ui.settings.results")}</span>
           </div>
           {searchTestResult.error && (
             <div className="search-test-error">{searchTestResult.error}</div>
@@ -1108,42 +1158,42 @@ function ToolsSection({
           )}
           {searchTestResult.results.slice(0, 3).map((item, index) => (
             <div className="search-test-hit" key={index}>
-              <div className="search-test-hit-title">{item.title || "(без названия)"}</div>
+              <div className="search-test-hit-title">{item.title || t("ui.settings.untitled")}</div>
               <div className="search-test-hit-url">{item.url}</div>
             </div>
           ))}
         </div>
       )}
-      <GroupTitle>Доступ и разрешения</GroupTitle>
+      <GroupTitle>{t("ui.settings.grp.access")}</GroupTitle>
       <Row
-        label="Файлы проекта"
-        hint="Разрешить модели читать и редактировать файлы этой папки: list_files, read_file, write_file, edit_file"
+        label={t("ui.settings.project_files")}
+        hint={t("ui.settings.project_files_hint")}
       >
         <Toggle
           value={draft.workspace_tools_enabled}
           onChange={(v) => set("workspace_tools_enabled", v)}
         />
       </Row>
-      <Row label="Режим разрешений" hint="plan · edit · auto · full (поверх ask/auto)">
+      <Row label={t("ui.settings.permission_mode")} hint={t("ui.settings.permission_mode_hint")}>
         <select value={draft.autonomy_mode ?? "auto"} onChange={(e) => set("autonomy_mode", e.target.value as string)}>
-          <option value="plan">Plan — только чтение</option>
-          <option value="edit">Edit — правки в проекте, команды спрашивать</option>
-          <option value="auto">Auto — безопасное само, рискованное спросить</option>
-          <option value="full">Full — всё само, кроме опасного (осторожно)</option>
+          <option value="plan">{t("ui.settings.auto.plan")}</option>
+          <option value="edit">{t("ui.settings.auto.edit")}</option>
+          <option value="auto">{t("ui.settings.auto.auto")}</option>
+          <option value="full">{t("ui.settings.auto.full")}</option>
         </select>
       </Row>
-      <Row label="Доступ AI" hint="read_only — только чтение · workspace — внутри проекта · full — весь ПК (осторожно)">
+      <Row label={t("ui.settings.access_mode")} hint={t("ui.settings.access_mode_hint")}>
         <select value={draft.access_mode} onChange={(e) => set("access_mode", e.target.value as AxiomConfig["access_mode"])}>
-          <option value="read_only">Только чтение</option>
-          <option value="workspace">Проект (workspace)</option>
-          <option value="full">Полный доступ</option>
+          <option value="read_only">{t("ui.settings.access.read_only")}</option>
+          <option value="workspace">{t("ui.settings.access.workspace")}</option>
+          <option value="full">{t("ui.settings.access.full")}</option>
         </select>
       </Row>
-      <Row label="Терминал AI" hint="Разрешить модели выполнять команды в папке проекта">
+      <Row label={t("ui.settings.terminal_ai")} hint={t("ui.settings.terminal_ai_hint")}>
         <Toggle value={draft.terminal_enabled} onChange={(v) => set("terminal_enabled", v)} />
       </Row>
-      <GroupTitle>Лимиты веб-поиска</GroupTitle>
-      <Row label="Источников на запрос" hint="Сколько результатов возвращает поиск">
+      <GroupTitle>{t("ui.settings.grp.search_limits")}</GroupTitle>
+      <Row label={t("ui.settings.sources")} hint={t("ui.settings.sources_hint")}>
         <input
           type="number"
           min={1}
@@ -1152,7 +1202,7 @@ function ToolsSection({
           onChange={(e) => set("search_max_sources", Number(e.target.value))}
         />
       </Row>
-      <Row label="Читать источники" hint="Сколько страниц загружать целиком для ответа">
+      <Row label={t("ui.settings.read_sources")} hint={t("ui.settings.read_sources_hint")}>
         <input
           type="number"
           min={0}
@@ -1161,7 +1211,7 @@ function ToolsSection({
           onChange={(e) => set("search_read_sources", Number(e.target.value))}
         />
       </Row>
-      <Row label="Таймаут поиска, с" hint="Лимит ожидания поисковых провайдеров">
+      <Row label={t("ui.settings.search_timeout")} hint={t("ui.settings.search_timeout_hint")}>
         <input
           type="number"
           min={1}
@@ -1175,19 +1225,19 @@ function ToolsSection({
 }
 
 const DENSITY_LABELS: Record<AxiomConfig["density"], string> = {
-  compact: "Плотно",
-  comfortable: "Обычно",
-  spacious: "Просторно",
+  compact: "ui.settings.density.compact",
+  comfortable: "ui.settings.density.comfortable",
+  spacious: "ui.settings.density.spacious",
 };
 
 const ACCENT_LABELS: Record<AxiomConfig["accent"], string> = {
-  garnet: "Гранатовый",
-  blue: "Синий",
-  teal: "Бирюзовый",
-  violet: "Фиолетовый",
-  slate: "Серый",
-  rose: "Розовый",
-  amber: "Янтарный",
+  garnet: "ui.settings.accent.garnet",
+  blue: "ui.settings.accent.blue",
+  teal: "ui.settings.accent.teal",
+  violet: "ui.settings.accent.violet",
+  slate: "ui.settings.accent.slate",
+  rose: "ui.settings.accent.rose",
+  amber: "ui.settings.accent.amber",
 };
 
 const ACCENT_COLORS: Record<AxiomConfig["accent"], string> = {
@@ -1212,10 +1262,11 @@ function accentFor(theme: AxiomConfig["theme"], accent: AxiomConfig["accent"]): 
 
 function AppearanceSection({ draft, set }: SectionProps) {
   const [soundEnabled, setSoundEnabledState] = useState(isSoundEnabled);
+  const { t } = useLocale();
   return (
     <>
-      <GroupTitle>Цвет и оформление</GroupTitle>
-      <div className="theme-picker" role="radiogroup" aria-label="Тема">
+      <GroupTitle>{t("ui.settings.grp.color")}</GroupTitle>
+      <div className="theme-picker" role="radiogroup" aria-label={t("ui.settings.theme_aria")}>
         {THEME_PREVIEWS.map((theme) => (
           <button
             key={theme.id}
@@ -1241,16 +1292,16 @@ function AppearanceSection({ draft, set }: SectionProps) {
           </button>
         ))}
       </div>
-      <Row label="Акцент" hint={ACCENT_THEMES.includes(draft.theme) ? "Общий проверенный цвет для Desktop и TUI" : "У этой темы собственный акцент — выбор применяется к AXIOM Dark, Graphite и Light"}>
-        <div className="accent-picker" role="radiogroup" aria-label="Акцент">
+      <Row label={t("ui.settings.accent")} hint={ACCENT_THEMES.includes(draft.theme) ? t("ui.settings.accent_hint_shared") : t("ui.settings.accent_hint_own")}>
+        <div className="accent-picker" role="radiogroup" aria-label={t("ui.settings.accent_aria")}>
           {(Object.keys(ACCENT_LABELS) as AxiomConfig["accent"][]).map((accent) => (
             <button
               key={accent}
               type="button"
               role="radio"
               aria-checked={draft.accent === accent}
-              title={ACCENT_LABELS[accent]}
-              aria-label={ACCENT_LABELS[accent]}
+              title={t(ACCENT_LABELS[accent])}
+              aria-label={t(ACCENT_LABELS[accent])}
               className={"accent-dot" + (draft.accent === accent ? " active" : "")}
               style={{ ["--dot" as string]: ACCENT_COLORS[accent] }}
               onClick={() => set("accent", accent)}
@@ -1258,29 +1309,27 @@ function AppearanceSection({ draft, set }: SectionProps) {
               {draft.accent === accent && <Check size={11} strokeWidth={3} />}
             </button>
           ))}
-          <span className="accent-name">{ACCENT_LABELS[draft.accent]}</span>
+          <span className="accent-name">{t(ACCENT_LABELS[draft.accent])}</span>
         </div>
       </Row>
-      <Row label="Подсветка панелей" hint="Выделять строки и кнопки панели при наведении">
+      <Row label={t("ui.settings.panel_hover")} hint={t("ui.settings.panel_hover_hint")}>
         <Toggle value={draft.panel_hover} onChange={(v) => set("panel_hover", v)} />
       </Row>
-      <GroupTitle>Движение и звук</GroupTitle>
-      <Row label="Анимации" hint="Плавные переходы интерфейса">
+      <GroupTitle>{t("ui.settings.grp.motion")}</GroupTitle>
+      <Row label={t("ui.settings.animations")} hint={t("ui.settings.animations_hint")}>
         <Toggle value={draft.animations} onChange={(v) => set("animations", v)} />
       </Row>
-      <Row label="Тихие UI-звуки" hint="Выключены по умолчанию. Применяется сразу, только в desktop UI. Без звука при вводе текста.">
+      <Row label={t("ui.settings.ui_sounds")} hint={t("ui.settings.ui_sounds_hint")}>
         <Toggle
           value={soundEnabled}
-          label="Тихие UI-звуки"
+          label={t("ui.settings.ui_sounds")}
           onChange={(value) => {
             setSoundEnabledState(value);
             setSoundEnabled(value);
           }}
         />
       </Row>
-      {/* Each event has its own cue; the only honest way to show that is to
-          let the user hear them. Enabled only while sounds are on. */}
-      <Row label="Проверить звуки" hint="Ответ готов, ошибка, запрос разрешения и остановка звучат по-разному.">
+      <Row label={t("ui.settings.test_sounds")} hint={t("ui.settings.test_sounds_hint")}>
         <div className="sound-preview">
           {SOUND_PREVIEWS.map((preview) => (
             <button
@@ -1288,28 +1337,28 @@ function AppearanceSection({ draft, set }: SectionProps) {
               type="button"
               className="mini-btn"
               disabled={!soundEnabled}
-              title={soundEnabled ? `Проиграть: ${preview.label}` : "Сначала включите UI-звуки"}
+              title={soundEnabled ? t("ui.settings.play", { label: t(preview.labelKey) }) : t("ui.settings.enable_sounds")}
               onClick={() => playUiSound(preview.kind)}
             >
-              {preview.label}
+              {t(preview.labelKey)}
             </button>
           ))}
         </div>
       </Row>
-      <GroupTitle>Плотность и панели</GroupTitle>
-      <Row label="Плотность" hint="Отступы сообщений и списков">
+      <GroupTitle>{t("ui.settings.grp.density")}</GroupTitle>
+      <Row label={t("ui.settings.density")} hint={t("ui.settings.density_hint")}>
         <select
           value={draft.density}
           onChange={(e) => set("density", e.target.value as AxiomConfig["density"])}
         >
           {(Object.keys(DENSITY_LABELS) as AxiomConfig["density"][]).map((d) => (
             <option key={d} value={d}>
-              {DENSITY_LABELS[d]}
+              {t(DENSITY_LABELS[d])}
             </option>
           ))}
         </select>
       </Row>
-      <Row label="Размер шрифта, px">
+      <Row label={t("ui.settings.font_size")}>
         <input
           type="number"
           min={11}
@@ -1318,10 +1367,10 @@ function AppearanceSection({ draft, set }: SectionProps) {
           onChange={(e) => set("font_size", Number(e.target.value))}
         />
       </Row>
-      <Row label="Боковая панель открыта">
+      <Row label={t("ui.settings.sidebar_open")}>
         <Toggle value={draft.sidebar_open} onChange={(v) => set("sidebar_open", v)} />
       </Row>
-      <Row label="Ширина панели, px">
+      <Row label={t("ui.settings.sidebar_width")}>
         <input
           type="number"
           min={200}
@@ -1334,23 +1383,24 @@ function AppearanceSection({ draft, set }: SectionProps) {
   );
 }
 
-const ACCESS_LABELS: Record<string, string> = { read_only: "Только чтение", workspace: "Внутри проекта", full: "Полный доступ" };
+const ACCESS_LABELS: Record<string, string> = { read_only: "ui.settings.access.read_only", workspace: "ui.settings.access.workspace", full: "ui.settings.access.full" };
 
 function AboutSection({ config, pluginCount, providerCount }: { config: AxiomConfig; pluginCount: number; providerCount: number }) {
+  const { t } = useLocale();
   const [copied, setCopied] = useState<string | null>(null);
   const platform = typeof navigator !== "undefined" ? (/Windows/i.test(navigator.userAgent) ? "Windows" : /Mac/i.test(navigator.userAgent) ? "macOS" : "Linux") : "—";
   const facts: { icon: ReactNode; label: string; value: string; mono?: boolean }[] = [
-    { icon: <Cpu size={14} />, label: "Активная модель", value: config.model || "не выбрана", mono: true },
+    { icon: <Cpu size={14} />, label: t("ui.settings.about.active_model"), value: config.model || t("ui.settings.about.not_selected"), mono: true },
     { icon: <Zap size={14} />, label: "Ollama", value: config.ollama_url || "—", mono: true },
-    { icon: <FolderOpen size={14} />, label: "Проект", value: config.workspace_root || "не выбран", mono: true },
-    { icon: <Lock size={14} />, label: "Доступ AI", value: ACCESS_LABELS[config.access_mode] ?? String(config.access_mode) },
-    { icon: <Globe size={14} />, label: "Провайдеры", value: String(providerCount) },
-    { icon: <Puzzle size={14} />, label: "Плагины", value: String(pluginCount) },
+    { icon: <FolderOpen size={14} />, label: t("ui.settings.about.project"), value: config.workspace_root || t("ui.settings.about.not_chosen"), mono: true },
+    { icon: <Lock size={14} />, label: t("ui.settings.about.ai_access"), value: t(ACCESS_LABELS[config.access_mode] ?? config.access_mode) },
+    { icon: <Globe size={14} />, label: t("ui.settings.about.providers"), value: String(providerCount) },
+    { icon: <Puzzle size={14} />, label: t("ui.settings.about.plugins"), value: String(pluginCount) },
   ];
   const paths = [
-    { label: "Настройки", value: "~/.axiom/config.json" },
-    { label: "История", value: "~/.axiom/history" },
-    { label: "Плагины", value: "~/.axiom/plugins" },
+    { label: t("ui.common.settings"), value: "~/.axiom/config.json" },
+    { label: t("ui.settings.about.history"), value: "~/.axiom/history" },
+    { label: t("ui.settings.about.plugins"), value: "~/.axiom/plugins" },
   ];
   const copy = async (key: string, text: string) => {
     try { await navigator.clipboard.writeText(text); setCopied(key); window.setTimeout(() => setCopied((c) => (c === key ? null : c)), 1400); } catch { /* clipboard blocked */ }
@@ -1358,7 +1408,6 @@ function AboutSection({ config, pluginCount, providerCount }: { config: AxiomCon
   const diagnostics = [
     `AXIOM ${pkg.version} · desktop (Tauri 2 + React 18) · ${platform}`,
     ...facts.map((f) => `${f.label}: ${f.value}`),
-    `Тема: ${config.theme} · акцент: ${config.accent}`,
   ].join("\n");
 
   return (
@@ -1371,7 +1420,7 @@ function AboutSection({ config, pluginCount, providerCount }: { config: AxiomCon
         </div>
         <div className="about-hero-text">
           <div className="about-wordmark">AXIOM</div>
-          <p className="about-tagline">Локальный AI coding agent и desktop IDE: чат с моделями, файлы проекта, терминал, Git и веб-поиск в одном окне.</p>
+          <p className="about-tagline">{t("ui.settings.about.tagline")}</p>
           <div className="about-chips">
             <span className="about-chip accent">v{pkg.version}</span>
             <span className="about-chip">Desktop · Tauri 2</span>
@@ -1382,11 +1431,11 @@ function AboutSection({ config, pluginCount, providerCount }: { config: AxiomCon
         </div>
         <button className="btn ghost about-copy" onClick={() => void copy("diag", diagnostics)}>
           {copied === "diag" ? <Check size={13} /> : <Copy size={13} />}
-          {copied === "diag" ? "Скопировано" : "Скопировать сведения"}
+          {copied === "diag" ? t("ui.settings.about.copied") : t("ui.settings.about.copy_details")}
         </button>
       </section>
 
-      <h4 className="about-h">Текущая конфигурация</h4>
+      <h4 className="about-h">{t("ui.settings.about.current_config")}</h4>
       <div className="about-facts">
         {facts.map((fact) => (
           <div className="about-fact" key={fact.label}>
@@ -1397,15 +1446,15 @@ function AboutSection({ config, pluginCount, providerCount }: { config: AxiomCon
         ))}
       </div>
 
-      <h4 className="about-h">Что умеет AXIOM</h4>
+      <h4 className="about-h">{t("ui.settings.about.what")}</h4>
       <div className="about-features">
         {[
-          { icon: <MessageSquare size={16} />, title: "Чат и модели", text: "Ollama и внешние API через единый streaming runtime, reasoning и метрики." },
-          { icon: <FolderOpen size={16} />, title: "Работа с проектом", text: "Поиск, чтение и правка файлов строго внутри выбранной рабочей папки." },
-          { icon: <Terminal size={16} />, title: "Терминал и Git", text: "Команды, сборка, тесты и Git — с выводом прямо в ленте ответа." },
-          { icon: <Layers size={16} />, title: "Агенты", text: "Analyst, coder, debugger, tester и reviewer в одной траектории." },
-          { icon: <Puzzle size={16} />, title: "Плагины", text: "Каталог расширений с документацией, разрешениями и доверием." },
-          { icon: <ShieldCheck size={16} />, title: "Контроль", text: "Tool calls, timeline, permissions и причина остановки всегда видны." },
+          { icon: <MessageSquare size={16} />, title: t("ui.settings.about.feature.chat.title"), text: t("ui.settings.about.feature.chat.text") },
+          { icon: <FolderOpen size={16} />, title: t("ui.settings.about.feature.project.title"), text: t("ui.settings.about.feature.project.text") },
+          { icon: <Terminal size={16} />, title: t("ui.settings.about.feature.terminal.title"), text: t("ui.settings.about.feature.terminal.text") },
+          { icon: <Layers size={16} />, title: t("ui.settings.about.feature.agents.title"), text: t("ui.settings.about.feature.agents.text") },
+          { icon: <Puzzle size={16} />, title: t("ui.settings.about.feature.plugins.title"), text: t("ui.settings.about.feature.plugins.text") },
+          { icon: <ShieldCheck size={16} />, title: t("ui.settings.about.feature.control.title"), text: t("ui.settings.about.feature.control.text") },
         ].map((feature) => (
           <div className="about-feature" key={feature.title}>
             <span className="about-feature-icon">{feature.icon}</span>
@@ -1415,8 +1464,8 @@ function AboutSection({ config, pluginCount, providerCount }: { config: AxiomCon
         ))}
       </div>
 
-      <h4 className="about-h">Архитектура</h4>
-      <div className="about-arch" aria-label="Схема архитектуры">
+      <h4 className="about-h">{t("ui.settings.about.architecture")}</h4>
+      <div className="about-arch" aria-label={t("ui.settings.about.arch.scheme")}>
         <div className="about-arch-col">
           <div className="about-node"><Monitor size={14} /><b>Desktop GUI</b><span>Tauri 2 · React 18</span></div>
           <div className="about-node"><Terminal size={14} /><b>TUI</b><span>Textual</span></div>
@@ -1425,43 +1474,45 @@ function AboutSection({ config, pluginCount, providerCount }: { config: AxiomCon
         <div className="about-node core"><Cpu size={14} /><b>Python core</b><span>ChatSession · tools · permissions</span></div>
         <div className="about-arch-link" aria-hidden="true"><span /></div>
         <div className="about-arch-col">
-          <div className="about-node"><Zap size={14} /><b>Ollama</b><span>локальные модели</span></div>
-          <div className="about-node"><Globe size={14} /><b>API-провайдеры</b><span>облачные модели</span></div>
-          <div className="about-node"><HardDrive size={14} /><b>Проект</b><span>файлы · терминал · Git</span></div>
+          <div className="about-node"><Zap size={14} /><b>Ollama</b><span>{t("ui.settings.about.local_models")}</span></div>
+          <div className="about-node"><Globe size={14} /><b>API-провайдеры</b><span>{t("ui.settings.about.cloud_models")}</span></div>
+          <div className="about-node"><HardDrive size={14} /><b>{t("ui.settings.about.project")}</b><span>{t("ui.settings.about.project_desc")}</span></div>
         </div>
       </div>
 
-      <h4 className="about-h">Приватность и безопасность</h4>
+      <h4 className="about-h">{t("ui.settings.about.privacy")}</h4>
       <div className="about-privacy">
-        <div><Lock size={14} /><span>API-ключи, история и память хранятся локально на этом компьютере.</span></div>
-        <div><ShieldCheck size={14} /><span>Режим <b>auto_approve_all</b> разрешает инструменты без вопросов — включайте его только для доверенного проекта.</span></div>
-        <div><Puzzle size={14} /><span>Код плагинов не изолирован: устанавливайте расширения только из надёжных источников.</span></div>
+        <div><Lock size={14} /><span>{t("ui.settings.about.privacy.local")}</span></div>
+        <div><ShieldCheck size={14} /><span>{t("ui.settings.about.privacy.auto")}</span></div>
+        <div><Puzzle size={14} /><span>{t("ui.settings.about.privacy.plugins")}</span></div>
       </div>
 
-      <h4 className="about-h">Где хранятся данные</h4>
+      <h4 className="about-h">{t("ui.settings.about.data_where")}</h4>
       <div className="about-paths">
         {paths.map((item) => (
           <div className="about-path" key={item.label}>
             <span>{item.label}</span>
             <code>{item.value}</code>
-            <button className="icon-btn" aria-label={`Скопировать путь: ${item.label}`} onClick={() => void copy(item.label, item.value)}>
+            <button className="icon-btn" aria-label={`${t("ui.settings.about.copy_details")}: ${item.label}`} onClick={() => void copy(item.label, item.value)}>
               {copied === item.label ? <Check size={13} /> : <Copy size={13} />}
             </button>
           </div>
         ))}
       </div>
 
-      <p className="about-foot">© 2026 BaToN41cK · распространяется по лицензии MIT</p>
+      <p className="about-foot">{t("ui.settings.about.foot")}</p>
     </div>
   );
 }
 function ShortcutsSection() {
+  // W3.8: shortcut captions follow the core RU/EN catalog.
+  const { t } = useLocale();
   return (
     <div className="shortcuts-list">
       {SHORTCUTS.map((item) => (
-        <div className="settings-row" key={item.label}>
+        <div className="settings-row" key={Array.isArray(item.keys) ? item.keys.join("+") : item.keys}>
           <div className="settings-row-text">
-            <div className="settings-row-label">{item.label}</div>
+            <div className="settings-row-label">{localizedShortcutLabel(item, t)}</div>
           </div>
           <div className="settings-row-control">
             <span className="shortcut-keys">

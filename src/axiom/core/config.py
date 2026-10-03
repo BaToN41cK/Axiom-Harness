@@ -140,6 +140,8 @@ class Config(BaseModel):
     router_roles: dict[str, dict] = Field(default_factory=dict)
     #: External MCP servers [{"name": "...", "command": ["npx", ...]}] (п.15)
     mcp_servers: list[dict] = Field(default_factory=list)
+    #: Manually pinned skills (always injected into context; W3.5 Skills Manager)
+    pinned_skills: list[str] = Field(default_factory=list)
 
     # ------------------------------------------------------------ workspace UI
     #: UI density of the desktop workspace

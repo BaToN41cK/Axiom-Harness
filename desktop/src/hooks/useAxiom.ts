@@ -23,6 +23,8 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { commandByName, matchingCommands, parseCommand, pluginCommandById, setPluginCommands } from "../lib/commands";
 import { clearComposerData, readComposerDraft, writeComposerDraft } from "../lib/composerStorage";
 import { stripDataUrl } from "../lib/format";
+import { normalizeLocale, plural, t as tr, tVar } from "../lib/i18n";
+import type { AppLocale } from "../lib/i18n";
 import { playUiSound } from "../lib/sound";
 import type { UiSound } from "../lib/sound";
 import { clampRightPanelWidth, RIGHT_PANEL_MIN } from "../lib/panelSize";
@@ -58,6 +60,7 @@ import type {
   Artifact,
   AxiomConfig,
   ChatHit,
+  ChatTab,
   Conversation,
   CoreEvent,
   DoneMetrics,
@@ -84,6 +87,7 @@ import type {
   KnowledgeHit,
   KnowledgeIndexResult,
   AgentRow,
+  TabSwitchResult,
   TrajectoryViewer,
   TreeNode,
   WorkspaceState,
@@ -91,6 +95,9 @@ import type {
   SearchTestResult,
   PermissionDecision,
   PermissionRequest,
+  McpServerRow,
+  SkillRow,
+  RuleRow,
 } from "../types";
 
 export type Phase = "booting" | "ready" | "unavailable" | "error";
@@ -100,6 +107,8 @@ export type SettingsSection =
   | "models"
   | "providers"
   | "plugins"
+  | "mcp"
+  | "skills"
   | "memory"
   | "knowledge"
   | "chat"
@@ -122,14 +131,14 @@ export interface Toast {
   leaving?: boolean;
 }
 
-/** Real boot sequence — each label is a probe that really runs. */
+/** Real boot sequence — each label is a probe that really runs (i18n keys). */
 const BOOT_SEQUENCE: { id: string; label: string }[] = [
-  { id: "ui", label: "Инициализация интерфейса" },
-  { id: "detect", label: "Поиск Ollama" },
-  { id: "connect", label: "Подключение к Ollama" },
-  { id: "models", label: "Чтение установленных моделей" },
-  { id: "select", label: "Выбор активной модели" },
-  { id: "workspace", label: "Подготовка рабочего пространства" },
+  { id: "ui", label: "ui.boot.step.ui" },
+  { id: "detect", label: "ui.boot.step.detect" },
+  { id: "connect", label: "ui.boot.step.connect" },
+  { id: "models", label: "ui.boot.step.models" },
+  { id: "select", label: "ui.boot.step.select" },
+  { id: "workspace", label: "ui.boot.step.workspace" },
 ];
 
 let toastId = 0;
@@ -181,12 +190,24 @@ export function useAxiom() {
 
   // ----------------------------------------------------------------- config
   const [config, setConfig] = useState<AxiomConfig | null>(null);
+  // W3.8: live locale for status/toast/tool strings. A ref (not state) so the
+  // long-lived core-event subscription below always reads the current value.
+  const localeRef = useRef<AppLocale>("ru");
+  localeRef.current = normalizeLocale((config as { locale?: unknown } | null)?.locale ?? "ru");
+  // Bound toast/status translator over the core catalog (snapshot fallback).
+  const tn = (key: string, vars?: Record<string, string>) =>
+    vars ? tVar(key, localeRef.current, null, vars) : tr(key, localeRef.current);
   const [providerRows, setProviderRows] = useState<ProviderRow[]>([]);
   const [providerModels, setProviderModels] = useState<ProviderModelRow[]>([]);
   const [providerLoading, setProviderLoading] = useState(false);
   const [pluginRows, setPluginRows] = useState<PluginRow[]>([]);
   const [bundledPlugins, setBundledPlugins] = useState<PluginRow[]>([]);
   const [pluginLoading, setPluginLoading] = useState(false);
+  // W3.5 MCP servers + Skills Manager (rows driven by the bridge).
+  const [mcpRows, setMcpRows] = useState<McpServerRow[]>([]);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [skillRows, setSkillRows] = useState<SkillRow[]>([]);
+  const [skillLoading, setSkillLoading] = useState(false);
   // W2.1 Curated Memory: rows + add/edit/delete driven by the bridge.
   const [memoryRows, setMemoryRows] = useState<MemoryRow[]>([]);
   const [memoryLoading, setMemoryLoading] = useState(false);
@@ -223,6 +244,10 @@ export function useAxiom() {
   const [projectSearchResults, setProjectSearchResults] = useState<ProjectSearchResult>({ query: "", hits: [] });
   const [projectSearching, setProjectSearching] = useState(false);
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
+  // Composer context chips (§6): rules + skills attached to the next request.
+  const [ruleRows, setRuleRows] = useState<RuleRow[]>([]);
+  const [composerRules, setComposerRules] = useState<string[]>([]);
+  const [composerSkills, setComposerSkills] = useState<string[]>([]);
   const [agentTimelineOpen, setAgentTimelineOpen] = useState(true);
   const [termHistory, setTermHistory] = useState<{ command: string; result: TerminalResult }[]>([]);
   // W3.13: per-workspace terminal history survives switching projects and back.
@@ -230,6 +255,12 @@ export function useAxiom() {
   const [pendingTerm, setPendingTerm] = useState<string | null>(null);
   const [gitStatus, setGitStatus] = useState<{ ok: boolean; content: string; error: string | null } | null>(null);
   const [gitLog, setGitLog] = useState<{ ok: boolean; content: string; error: string | null } | null>(null);
+  // W3.3: open chat tabs (project/model/context isolation) + background work.
+  const [tabs, setTabs] = useState<ChatTab[]>([]);
+  const [knowledgeIndexing, setKnowledgeIndexing] = useState<string[]>([]);
+  /** W3.3: live background-task count (tray tooltip + tab strip label). */
+  const [runningTaskCount, setRunningTaskCount] = useState(0);
+  const runningTaskCountRef = useRef(0);
 
   // --------------------------------------------------------------------- ui
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -254,6 +285,9 @@ export function useAxiom() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  /** Right workbench panel tab (Files/Terminal/Git/Tasks/Documents). Store-held
+   * so the left rail can open a specific panel (e.g. the Taskbook) directly. */
+  const [rightPanelTab, setRightPanelTab] = useState<"files" | "terminal" | "git" | "tasks" | "documents">("files");
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [tools, setTools] = useState<ToolInfo[] | null>(null);
@@ -269,6 +303,20 @@ export function useAxiom() {
   function setDraft(value: string) {
     draftRef.current = value;
     setDraftState(value);
+  }
+
+  /** W3.9 quote-to-prompt: append the selected message text to the draft as a
+   *  `> ` blockquote and focus the composer for the follow-up question. */
+  function quoteToPrompt(text: string) {
+    const clean = text.trim();
+    if (!clean) return;
+    const quoted = clean
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    const base = draftRef.current.trimEnd();
+    setDraft(base ? `${base}\n\n${quoted}\n\n` : `${quoted}\n\n`);
+    window.setTimeout(() => composerRef.current?.focus(), 60);
   }
 
   useEffect(() => {
@@ -333,7 +381,7 @@ export function useAxiom() {
       try {
         let granted = await isPermissionGranted();
         if (!granted) granted = (await requestPermission()) === "granted";
-        if (granted) sendNotification({ title: "AXIOM", body: "Ответ готов" });
+        if (granted) sendNotification({ title: "AXIOM", body: tn("ui.notify.answer_ready") });
       } catch {
         /* notifications are optional (plugin/permission unavailable) */
       }
@@ -516,7 +564,7 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean; error?: string; output?: string }>(cmd, args);
       if (!res.ok) {
-        notify(res.error ?? "Операция Git не выполнена", "error");
+        notify(res.error ?? tn("ui.notify.git_failed"), "error");
         return false;
       }
       void loadGit();
@@ -539,7 +587,7 @@ export function useAxiom() {
 
   async function gitCommit(message: string, all = false): Promise<boolean> {
     const ok = await gitWrite("git_commit", { message, all });
-    if (ok) notify("Коммит создан", "ok");
+    if (ok) notify(tn("ui.notify.commit_created"), "ok");
     return ok;
   }
 
@@ -548,10 +596,10 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean; ref?: string; error?: string }>("git_checkpoint", {});
       if (!res.ok) {
-        notify(res.error ?? "Не удалось создать снимок", "error");
+        notify(res.error ?? tn("ui.notify.snapshot_failed"), "error");
         return false;
       }
-      notify("Снимок git создан", "ok");
+      notify(tn("ui.notify.snapshot_created"), "ok");
       return true;
     } catch (err) {
       notify(errorText(err), "error");
@@ -564,10 +612,10 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean; error?: string }>("git_rollback", {});
       if (!res.ok) {
-        notify(res.error ?? "Откат не выполнен", "error");
+        notify(res.error ?? tn("ui.notify.rollback_failed"), "error");
         return false;
       }
-      notify("Изменения откачены к снимку", "ok");
+      notify(tn("ui.notify.rollback_ok"), "ok");
       void loadGit();
       void loadTree();
       return true;
@@ -582,7 +630,7 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean; diff?: string; error?: string }>("git_diff_file", { path });
       if (!res.ok) {
-        notify(res.error ?? "Не удалось получить diff", "error");
+        notify(res.error ?? tn("ui.notify.diff_failed"), "error");
         return null;
       }
       return res.diff ?? "";
@@ -597,10 +645,10 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean; error?: string; output?: string }>("git_switch", { branch });
       if (!res.ok) {
-        notify(res.error ?? `Не удалось переключиться на ${branch}`, "error");
+        notify(res.error ?? tn("ui.notify.switch_failed", { branch }), "error");
         return false;
       }
-      notify(`Ветка: ${branch}`, "ok");
+      notify(tn("ui.notify.branch", { branch }), "ok");
       void loadGit();
       void loadWorkspace(); // the branch is shown in the project header
       return true;
@@ -647,14 +695,14 @@ export function useAxiom() {
           setStep("detect", "failed", probe.url);
           setConnected(false);
           setBootError({
-            message: "Ollama недоступна",
-            hint: `AXIOM не смог подключиться к ${probe.url}`,
+            message: tn("ui.notify.ollama_unavailable"),
+            hint: tn("ui.notify.connect_failed", { url: probe.url }),
             url: probe.url,
           });
           setPhase("unavailable");
           return;
         }
-        setStep("detect", "ok", `внешний provider: ${externalRoute.provider_id}`);
+        setStep("detect", "ok", tVar("ui.boot.external_provider", localeRef.current, null, { id: externalRoute.provider_id }));
       } else {
         setStep("detect", "ok", probe.url);
       }
@@ -668,8 +716,8 @@ export function useAxiom() {
         probe.version
           ? `Ollama ${probe.version}`
           : probe.available
-            ? "соединение установлено"
-            : "режим внешнего API",
+            ? tr("ui.boot.connected", localeRef.current)
+            : tr("ui.boot.external_api", localeRef.current),
       );
       await bootDelay(450);
 
@@ -697,17 +745,17 @@ export function useAxiom() {
         "models",
         "ok",
         list.length
-          ? `${list.length} модел${list.length === 1 ? "ь" : "и"}`
+          ? plural("ui.boot.models_count", list.length, localeRef.current)
           : lastModelsError
-            ? "нет данных — повторим позже"
-            : "моделей пока нет",
+            ? tr("ui.boot.no_data", localeRef.current)
+            : tr("ui.boot.no_models", localeRef.current),
       );
       await bootDelay(600);
 
       if (list.length === 0) {
         // An empty model list is NOT an error (API providers are coming):
         // boot continues to the main screen and the list is re-probed later.
-        setStep("select", "ok", "модель не выбрана");
+        setStep("select", "ok", tr("ui.boot.no_model", localeRef.current));
       } else {
         setStep("select", "running");
         await bootDelay(650);
@@ -729,7 +777,7 @@ export function useAxiom() {
         setStep("select", "ok", selected.displayName);
         if (cfg.warmup_model && (selected.providerId ?? "ollama") === "ollama") trackWarmup(selected.name);
         if (cfg.model && !preferred) {
-          notify(`Модель ${cfg.model} не найдена в Ollama — выбрана ${selected.displayName}`, "error");
+          notify(tn("ui.notify.model_not_found", { model: cfg.model, fallback: selected.displayName }), "error");
         }
       }
       await bootDelay(550);
@@ -748,13 +796,13 @@ export function useAxiom() {
           recent: prev?.recent ?? [],
           pinned: prev?.pinned ?? [],
         }));
-        setStep("workspace", "ok", ws.current ? `${ws.current.name} · ${ws.current.kind}` : "без проекта");
+        setStep("workspace", "ok", ws.current ? `${ws.current.name} · ${ws.current.kind}` : tr("ui.boot.no_project", localeRef.current));
         void loadTree(false, seq);
         void loadGit(seq);
         // Load recent/pinned projects after boot completes to avoid blocking startup
         void loadProjectList(seq);
       } catch {
-        setStep("workspace", "ok", "готово");
+        setStep("workspace", "ok", tr("ui.boot.done", localeRef.current));
       }
       await bootDelay(400); // Финальная пауза перед переходом
       setConnected(true);
@@ -762,6 +810,9 @@ export function useAxiom() {
       setPhase("ready");
       // Plugin commands surface in the palette without a settings visit (W3.1).
       void loadPluginCommands();
+      // W3.3: restore the open-tab strip and the live background-task count.
+      void refreshTabs();
+      void refreshRunningTasks();
       // Background model warm-up: fire-and-forget, never blocks the GUI.
       void request<{ warmed: boolean; pending: boolean }>("warmup", {}).catch(() => {});
       if (list.length === 0) {
@@ -794,19 +845,20 @@ export function useAxiom() {
 
   // ------------------------------------------------------------ status text
   function applyStatus(state: string, detail: string | null) {
+    const loc = localeRef.current;
     setLiveState(state);
     switch (state) {
       case "thinking":
-        setStatusText("Размышляет…");
+        setStatusText(tr("ui.status.thinking", loc));
         break;
       case "connecting":
-        setStatusText(detail ? `Подключается к ${detail}…` : "Подключается…");
+        setStatusText(detail ? tVar("ui.status.connecting", loc, null, { detail }) : tr("ui.status.connecting_plain", loc));
         break;
       case "searching":
-        setStatusText("Ищет в интернете…");
+        setStatusText(tr("ui.toolstatus.searching_plain", loc));
         break;
       case "tool_call":
-        setStatusText(detail ?? "Инструмент");
+        setStatusText(detail ?? tr("ui.status.tool", loc));
         break;
       case "receiving":
         setStatusText(null);
@@ -863,7 +915,7 @@ export function useAxiom() {
           break;
         case "tool_call":
           setLiveState(event.name === "web_search" ? "searching" : "tool_call");
-          setStatusText(toolStatusText(event.name, event.arguments ?? {}));
+          setStatusText(toolStatusText(event.name, event.arguments ?? {}, localeRef.current));
           setMessages((list) =>
             updateLive(list, (m) => {
               m.toolCalls.push({
@@ -922,7 +974,7 @@ export function useAxiom() {
             lastTreeSyncRef.current = Date.now();
             void loadTree(true);
           }
-          const progress = orchestrationProgress(event);
+          const progress = orchestrationProgress(event, localeRef.current);
           if (progress) setStatusText(progress);
           // The board is the primary rendering: every step is reduced into the
           // typed state instead of being appended to the message text.
@@ -940,6 +992,26 @@ export function useAxiom() {
           if (last?.id === event.task.id && last.revision > event.task.revision) break;
           latestTaskEventRef.current = event.task;
           const wasActive = taskActiveRef.current;
+          // W3.8: live task states come from the core RU/EN catalog (hoisted:
+          // the completion toast below shares the same label lookup).
+          const loc = localeRef.current;
+          const stateKey: Record<Task["state"], string> = {
+            pending: "ui.task.state.pending",
+            analyzing: "ui.task.state.analyzing",
+            planning: "ui.task.state.planning",
+            executing: "ui.task.state.executing",
+            waiting_for_permission: "ui.task.state.waiting_for_permission",
+            verifying: "ui.task.state.verifying",
+            waiting_for_user: "ui.task.state.waiting_for_user",
+            completed: "ui.task.state.completed",
+            failed: "ui.task.state.failed",
+            cancelled: "ui.task.state.cancelled",
+          };
+          const stateLabel = (state: Task["state"]): string => {
+            const key = stateKey[state];
+            const hit = tr(key, loc);
+            return hit === key ? state : hit;
+          };
           setTasks((list) => {
             const existing = list.find((task) => task.id === event.task.id);
             if (existing && existing.revision > event.task.revision) return list;
@@ -948,20 +1020,8 @@ export function useAxiom() {
           if (wasActive) {
             setActiveTaskId(event.task_id);
             if (event.kind === "task.started" || event.kind === "task.resumed") setFocusedTaskId(event.task_id);
-            const labels: Record<Task["state"], string> = {
-              pending: "готова к запуску",
-              analyzing: "анализирует проект",
-              planning: "составляет план",
-              executing: "выполняет шаг",
-              waiting_for_permission: "ожидает разрешения",
-              verifying: "проверяет результат",
-              waiting_for_user: "требует решения",
-              completed: "завершена",
-              failed: "завершилась с ошибкой",
-              cancelled: "остановлена",
-            };
             const detail = event.task.detail?.trim();
-            setStatusText(`Задача: ${labels[event.task.state] ?? event.task.state}${detail ? ` · ${detail.slice(0, 120)}` : ""}`);
+            setStatusText(`${tr("ui.task.label", loc)}: ${stateLabel(event.task.state)}${detail ? ` · ${detail.slice(0, 120)}` : ""}`);
           }
           const terminal = ["completed", "failed", "cancelled", "waiting_for_user"].includes(event.task.state);
           if (terminal && wasActive) {
@@ -980,23 +1040,54 @@ export function useAxiom() {
           // task event, so the toast never fabricates a result.
           if (terminal && !wasActive) {
             const title = event.task.goal?.trim();
-            const labels: Partial<Record<Task["state"], string>> = {
-              completed: "завершена",
-              failed: "завершилась с ошибкой",
-              cancelled: "остановлена",
-              waiting_for_user: "требует решения",
-            };
             notify(
-              `Фоновая задача${title ? ` «${title.slice(0, 60)}»` : ""} — ${labels[event.task.state] ?? event.task.state}`,
+              `${tr("ui.task.background", localeRef.current)}${title ? ` «${title.slice(0, 60)}»` : ""} — ${stateLabel(event.task.state)}`,
               event.task.state === "completed" ? "ok" : "error",
             );
+          }
+          // W3.3: every task event is a chance to keep the live running-task
+          // count (tab strip badge + tray tooltip) honest without polling.
+          void refreshRunningTasks();
+          break;
+        }
+        case "knowledge": {
+          // W3.3: background indexing progress/result — one toast per phase.
+          const loc = localeRef.current;
+          const name = event.collection;
+          if (event.phase === "started") {
+            setKnowledgeIndexing((list) => (list.includes(name) ? list : [...list, name]));
+            notify(tVar("ui.knowledge.indexing", loc, null, { name }), "info");
+          } else {
+            setKnowledgeIndexing((list) => list.filter((item) => item !== name));
+            if (event.phase === "completed") {
+              const stats = event.stats;
+              notify(
+                tVar("ui.knowledge.indexed", loc, null, {
+                  name,
+                  n: String(stats?.indexed ?? 0),
+                  k: String(stats?.unchanged ?? 0),
+                }),
+                "ok",
+              );
+              void loadKnowledge();
+            } else if (event.phase === "failed") {
+              notify(
+                tVar("ui.knowledge.index_failed", loc, null, {
+                  name,
+                  error: event.error ?? "",
+                }),
+                "error",
+              );
+            } else {
+              notify(tVar("ui.knowledge.index_cancelled", loc, null, { name }), "info");
+            }
           }
           break;
         }
         case "permission_request":
           // W2.4: the blocked tool call waits for a real answer from this dialog.
           setPendingPermission(event);
-          setStatusText(`Ожидает разрешения: ${event.tool}`);
+          setStatusText(tVar("ui.status.permission_wait", localeRef.current, null, { tool: event.tool }));
           // A distinct nudge: the run is blocked until the user decides.
           playUiSound("permission");
           break;
@@ -1024,7 +1115,7 @@ export function useAxiom() {
     setElapsedMs(0);
     setGenerating(true);
     setLiveState("connecting");
-    setStatusText("Подключается…");
+    setStatusText(tr("ui.status.connecting_plain", localeRef.current));
   }
 
   function failGeneration(err: unknown) {
@@ -1072,17 +1163,17 @@ export function useAxiom() {
 
   async function beginOrchestration(userMessage: LiveMessage, task: string) {
     if (generatingRef.current) {
-      notify("Генерация уже идёт — сначала остановите её", "error");
+      notify(tn("ui.notify.gen_busy"), "error");
       return;
     }
     if (!connected && !activeModel) {
-      notify("Подключите Ollama или внешний provider", "error");
+      notify(tn("ui.notify.connect_provider"), "error");
       return;
     }
     beginGeneration();
     orchestrationActiveRef.current = true;
     // «Подключается…» было бы неправдой: план и воркеры уже работают.
-    setStatusText("Оркестрация: план…");
+    setStatusText(tr("ui.orch.plan", localeRef.current));
     setMessages((list) => {
       const assistant = liveAssistant();
       assistant.orchestration = emptyOrchestration(task);
@@ -1108,7 +1199,7 @@ export function useAxiom() {
             return {
               ...item,
               orchestration: board,
-              content: orchestrationMarkdown(board),
+              content: orchestrationMarkdown(board, tn),
               streaming: false,
               createdAt: Date.now(),
             };
@@ -1122,7 +1213,7 @@ export function useAxiom() {
         setGenerating(false);
         setStatusText(null);
         setLiveState("idle");
-        notify("Оркестрация остановлена", "info");
+        notify(tr("ui.orch.cancelled", localeRef.current), "info");
         return;
       }
       if (result.ok === false && result.error) {
@@ -1165,11 +1256,11 @@ export function useAxiom() {
     const attached = (images || []).filter(Boolean);
     if (!clean && attached.length === 0) return;
     if (generatingRef.current) {
-      notify("Генерация уже идёт — остановите её (Esc)", "error");
+      notify(tn("ui.notify.gen_busy_esc"), "error");
       return;
     }
     if (!connected) {
-      notify("Ollama недоступна — проверьте подключение", "error");
+      notify(tn("ui.notify.ollama_check"), "error");
       return;
     }
     if (forceSearch) playUiSound("search");
@@ -1195,7 +1286,7 @@ export function useAxiom() {
       void respondPermission("deny");
     }
     if (!generatingRef.current) return;
-    setStatusText("Останавливаю…");
+    setStatusText(tn("ui.notify.stopping"));
     try {
       await request<{ cancelled: boolean }>("cancel");
     } catch {
@@ -1214,7 +1305,7 @@ export function useAxiom() {
         id: pending.id,
         decision,
       });
-      if (!res.resolved) notify("Запрос разрешения уже неактуален", "error");
+      if (!res.resolved) notify(tn("ui.notify.permission_stale"), "error");
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -1222,11 +1313,11 @@ export function useAxiom() {
 
   async function regenerate(forceSearch = false) {
     if (generatingRef.current) {
-      notify("Генерация уже идёт — остановите её (Esc)", "error");
+      notify(tn("ui.notify.gen_busy_esc"), "error");
       return;
     }
     if (!messages.some((m) => m.role === "user")) {
-      notify("Нечего перегенерировать — сначала отправьте сообщение", "error");
+      notify(tn("ui.notify.nothing_regenerate"), "error");
       return;
     }
     await streamTurn("regenerate", { forceSearch }, () => {
@@ -1240,16 +1331,16 @@ export function useAxiom() {
 
   async function continueGeneration() {
     if (generatingRef.current) {
-      notify("Генерация уже идёт — остановите её (Esc)", "error");
+      notify(tn("ui.notify.gen_busy_esc"), "error");
       return;
     }
     if (!connected) {
-      notify("Ollama недоступна — проверьте подключение", "error");
+      notify(tn("ui.notify.ollama_check"), "error");
       return;
     }
     const hasPartial = messages.some((m) => m.role === "assistant" && m.content);
     if (!hasPartial) {
-      notify("Продолжать нечего — в этом чате ещё нет ответа", "error");
+      notify(tn("ui.notify.nothing_continue"), "error");
       return;
     }
     // Resume in place: the backend nudges the model with the partial answer
@@ -1270,11 +1361,11 @@ export function useAxiom() {
   async function editLastUser(text: string, forceSearch = false) {
     const clean = text.trim();
     if (!clean) {
-      notify("Сообщение не может быть пустым", "error");
+      notify(tn("ui.notify.empty_message"), "error");
       return;
     }
     if (generatingRef.current) {
-      notify("Генерация уже идёт — остановите её (Esc)", "error");
+      notify(tn("ui.notify.gen_busy_esc"), "error");
       return;
     }
     let index = -1;
@@ -1285,7 +1376,7 @@ export function useAxiom() {
       }
     }
     if (index === -1) {
-      notify("Нет сообщения для правки", "error");
+      notify(tn("ui.notify.no_message_edit"), "error");
       return;
     }
     const images = messages[index].images ?? [];
@@ -1321,31 +1412,178 @@ export function useAxiom() {
     try {
       const conversation = await request<Conversation | null>("load_chat", { id });
       if (!conversation) {
-        notify("Разговор не найден", "error");
+        notify(tn("ui.notify.conversation_not_found"), "error");
         void refreshChats();
         return;
       }
       switchComposerDraft(id);
       setActiveChatId(id);
-      setMessages(
-        (conversation.messages ?? []).map((message, index) => ({
-          id: `${id}-${index}`,
-          role: message.role,
-          content: message.content,
-          thinking: message.thinking ?? "",
-          streaming: false,
-          toolCalls: [],
-          sources: [],
-          createdAt: conversation.updatedAt,
-          images: Array.isArray(message.images) ? message.images.filter(Boolean) : [],
-          artifacts: Array.isArray(message.artifacts) ? message.artifacts : [],
-        })),
-      );
+      setMessages(messagesFromStored(conversation));
       setStatusText(null);
       setLiveState("idle");
       setLastMetrics(null);
     } catch (err) {
       notify(errorText(err), "error");
+    }
+  }
+
+  /** Stored messages → live render list (shared by openChat and tab switches). */
+  function messagesFromStored(conversation: Conversation): LiveMessage[] {
+    return (conversation.messages ?? []).map((message, index) => ({
+      id: `${conversation.id}-${index}`,
+      role: message.role,
+      content: message.content,
+      thinking: message.thinking ?? "",
+      streaming: false,
+      toolCalls: [],
+      sources: [],
+      createdAt: conversation.updatedAt,
+      images: Array.isArray(message.images) ? message.images.filter(Boolean) : [],
+      artifacts: Array.isArray(message.artifacts) ? message.artifacts : [],
+    }));
+  }
+
+  // -------------------------------------------------- W3.3 chat tabs
+  /** Open a new chat tab (inherits the current project by default). */
+  async function openTab(): Promise<void> {
+    if (generatingRef.current) {
+      notify(tn("ui.chattabs.stop_first"), "error");
+      return;
+    }
+    try {
+      const result = await request<TabSwitchResult>("tab_open", {});
+      setTabs(result.tabs);
+      const conversation = result.conversation;
+      setMessages(conversation ? messagesFromStored(conversation) : []);
+      setWorkspace((w) => ({
+        ...(w ?? { recent: [], pinned: [] }),
+        current: result.workspace.current,
+      }));
+      const tab = result.tabs.find((row) => row.active);
+      if (tab?.conversation_id) {
+        switchComposerDraft(tab.conversation_id);
+        setActiveChatId(tab.conversation_id);
+      } else {
+        switchComposerDraft(null);
+        setActiveChatId(null);
+      }
+      const seq = ++workspaceSeqRef.current;
+      await Promise.all([loadTree(false, seq), loadGit(seq)]);
+      void refreshChats();
+    } catch (err) {
+      notify(errorText(err), "error");
+    }
+  }
+
+  /** Switch the session to a tab's project, model and conversation. */
+  async function activateTab(id: string): Promise<void> {
+    if (generatingRef.current) {
+      notify(tn("ui.chattabs.stop_first"), "error");
+      return;
+    }
+    if (tabs.find((tab) => tab.id === id)?.active) return;
+    const seq = ++workspaceSeqRef.current;
+    const prevRoot = workspace?.current?.path;
+    if (prevRoot) termHistoryByRootRef.current.set(prevRoot, termHistory);
+    setTree([]);
+    setTreeLoading(true);
+    setGitStatus(null);
+    setGitLog(null);
+    try {
+      const result = await request<TabSwitchResult>("tab_activate", { id });
+      if (seq !== workspaceSeqRef.current) return;
+      setTabs(result.tabs);
+      const conversation = result.conversation;
+      setMessages(conversation ? messagesFromStored(conversation) : []);
+      if (conversation) {
+        switchComposerDraft(conversation.id);
+        setActiveChatId(conversation.id);
+      } else {
+        switchComposerDraft(null);
+        setActiveChatId(null);
+      }
+      // Follow the workspace the tab switched the session to.
+      setWorkspace((w) => ({
+        ...(w ?? { recent: [], pinned: [] }),
+        current: result.workspace.current,
+      }));
+      setLastMetrics(null);
+      setLiveState("idle");
+      setStatusText(null);
+      setTermHistory(
+        termHistoryByRootRef.current.get(result.workspace.current?.path ?? "") ?? [],
+      );
+      setPendingTerm(null);
+      await Promise.all([loadTree(false, seq), loadGit(seq), refreshChats()]);
+      if (seq !== workspaceSeqRef.current) return;
+      setTreeLoading(false);
+      await refreshRunningTasks();
+    } catch (err) {
+      setTreeLoading(false);
+      notify(errorText(err), "error");
+    }
+  }
+
+  /** Close a tab and follow the neighbour the core activates. */
+  async function closeTab(id: string): Promise<void> {
+    try {
+      const result = await request<TabSwitchResult>("tab_close", { id });
+      const seq = ++workspaceSeqRef.current;
+      setTabs(result.tabs);
+      const conversation = result.conversation;
+      setMessages(conversation ? messagesFromStored(conversation) : []);
+      if (conversation) {
+        switchComposerDraft(conversation.id);
+        setActiveChatId(conversation.id);
+      } else {
+        switchComposerDraft(null);
+        setActiveChatId(null);
+      }
+      setWorkspace((w) => ({
+        ...(w ?? { recent: [], pinned: [] }),
+        current: result.workspace.current,
+      }));
+      setPendingTerm(null);
+      await Promise.all([loadTree(false, seq), loadGit(seq), refreshChats()]);
+    } catch (err) {
+      notify(errorText(err), "error");
+    }
+  }
+
+  /** W3.3: refresh the open-tab strip from the core (boot / tab-adjacent sync). */
+  async function refreshTabs(): Promise<void> {
+    try {
+      setTabs(await request<ChatTab[]>("tabs"));
+    } catch {
+      /* the core may be restarting — the strip stays as it is */
+    }
+  }
+
+  /** W3.3: honest live background-task count (tray + tab strip). */
+  async function refreshRunningTasks(): Promise<void> {
+    try {
+      const ids = await request<string[]>("running_tasks");
+      setRunningTaskCount(ids.length);
+      runningTaskCountRef.current = ids.length;
+      await updateTrayTooltip(ids.length);
+    } catch {
+      /* core unavailable — the count simply stays stale */
+    }
+  }
+
+  /**
+   * W3.3: tray tooltip + menu label mirror the real running-task count.
+   * Best-effort: the command is unavailable in a plain web build; failures are
+   * ignored so the chat flow never depends on the tray.
+   */
+  async function updateTrayTooltip(count: number) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const loc = localeRef.current;
+      const text = count > 0 ? plural("ui.tray.running", count, loc) : tr("ui.tray.idle", loc);
+      await invoke("tray_set_state", { running: count, tooltip: text });
+    } catch {
+      /* tray is optional (web preview / older shell) */
     }
   }
 
@@ -1361,7 +1599,7 @@ export function useAxiom() {
         clearComposerData(id);
       }
       await refreshChats();
-      notify("Разговор удалён");
+      notify(tn("ui.notify.conversation_deleted"));
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -1391,9 +1629,9 @@ export function useAxiom() {
     }
     await refreshChats();
     if (failed.length > 0) {
-      notify(`Не удалось удалить ${failed.length} из ${ids.length} разговоров`, "error");
+      notify(tn("ui.notify.delete_partial", { failed: String(failed.length), total: String(ids.length) }), "error");
     } else {
-      notify(`История очищена — удалено ${ids.length}`, "ok");
+      notify(tn("ui.notify.history_cleared", { n: String(ids.length) }), "ok");
     }
   }
 
@@ -1401,11 +1639,11 @@ export function useAxiom() {
     try {
       const result = await request<{ renamed: boolean }>("rename_chat", { id, title });
       if (!result.renamed) {
-        notify("Не удалось переименовать разговор", "error");
+        notify(tn("ui.notify.rename_failed"), "error");
         return;
       }
       setChats((list) => list.map((c) => (c.id === id ? { ...c, title: title.trim() } : c)));
-      notify("Разговор переименован", "ok");
+      notify(tn("ui.notify.renamed"), "ok");
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -1432,7 +1670,7 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean }>("chat_meta", { id, pin: next });
       if (!res.ok) {
-        notify("Не удалось закрепить разговор", "error");
+        notify(tn("ui.notify.pin_failed"), "error");
         return;
       }
       setChats((list) => list.map((c) => (c.id === id ? { ...c, pinned: next } : c)));
@@ -1446,7 +1684,7 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean }>("chat_meta", { id, folder });
       if (!res.ok) {
-        notify("Не удалось изменить папку разговора", "error");
+        notify(tn("ui.notify.folder_failed"), "error");
         return;
       }
       setChats((list) => list.map((c) => (c.id === id ? { ...c, folder } : c)));
@@ -1475,7 +1713,7 @@ export function useAxiom() {
           ?? list[0];
         if (fallback) {
           const fallbackProvider = fallback.providerId ?? "ollama";
-          notify(`Модель ${activeProviderLabel(activeModel, activeModelProvider)} больше не доступна — выбрана ${fallback.displayName}`, "error");
+          notify(tn("ui.notify.model_unavailable", { model: activeProviderLabel(activeModel, activeModelProvider), fallback: fallback.displayName }), "error");
           await selectModel(fallback.name, fallbackProvider);
         } else {
           setActiveModel(null);
@@ -1497,7 +1735,7 @@ export function useAxiom() {
       providerId = "ollama";
     }
     if (generatingRef.current) {
-      notify("Нельзя переключить модель во время генерации — остановите её (Esc)", "error");
+      notify(tn("ui.notify.switch_busy"), "error");
       return false;
     }
     if (name === activeModel && providerId === activeModelProvider) return true;
@@ -1512,7 +1750,7 @@ export function useAxiom() {
       }));
       void loadModelDetail(model.name, model.providerId ?? providerId);
       if (providerId === "ollama" && config?.warmup_model) trackWarmup(name);
-      if (!silent) notify(`Активная модель: ${model.displayName}`, "ok", "model");
+      if (!silent) notify(tn("ui.notify.active_model", { model: model.displayName }), "ok", "model");
       return true;
     } catch (err) {
       const message = errorText(err);
@@ -1561,19 +1799,19 @@ export function useAxiom() {
       if (!report.available) {
         setStep("detect", "failed", url ?? health?.url ?? "");
         setConnected(false);
-        setBootError({ message: report.error ?? "Ollama недоступна", hint: report.hint, url: url ?? "" });
+        setBootError({ message: report.error ?? tn("ui.notify.ollama_unavailable"), hint: report.hint, url: url ?? "" });
         setPhase("unavailable");
         return;
       }
       setStep("detect", "ok", url ?? health?.url ?? "");
-      setStep("connect", "ok", report.version ? `Ollama ${report.version}` : "соединение установлено");
+      setStep("connect", "ok", report.version ? `Ollama ${report.version}` : tr("ui.boot.connected", localeRef.current));
       setModels(report.models);
       setStep(
         "models",
         "ok",
         report.models.length
-          ? `${report.models.length} модел${report.models.length === 1 ? "ь" : "и"}`
-          : "моделей пока нет",
+          ? plural("ui.boot.models_count", report.models.length, localeRef.current)
+          : tr("ui.boot.no_models", localeRef.current),
       );
       if (report.selected) {
         setActiveModel(report.selected.name);
@@ -1581,16 +1819,16 @@ export function useAxiom() {
         setStep("select", "ok", report.selected.displayName);
       } else {
         // No selected model is not a failure — the list may fill in later.
-        setStep("select", "ok", "модель не выбрана");
+        setStep("select", "ok", tr("ui.boot.no_model", localeRef.current));
       }
       setConfig(await request<AxiomConfig>("get_config"));
       await refreshChats();
-      setStep("workspace", "ok", "готово");
+      setStep("workspace", "ok", tr("ui.boot.done", localeRef.current));
       setConnected(true);
       setCoreLost(false);
       setPhase("ready");
       notify(
-        report.selected ? "Ollama подключена" : "Ollama подключена — список моделей пока пуст",
+        report.selected ? tn("ui.notify.ollama_connected") : tn("ui.notify.ollama_connected_empty"),
         report.selected ? "ok" : "info",
       );
     } catch (err) {
@@ -1617,7 +1855,7 @@ export function useAxiom() {
 
   async function runTaskRequest(cmd: "task_launch" | "task_continue", args: Record<string, unknown>): Promise<Task | null> {
     if (generatingRef.current) {
-      notify("Генерация уже идёт — сначала остановите её", "error");
+      notify(tn("ui.notify.gen_busy"), "error");
       return null;
     }
     taskActiveRef.current = true;
@@ -1745,7 +1983,7 @@ export function useAxiom() {
       setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
       void loadTree();
       void loadGit();
-      notify("Восстановление ревью завершено; решение по задаче можно принять заново", "ok");
+      notify(tn("ui.notify.review_recovered"), "ok");
       return task;
     } catch (err) {
       notify(errorText(err), "error");
@@ -1799,6 +2037,17 @@ export function useAxiom() {
       }
       return next;
     });
+  }
+
+  /** Opens the right workbench panel on a given tab (Tasks from the left rail). */
+  function openRightPanel(tab: "files" | "terminal" | "git" | "tasks" | "documents") {
+    setRightPanelTab(tab);
+    setRightPanelOpen(true);
+    try {
+      localStorage.setItem("axiom.rightPanel", "open");
+    } catch {
+      /* storage unavailable — session-only state */
+    }
   }
 
   function commitRightPanelWidth(width: number) {
@@ -1864,7 +2113,7 @@ export function useAxiom() {
       // then returns the full, current plugin list.
       const result = await request<{ discovered: string[]; plugins: PluginRow[] }>("discover_plugins");
       setPluginRows(result.plugins);
-      for (const name of result.discovered) notify(`Найден плагин: ${name}`, "ok");
+      for (const name of result.discovered) notify(tn("ui.notify.plugin_found", { name }), "ok");
       // Built-in catalogue: plugins shipped with AXIOM, not installed yet.
       setBundledPlugins(await request<PluginRow[]>("bundled_plugins"));
       void loadPluginCommands();
@@ -1882,7 +2131,7 @@ export function useAxiom() {
         result.manifest,
       ]);
       setBundledPlugins((rows) => rows.filter((row) => row.name !== name));
-      notify(`Встроенный плагин «${name}» установлен`, "ok");
+      notify(tn("ui.notify.bundled_installed", { name }), "ok");
       return result;
     } catch (err) {
       notify(errorText(err), "error");
@@ -1895,7 +2144,7 @@ export function useAxiom() {
     try {
       const result = await request<{ discovered: string[]; plugins: PluginRow[] }>("discover_plugins");
       setPluginRows(result.plugins);
-      for (const name of result.discovered) notify(`Найден плагин: ${name}`, "ok");
+      for (const name of result.discovered) notify(tn("ui.notify.plugin_found", { name }), "ok");
     } catch {
       // A transient bridge error must not spam the UI during background polling.
     }
@@ -1925,7 +2174,7 @@ export function useAxiom() {
     try {
       await request<{ id: string }>("memory_add", { content, category, scope });
       await loadMemory();
-      notify("Запись сохранена в память", "ok");
+      notify(tn("ui.notify.memory_saved"), "ok");
       return true;
     } catch (err) { notify(errorText(err), "error"); return false; }
   }
@@ -1934,7 +2183,7 @@ export function useAxiom() {
     try {
       await request<{ id: string }>("memory_edit", { id, content });
       await loadMemory();
-      notify("Запись обновлена", "ok");
+      notify(tn("ui.notify.memory_updated"), "ok");
       return true;
     } catch (err) { notify(errorText(err), "error"); return false; }
   }
@@ -1942,9 +2191,9 @@ export function useAxiom() {
   async function deleteMemory(id: string): Promise<boolean> {
     try {
       const result = await request<{ removed: boolean }>("memory_delete", { id });
-      if (!result.removed) { notify("Запись не найдена", "error"); return false; }
+      if (!result.removed) { notify(tn("ui.notify.memory_not_found"), "error"); return false; }
       await loadMemory();
-      notify("Запись удалена из памяти", "ok");
+      notify(tn("ui.notify.memory_deleted"), "ok");
       return true;
     } catch (err) { notify(errorText(err), "error"); return false; }
   }
@@ -1962,14 +2211,24 @@ export function useAxiom() {
   async function addKnowledgeCollection(name: string, path: string): Promise<boolean> {
     setKnowledgeLoading(true);
     try {
-      const result = await request<KnowledgeIndexResult>("knowledge_add", { name, path });
+      // W3.3: indexing runs in the background — the reply only confirms that
+      // the collection was registered; stats arrive via `knowledge` events.
+      const result = await request<KnowledgeIndexResult>("knowledge_add", {
+        name,
+        path,
+        background: true,
+      });
       await loadKnowledge();
-      const stats = result.stats;
-      notify(
-        `Проиндексировано «${name}»: ${stats?.indexed ?? 0} новых/изменённых, ` +
-        `${stats?.unchanged ?? 0} без изменений`,
-        "ok",
-      );
+      if (result.pending) {
+        setKnowledgeIndexing((list) => (list.includes(name) ? list : [...list, name]));
+        notify(tn("ui.knowledge.indexing_hint"), "info");
+      } else {
+        const stats = result.stats;
+        notify(
+          tn("ui.notify.indexed", { name, indexed: String(stats?.indexed ?? 0), unchanged: String(stats?.unchanged ?? 0) }),
+          "ok",
+        );
+      }
       return true;
     } catch (err) { notify(errorText(err), "error"); return false; }
     finally { setKnowledgeLoading(false); }
@@ -1978,20 +2237,39 @@ export function useAxiom() {
   async function reindexKnowledge(name: string): Promise<boolean> {
     setKnowledgeLoading(true);
     try {
-      await request<KnowledgeIndexResult>("knowledge_reindex", { name });
-      await loadKnowledge();
-      notify(`Коллекция «${name}» переиндексирована`, "ok");
+      // W3.3: reindex is background too — the settings list stays interactive.
+      const result = await request<KnowledgeIndexResult>("knowledge_reindex", {
+        name,
+        background: true,
+      });
+      if (result.pending) {
+        setKnowledgeIndexing((list) => (list.includes(name) ? list : [...list, name]));
+        notify(tn("ui.knowledge.indexing_hint"), "info");
+      } else {
+        await loadKnowledge();
+        notify(tn("ui.notify.reindexed", { name }), "ok");
+      }
       return true;
     } catch (err) { notify(errorText(err), "error"); return false; }
     finally { setKnowledgeLoading(false); }
   }
 
+  /** W3.3: cancel one collection's background indexing run. */
+  async function cancelKnowledgeIndexing(name: string): Promise<boolean> {
+    try {
+      const result = await request<{ name: string; cancelled: boolean }>(
+        "knowledge_cancel_index", { name },
+      );
+      return result.cancelled;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+  }
+
   async function removeKnowledgeCollection(name: string): Promise<boolean> {
     try {
       const result = await request<{ removed: boolean }>("knowledge_remove", { name });
-      if (!result.removed) { notify("Коллекция не найдена", "error"); return false; }
+      if (!result.removed) { notify(tn("ui.notify.collection_not_found"), "error"); return false; }
       await loadKnowledge();
-      notify(`Коллекция «${name}» удалена`, "ok");
+      notify(tn("ui.notify.collection_deleted", { name }), "ok");
       return true;
     } catch (err) { notify(errorText(err), "error"); return false; }
   }
@@ -2020,7 +2298,7 @@ export function useAxiom() {
         ...rows.filter((row) => row.name !== result.manifest.name),
         result.manifest,
       ]);
-      notify(`${result.name}: ${result.status === "updated" ? "обновлён" : "установлен"}`, "ok");
+      notify(tn("ui.notify.plugin_status", { name: result.name, status: result.status === "updated" ? tn("ui.notify.plugin_updated") : tn("ui.notify.plugin_installed") }), "ok");
       return result;
     } catch (err) {
       notify(errorText(err), "error");
@@ -2031,9 +2309,9 @@ export function useAxiom() {
   async function togglePlugin(name: string, enabled: boolean): Promise<PluginRow | null> {
     try {
       const result = await request<{ name: string; enabled: boolean; ok: boolean }>("toggle_plugin", { name, enabled });
-      if (!result.ok) throw new Error(`Плагин «${name}» не найден`);
+      if (!result.ok) throw new Error(tn("ui.notify.plugin_not_found", { name }));
       setPluginRows((rows) => rows.map((row) => row.name === name ? { ...row, enabled: result.enabled } : row));
-      notify(`${name}: ${result.enabled ? "включён" : "выключен"}`, "ok");
+      notify(tn("ui.notify.plugin_status", { name, status: result.enabled ? tn("ui.notify.plugin_enabled") : tn("ui.notify.plugin_disabled") }), "ok");
       return pluginRows.find((row) => row.name === name)
         ? { ...pluginRows.find((row) => row.name === name)!, enabled: result.enabled }
         : null;
@@ -2046,17 +2324,109 @@ export function useAxiom() {
   async function removePlugin(name: string): Promise<boolean> {
     try {
       const result = await request<{ name: string; removed: boolean }>("remove_plugin", { name });
-      if (!result.removed) throw new Error(`Плагин «${name}» не найден`);
+      if (!result.removed) throw new Error(tn("ui.notify.plugin_not_found", { name }));
       setPluginRows((rows) => rows.filter((row) => row.name !== name));
       // A removed bundled plugin becomes available in the catalogue again.
       setBundledPlugins(await request<PluginRow[]>("bundled_plugins"));
-      notify(`${name}: удалён`, "ok");
+      notify(tn("ui.notify.plugin_removed", { name }), "ok");
       return true;
     } catch (err) {
       notify(errorText(err), "error");
       return false;
     }
   }
+
+  // -------------------------------------------------------- MCP servers (W3.5)
+
+  async function loadMcp() {
+    setMcpLoading(true);
+    try {
+      setMcpRows(await request<McpServerRow[]>("mcp_servers"));
+    } catch (err) { notify(errorText(err), "error"); }
+    finally { setMcpLoading(false); }
+  }
+
+  async function addMcp(name: string, command: string[]): Promise<McpServerRow | null> {
+    try {
+      const row = await request<McpServerRow>("mcp_add", { name, command });
+      setMcpRows((rows) => [...rows.filter((r) => r.name !== row.name), row]);
+      notify(tn("ui.notify.mcp_status", { name, status: row.ok ? tn("ui.notify.mcp_connected", { n: String(row.tools.length) }) : tn("ui.notify.mcp_connect_error") }), row.ok ? "ok" : "error");
+      return row;
+    } catch (err) { notify(errorText(err), "error"); return null; }
+  }
+
+  async function removeMcp(name: string): Promise<boolean> {
+    try {
+      const result = await request<{ name: string; removed: boolean }>("mcp_remove", { name });
+      if (!result.removed) throw new Error(tn("ui.notify.mcp_not_found", { name }));
+      setMcpRows((rows) => rows.filter((r) => r.name !== name));
+      notify(tn("ui.notify.mcp_removed", { name }), "ok");
+      return true;
+    } catch (err) { notify(errorText(err), "error"); return false; }
+  }
+
+  async function restartMcp(name: string): Promise<McpServerRow | null> {
+    try {
+      const row = await request<McpServerRow>("mcp_restart", { name });
+      setMcpRows((rows) => rows.map((r) => r.name === name ? row : r));
+      notify(tn("ui.notify.mcp_status", { name, status: row.ok ? tn("ui.notify.mcp_restarted", { n: String(row.tools.length) }) : tn("ui.notify.mcp_connect_error") }), row.ok ? "ok" : "error");
+      return row;
+    } catch (err) { notify(errorText(err), "error"); return null; }
+  }
+
+  async function testMcp(name: string, tool?: string, argumentsJson?: string): Promise<{ ok: boolean; content: string; error: string | null }> {
+    try {
+      let parsed: Record<string, unknown> = {};
+      if (argumentsJson && argumentsJson.trim()) {
+        try { parsed = JSON.parse(argumentsJson); } catch { throw new Error(tn("ui.notify.json_args")); }
+      }
+      const result = await request<{ name: string; tool: string | null; ok: boolean; content?: string; error?: string | null; log: string; tools?: string[] }>("mcp_test", { name, tool, arguments: parsed });
+      return { ok: result.ok, content: result.content ?? "", error: result.error ?? null };
+    } catch (err) { notify(errorText(err), "error"); return { ok: false, content: "", error: errorText(err) }; }
+  }
+
+  // -------------------------------------------------------- Skills Manager (W3.5)
+
+  async function loadSkills() {
+    setSkillLoading(true);
+    try {
+      setSkillRows(await request<SkillRow[]>("skills_list"));
+    } catch (err) { notify(errorText(err), "error"); }
+    finally { setSkillLoading(false); }
+  }
+
+  async function toggleSkill(id: string, pinned: boolean): Promise<void> {
+    try {
+      const result = await request<{ id: string; pinned: boolean }>(pinned ? "skills_unpin" : "skills_pin", { id });
+      setSkillRows((rows) => rows.map((r) => r.id === id ? { ...r, pinned: result.pinned } : r));
+      notify(result.pinned ? tn("ui.notify.skill_enabled", { id }) : tn("ui.notify.skill_disabled", { id }), "ok");
+    } catch (err) { notify(errorText(err), "error"); }
+  }
+
+  async function suggestSkills(text: string): Promise<string[]> {
+    if (!text.trim()) return [];
+    try {
+      return await request<string[]>("skills_suggest", { text });
+    } catch { return []; }
+  }
+
+  /** Composer chips (§6): fetch skill rows once for the context picker. */
+  async function loadComposerSkills(): Promise<void> {
+    if (skillRows.length > 0 || skillLoading) return;
+    await loadSkills();
+  }
+
+  function toggleComposerRule(path: string): void {
+    setComposerRules((current) =>
+      current.includes(path) ? current.filter((p) => p !== path) : [...current, path]);
+  }
+
+  function toggleComposerSkill(id: string): void {
+    setComposerSkills((current) =>
+      current.includes(id) ? current.filter((s) => s !== id) : [...current, id]);
+  }
+
+
   async function providerTest(id: string) { try { const status = await request<string>("provider_test", { provider_id: id }); notify(`${id}: ${status}`, status === "error" ? "error" : "ok"); await loadProviders(); } catch (err) { notify(errorText(err), "error"); } }
   async function providerSaveSettings(id: string, apiKey: string, baseUrl: string) {
     try {
@@ -2074,7 +2444,7 @@ export function useAxiom() {
     const selected = await selectModel(model, providerId, true);
     if (!selected) return;
     await refreshModels();
-    notify(`Маршрут: ${providerId}/${model}`, "ok", "model");
+    notify(tn("ui.notify.route", { provider: providerId, model }), "ok", "model");
   }
   async function loadHarness() { try { setAgents(await request<AgentRow[]>("agents")); setProfiles(await request<{ active: string; items: { id: string; name: string; prompt: string }[] }>("profiles")); setTrajectory(await request<TrajectoryViewer>("trajectory")); } catch (err) { notify(errorText(err), "error"); } }
 
@@ -2137,7 +2507,7 @@ export function useAxiom() {
           params: { command: pluginCommand.id },
         });
         notify(
-          res.ok ? `Команда «${pluginCommand.title}» выполнена` : `Ошибка команды: ${res.error ?? "не выполнена"}`,
+          res.ok ? tn("ui.notify.command_done", { title: pluginCommand.title }) : tn("ui.notify.command_error", { error: res.error ?? tn("ui.notify.command_error_plain") }),
           res.ok ? "ok" : "error",
         );
       } catch (err) {
@@ -2154,7 +2524,7 @@ export function useAxiom() {
       case "/new":
       case "/clear":
         await newChat();
-        notify("Новый разговор");
+        notify(tn("ui.notify.new_conversation"));
         return true;
       case "/history":
         focusChatSearch();
@@ -2169,7 +2539,7 @@ export function useAxiom() {
         }
         const match = resolveModel(models, args);
         if (!match) {
-          notify(`Модель «${args}» не найдена в Ollama или среди подключённых провайдеров`, "error");
+          notify(tn("ui.notify.model_args_not_found", { args }), "error");
           return true;
         }
         await selectModel(match.name, match.providerId ?? "ollama");
@@ -2220,7 +2590,7 @@ export function useAxiom() {
         return true;
       case "/orchestrate": {
         if (!args) {
-          notify("Опишите задачу: /orchestrate <задача>", "error");
+          notify(tn("ui.notify.orchestrate_usage"), "error");
           return true;
         }
         const userMessage: LiveMessage = {
@@ -2232,7 +2602,7 @@ export function useAxiom() {
       }
       case "/search": {
         if (!args) {
-          notify("Укажите запрос: /search <запрос>", "error");
+          notify(tn("ui.notify.search_usage"), "error");
           return true;
         }
         await send(args, true);
@@ -2273,8 +2643,8 @@ export function useAxiom() {
         setCoreLost(true);
         setStatusText(null);
         setBootError({
-          message: "Ядро AXIOM остановлено",
-          hint: "Перезапустите ядро кнопкой ниже или перезапустите приложение.",
+          message: tn("ui.notify.core_stopped"),
+          hint: tn("ui.notify.core_stopped_hint"),
           url: "",
         });
         setPhase("error");
@@ -2299,12 +2669,32 @@ export function useAxiom() {
         if (key === "n") {
           e.preventDefault();
           void newChat();
+        } else if (key === "t") {
+          // W3.3: a new chat tab (project/model/context isolation).
+          e.preventDefault();
+          void openTab();
         } else if (key === "b") {
           e.preventDefault();
           toggleSidebar();
         } else if (key === "k") {
           e.preventDefault();
           focusChatSearch();
+        } else if (key === "f") {
+          // W3.9: in-conversation Ctrl+F searches the mounted transcript of
+          // the current chat (the TUI keeps the same shortcut for its bar).
+          // Skip editable fields and the composer so native find-in-field
+          // keeps working — the event reaches MessageList instead.
+          const target = e.target as HTMLElement | null;
+          const tag = target?.tagName;
+          if (
+            tag !== "INPUT" &&
+            tag !== "TEXTAREA" &&
+            target?.getAttribute("contenteditable") !== "true" &&
+            !target?.isContentEditable
+          ) {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent("axiom-find-chat"));
+          }
         } else if (key === ",") {
           e.preventDefault();
           openSettings("general");
@@ -2335,12 +2725,12 @@ export function useAxiom() {
 
   /** Restart the Python core and re-run the whole boot probe. */
   async function restartCoreAndBoot() {
-    notify("Перезапуск ядра AXIOM…");
+    notify(tn("ui.notify.restarting_core"));
     try {
       await restartCore();
       await new Promise((resolve) => window.setTimeout(resolve, 900));
       await runBoot();
-      notify("Ядро перезапущено", "ok");
+      notify(tn("ui.notify.core_restarted"), "ok");
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -2348,11 +2738,11 @@ export function useAxiom() {
 
   async function switchWorkspace(path: string) {
     if (generatingRef.current) {
-      notify("Сначала остановите генерацию", "error");
+      notify(tn("ui.notify.stop_gen_first"), "error");
       return;
     }
     if (taskActiveRef.current) {
-      notify("Сначала остановите задачу", "error");
+      notify(tn("ui.notify.stop_task_first"), "error");
       return;
     }
     // Bump the workspace generation BEFORE the round-trip so any in-flight
@@ -2395,7 +2785,7 @@ export function useAxiom() {
       if (seq !== workspaceSeqRef.current) return;
       setTreeLoading(false);
       await newChat();
-      notify(`Проект: ${info.name} (${info.kind})`, "ok");
+      notify(tn("ui.notify.project", { name: info.name, kind: info.kind }), "ok");
     } catch (err) {
       setTreeLoading(false);
       notify(errorText(err), "error");
@@ -2414,6 +2804,19 @@ export function useAxiom() {
     return () => { active = false; };
   }, [workspace?.current?.path]);
 
+  // Composer context chips: discovered rule files (global/project/directory).
+  useEffect(() => {
+    if (!workspace?.current) {
+      setRuleRows([]);
+      return;
+    }
+    let active = true;
+    void request<RuleRow[]>("rules_list", {})
+      .then((rows) => { if (active) setRuleRows(rows); })
+      .catch(() => { if (active) setRuleRows([]); });
+    return () => { active = false; };
+  }, [workspace?.current?.path]);
+
   useEffect(() => {
     const query = projectSearch.trim();
     if (!query || !workspace?.current) {
@@ -2424,7 +2827,7 @@ export function useAxiom() {
     const timer = window.setTimeout(() => {
       void request<ProjectSearchResult>("project_search", { query })
         .then((result) => setProjectSearchResults(result))
-        .catch(() => setProjectSearchResults({ query, hits: [], error: "Не удалось выполнить поиск по проекту" }))
+        .catch(() => setProjectSearchResults({ query, hits: [], error: tn("ui.notify.project_search_failed") }))
         .finally(() => setProjectSearching(false));
     }, 220);
     return () => window.clearTimeout(timer);
@@ -2443,11 +2846,11 @@ export function useAxiom() {
   /** Global Chat: drop the active project — no file/terminal tools, global history. */
   async function clearWorkspace() {
     if (generatingRef.current) {
-      notify("Сначала остановите генерацию", "error");
+      notify(tn("ui.notify.stop_gen_first"), "error");
       return;
     }
     if (taskActiveRef.current) {
-      notify("Сначала остановите задачу", "error");
+      notify(tn("ui.notify.stop_task_first"), "error");
       return;
     }
     // Bump the generation first so any pending tree/git load from the project
@@ -2478,7 +2881,7 @@ export function useAxiom() {
       await Promise.all([loadWorkspace(seq), refreshChats(), loadProjectList(seq)]);
       if (seq !== workspaceSeqRef.current) return;
       await newChat();
-      notify("Глобальный чат: проект не активен", "ok");
+      notify(tn("ui.notify.global_chat"), "ok");
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -2502,7 +2905,7 @@ export function useAxiom() {
       const data = await request<{ ok: boolean; content?: string; error?: string }>("workspace_file", { path });
       if (captured !== workspaceSeqRef.current) return;
       if (!data.ok) {
-        notify(data.error ?? "Не удалось прочитать файл", "error");
+        notify(data.error ?? tn("ui.notify.read_failed"), "error");
         return;
       }
       setOpenFile({ path, content: data.content ?? "" });
@@ -2517,10 +2920,10 @@ export function useAxiom() {
     try {
       const res = await request<{ ok: boolean; error?: string; path?: string }>("apply_patch", { path, patch });
       if (!res.ok) {
-        notify(res.error ?? "Не удалось применить патч", "error");
+        notify(res.error ?? tn("ui.notify.patch_failed"), "error");
         return false;
       }
-      notify(`Файл обновлён: ${res.path ?? path}`, "ok");
+      notify(tn("ui.notify.file_updated", { path: res.path ?? path }), "ok");
       if (openFile?.path === path) void openWorkspaceFile(path);
       void loadGit(); // the file may now show up as modified
       return true;
@@ -2540,7 +2943,7 @@ export function useAxiom() {
       setPendingTerm(null);
       setTermHistory((h) => [...h.slice(-99), { command, result }]);
       if (!result.ok && result.permission === "granted") {
-        notify(result.error ?? "Команда завершилась с ошибкой", "error");
+        notify(result.error ?? tn("ui.notify.command_failed"), "error");
       }
     } catch (err) {
       notify(errorText(err), "error");
@@ -2564,7 +2967,7 @@ export function useAxiom() {
       const res = await request<{ running: boolean; output: string }>("shell_start", {});
       setShellRunning(res.running);
       setShellOutput(res.output ?? "");
-      if (!res.running) notify("Терминал не запустился", "error");
+      if (!res.running) notify(tn("ui.notify.terminal_failed"), "error");
     } catch (err) {
       notify(errorText(err), "error");
     }
@@ -2577,7 +2980,7 @@ export function useAxiom() {
       if (res.ok) {
         await pollShell();
       } else {
-        notify("Не удалось отправить команду в терминал", "error");
+        notify(tn("ui.notify.terminal_send_failed"), "error");
       }
     } catch (err) {
       notify(errorText(err), "error");
@@ -2609,10 +3012,10 @@ export function useAxiom() {
     config?.access_mode === "read_only" ? "R/O" : config?.access_mode === "full" ? "FULL" : "WS";
   const accessTitle =
     config?.access_mode === "read_only"
-      ? "AI: только чтение файлов, без изменений и терминала"
+      ? tn("ui.notify.access.readonly")
       : config?.access_mode === "full"
-        ? "AI: полный доступ (осторожно)"
-        : "AI: разрешена работа внутри проекта";
+        ? tn("ui.notify.access.full")
+        : tn("ui.notify.access.workspace");
 
   // ------------------------------------------------------------- derived state
   const activeModelInfo = useMemo(
@@ -2764,6 +3167,7 @@ export function useAxiom() {
     regenerate,
     continueGeneration,
     editLastUser,
+    quoteToPrompt,
     newChat,
     openChat,
     deleteChat,
@@ -2808,6 +3212,12 @@ export function useAxiom() {
     projectSearchResults,
     projectSearching,
     workspaceFiles,
+    ruleRows,
+    loadComposerSkills,
+    composerRules,
+    composerSkills,
+    toggleComposerRule,
+    toggleComposerSkill,
     openProjectSearchHit: (path: string) => openWorkspaceFile(path),
     agentTimelineOpen,
     setAgentTimelineOpen,
@@ -2820,6 +3230,16 @@ export function useAxiom() {
     gitLog,
     accessLabel,
     accessTitle,
+    // W3.3 multitasking: chat tabs, background indexing, running-task count
+    tabs,
+    openTab,
+    activateTab,
+    closeTab,
+    refreshTabs,
+    knowledgeIndexing,
+    cancelKnowledgeIndexing,
+    runningTaskCount,
+    refreshRunningTasks,
     // ui
     sidebarOpen,
     toggleSidebar,
@@ -2828,6 +3248,9 @@ export function useAxiom() {
     commitSidebarWidth,
     rightPanelOpen,
     toggleRightPanel,
+    openRightPanel,
+    rightPanelTab,
+    setRightPanelTab,
     rightPanelWidth,
     setRightPanelWidth,
     commitRightPanelWidth,
@@ -2854,6 +3277,18 @@ export function useAxiom() {
     removePlugin,
     bundledPlugins,
     installBundledPlugin,
+    mcpRows,
+    mcpLoading,
+    loadMcp,
+    addMcp,
+    removeMcp,
+    restartMcp,
+    testMcp,
+    skillRows,
+    skillLoading,
+    loadSkills,
+    toggleSkill,
+    suggestSkills,
     memoryRows,
     memoryLoading,
     loadMemory,

@@ -1,0 +1,267 @@
+/* W3.5 — MCP servers + Skills Manager settings panels.
+   Reuses the AXIOM dark palette; no new colours introduced. */
+
+.harness-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.harness-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.harness-toolbar .settings-row-hint {
+  margin: 0;
+  flex: 1;
+}
+
+.mcp-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mcp-input {
+  background: var(--ax-bg-inset);
+  border: 1px solid var(--ax-border);
+  color: var(--ax-text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  min-width: 0;
+  flex: 0 1 220px;
+}
+
+.mcp-input.grow {
+  flex: 1 1 340px;
+}
+
+.mcp-input:focus {
+  outline: none;
+  border-color: var(--ax-accent-border);
+}
+
+.mcp-list,
+.skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mcp-card,
+.skill-card {
+  background: var(--ax-bg-elevated);
+  border: 1px solid var(--ax-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-card-head,
+.skill-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mcp-card-title,
+.skill-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ax-text);
+  flex-wrap: wrap;
+}
+
+.mcp-card-title svg,
+.skill-title svg {
+  color: var(--ax-accent-text);
+  flex-shrink: 0;
+}
+
+.mcp-status {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.mcp-status.ok {
+  color: var(--ax-success-text);
+  background: var(--ax-success-soft);
+}
+
+.mcp-status.err {
+  color: var(--ax-error-text);
+  background: var(--ax-error-soft);
+}
+
+.mcp-command {
+  font-family: var(--mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  font-size: 12px;
+  color: var(--ax-text-muted);
+  background: var(--ax-bg-inset);
+  border: 1px solid var(--ax-border-subtle);
+  border-radius: 6px;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-tools,
+.skill-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mcp-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  color: var(--ax-text-muted);
+  background: var(--ax-bg-hover);
+  border: 1px solid var(--ax-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+
+.mcp-tool:hover:not(:disabled) {
+  color: var(--ax-accent-text);
+  border-color: var(--ax-accent-border);
+}
+
+.mcp-tool:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.mcp-log {
+  font-family: var(--mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: var(--ax-bg-inset);
+  border: 1px solid var(--ax-border-subtle);
+  color: var(--ax-text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mcp-log.err {
+  color: var(--ax-error-text);
+  border-color: var(--ax-error-border);
+}
+
+.mcp-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.harness-result {
+  border: 1px solid var(--ax-border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.harness-result.ok {
+  border-color: var(--ax-success);
+}
+
+.harness-result.err {
+  border-color: var(--ax-error-border);
+}
+
+.harness-result-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  font-weight: 600;
+  color: var(--ax-text);
+  background: var(--ax-bg-hover);
+  border-bottom: 1px solid var(--ax-border-subtle);
+}
+
+.harness-result-body {
+  margin: 0;
+  padding: 9px;
+  font-family: var(--mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  font-size: 12px;
+  color: var(--ax-text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.skill-id {
+  font-family: var(--mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  color: var(--ax-text-faint);
+  font-weight: 400;
+}
+
+.skill-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ax-info-text);
+  background: var(--ax-info-soft);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.skill-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ax-text-muted);
+  background: var(--ax-bg-hover);
+  border: 1px solid var(--ax-border-subtle);
+  border-radius: 6px;
+  padding: 3px 7px;
+}
+
+.skill-instructions {
+  font-size: 12.5px;
+  color: var(--ax-text-muted);
+  background: var(--ax-bg-inset);
+  border: 1px solid var(--ax-border-subtle);
+  border-radius: 6px;
+  padding: 9px 11px;
+  white-space: pre-wrap;
+}
+
+.skill-expand {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--ax-accent-text);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.skill-expand:hover {
+  color: var(--ax-accent-hover);
+}

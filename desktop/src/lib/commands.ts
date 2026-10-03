@@ -9,7 +9,11 @@
 export interface SlashCommand {
   name: string;
   description: string;
+  /** W3.8 i18n key for the description (core `ui.cmd.*` catalog). */
+  descriptionKey?: string;
   argumentHint?: string;
+  /** W3.8 i18n key for the argument hint (core `ui.cmd.arg.*` catalog). */
+  argumentHintKey?: string;
   /** One compact glyph key from the shared command registry. */
   icon?: "chat" | "model" | "search" | "settings" | "terminal" | "plugin";
   /** Optional discoverability shortcut shown in the palette. */
@@ -28,27 +32,27 @@ export interface PluginCommand {
 }
 
 export const COMMANDS: SlashCommand[] = [
-  { name: "/help", description: "Справка по командам и горячим клавишам", group: "system" },
-  { name: "/new", description: "Новый чат", group: "chat" },
-  { name: "/clear", description: "Очистить текущий разговор", group: "chat" },
-  { name: "/history", description: "История разговоров", group: "chat" },
-  { name: "/model", description: "Переключить модель", argumentHint: "[name]", group: "models" },
-  { name: "/models", description: "Модели, возможности, состояние", group: "models" },
-  { name: "/permissions", description: "Режим разрешений: ask, auto_approve_safe, auto_approve_all", group: "harness" },
-  { name: "/profiles", description: "Системные prompt-профили", group: "harness" },
-  { name: "/memory", description: "Память: факты и предпочтения (добавить/удалить)", group: "harness" },
-  { name: "/knowledge", description: "База знаний: коллекции, индексация, поиск с цитатами", group: "harness" },
-  { name: "/trajectory", description: "Timeline запуска, tools, tokens и timing", group: "harness" },
-  { name: "/providers", description: "Провайдеры, API-ключ, Test и выбор модели", group: "harness" },
-  { name: "/agents", description: "Агенты, оркестратор и назначенные модели", group: "harness" },
-  { name: "/plugins", description: "Установка и управление пользовательскими плагинами", group: "harness" },
-  { name: "/orchestrate", description: "Запустить задачу через ANALYST, CODER, DEBUGGER, TESTER и REVIEWER", argumentHint: "задача", group: "harness" },
-  { name: "/context", description: "Контекст: токены, сообщения, файлы", group: "chat" },
-  { name: "/search", description: "Веб-поиск и ответ по источникам", argumentHint: "query", group: "workspace" },
-  { name: "/tools", description: "Инструменты агента", group: "workspace" },
-  { name: "/status", description: "Состояние Ollama, модели и ядра", group: "system" },
-  { name: "/settings", description: "Настройки AXIOM", group: "system" },
-  { name: "/exit", description: "Закрыть AXIOM", group: "system" },
+  { name: "/help", description: "Справка по командам и горячим клавишам", descriptionKey: "ui.cmd.help", group: "system" },
+  { name: "/new", description: "Новый чат", descriptionKey: "ui.cmd.new", group: "chat" },
+  { name: "/clear", description: "Очистить текущий разговор", descriptionKey: "ui.cmd.clear", group: "chat" },
+  { name: "/history", description: "История разговоров", descriptionKey: "ui.cmd.history", group: "chat" },
+  { name: "/model", description: "Переключить модель", descriptionKey: "ui.cmd.model", argumentHint: "[name]", argumentHintKey: "ui.cmd.arg.name", group: "models" },
+  { name: "/models", description: "Модели, возможности, состояние", descriptionKey: "ui.cmd.models", group: "models" },
+  { name: "/permissions", description: "Режим разрешений: ask, auto_approve_safe, auto_approve_all", descriptionKey: "ui.cmd.permissions", group: "harness" },
+  { name: "/profiles", description: "Системные prompt-профили", descriptionKey: "ui.cmd.profiles", group: "harness" },
+  { name: "/memory", description: "Память: факты и предпочтения (добавить/удалить)", descriptionKey: "ui.cmd.memory", group: "harness" },
+  { name: "/knowledge", description: "База знаний: коллекции, индексация, поиск с цитатами", descriptionKey: "ui.cmd.knowledge", group: "harness" },
+  { name: "/trajectory", description: "Timeline запуска, tools, tokens и timing", descriptionKey: "ui.cmd.trajectory", group: "harness" },
+  { name: "/providers", description: "Провайдеры, API-ключ, Test и выбор модели", descriptionKey: "ui.cmd.providers", group: "harness" },
+  { name: "/agents", description: "Агенты, оркестратор и назначенные модели", descriptionKey: "ui.cmd.agents", group: "harness" },
+  { name: "/plugins", description: "Установка и управление пользовательскими плагинами", descriptionKey: "ui.cmd.plugins", group: "harness" },
+  { name: "/orchestrate", description: "Запустить задачу через ANALYST, CODER, DEBUGGER, TESTER и REVIEWER", descriptionKey: "ui.cmd.orchestrate", argumentHint: "задача", argumentHintKey: "ui.cmd.arg.task", group: "harness" },
+  { name: "/context", description: "Контекст: токены, сообщения, файлы", descriptionKey: "ui.cmd.context", group: "chat" },
+  { name: "/search", description: "Веб-поиск и ответ по источникам", descriptionKey: "ui.cmd.search", argumentHint: "query", argumentHintKey: "ui.cmd.arg.query", group: "workspace" },
+  { name: "/tools", description: "Инструменты агента", descriptionKey: "ui.cmd.tools", group: "workspace" },
+  { name: "/status", description: "Состояние Ollama, модели и ядра", descriptionKey: "ui.cmd.status", group: "system" },
+  { name: "/settings", description: "Настройки AXIOM", descriptionKey: "ui.cmd.settings", group: "system" },
+  { name: "/exit", description: "Закрыть AXIOM", descriptionKey: "ui.cmd.exit", group: "system" },
 ];
 
 // ------------------------------------------------------- plugin commands (W3.1)
@@ -120,17 +124,56 @@ export function parseCommand(input: string): { name: string; args: string } {
   return { name: trimmed.slice(0, space).toLowerCase(), args: trimmed.slice(space + 1).trim() };
 }
 
-export const SHORTCUTS: { keys: string; label: string }[] = [
-  { keys: "Enter", label: "Отправить сообщение" },
-  { keys: "Shift+Enter", label: "Перенос строки" },
-  { keys: "Ctrl+Enter", label: "Отправить с принудительным веб-поиском" },
-  { keys: "/", label: "Палитра команд (в пустом поле ввода)" },
-  { keys: "Esc", label: "Остановить генерацию / закрыть панель" },
-  { keys: "Ctrl+N", label: "Новый чат" },
-  { keys: "Ctrl+B", label: "Показать/скрыть боковую панель" },
-  { keys: "Ctrl+K", label: "Поиск по истории" },
-  { keys: "Ctrl+,", label: "Настройки" },
-  { keys: "Ctrl+/", label: "Фокус в поле ввода" },
-  { keys: "↑", label: "В пустом поле — редактировать прошлое сообщение" },
-  { keys: "Ctrl+C", label: "Копировать выделенный ответ" },
+export const SHORTCUTS: { keys: string; label: string; labelKey?: string }[] = [
+  { keys: "Enter", label: "Отправить сообщение", labelKey: "ui.shortcut.send" },
+  { keys: "Shift+Enter", label: "Перенос строки", labelKey: "ui.shortcut.newline" },
+  { keys: "Ctrl+Enter", label: "Отправить с принудительным веб-поиском", labelKey: "ui.shortcut.send_search" },
+  { keys: "/", label: "Палитра команд (в пустом поле ввода)", labelKey: "ui.shortcut.palette" },
+  { keys: "Esc", label: "Остановить генерацию / закрыть панель", labelKey: "ui.shortcut.stop" },
+  { keys: "Ctrl+N", label: "Новый чат", labelKey: "ui.shortcut.new" },
+  { keys: "Ctrl+B", label: "Показать/скрыть боковую панель", labelKey: "ui.shortcut.panel" },
+  { keys: "Ctrl+K", label: "Поиск по истории", labelKey: "ui.shortcut.history_search" },
+  { keys: "Ctrl+F", label: "Поиск по текущему разговору", labelKey: "ui.shortcut.chat_search" },
+  { keys: "Ctrl+,", label: "Настройки", labelKey: "ui.shortcut.settings" },
+  { keys: "Ctrl+/", label: "Фокус в поле ввода", labelKey: "ui.shortcut.focus_input" },
+  { keys: "↑", label: "В пустом поле — редактировать прошлое сообщение", labelKey: "ui.shortcut.edit_last" },
+  { keys: "Ctrl+C", label: "Копировать выделенный ответ", labelKey: "ui.shortcut.copy" },
 ];
+
+/**
+ * W3.8: localized views of the static tables above. `t` comes from
+ * `lib/i18n` (injected to keep this module UI-framework free); plugin
+ * command titles stay as-is — they are author-provided, not AXIOM chrome.
+ */
+export function localizedDescription(
+  command: SlashCommand,
+  t: (key: string) => string,
+): string {
+  if (command.descriptionKey) {
+    const hit = t(command.descriptionKey);
+    if (hit !== command.descriptionKey) return hit;
+  }
+  return command.description;
+}
+
+export function localizedArgumentHint(
+  command: SlashCommand,
+  t: (key: string) => string,
+): string | undefined {
+  if (command.argumentHintKey) {
+    const hit = t(command.argumentHintKey);
+    if (hit !== command.argumentHintKey) return hit;
+  }
+  return command.argumentHint;
+}
+
+export function localizedShortcutLabel(
+  row: { label: string; labelKey?: string },
+  t: (key: string) => string,
+): string {
+  if (row.labelKey) {
+    const hit = t(row.labelKey);
+    if (hit !== row.labelKey) return hit;
+  }
+  return row.label;
+}

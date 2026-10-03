@@ -1,7 +1,8 @@
 import { Activity, AlertTriangle, Globe, Info, Loader2, RefreshCw, X, Wrench } from "lucide-react";
 import type { AgentRow, ModelInfo, ProviderRow, StatusReport, ToolInfo, TrajectoryViewer } from "../types";
-import { SHORTCUTS, COMMANDS } from "../lib/commands";
+import { SHORTCUTS, COMMANDS, localizedDescription, localizedArgumentHint, localizedShortcutLabel } from "../lib/commands";
 import { formatCount, formatDuration, formatBytes } from "../lib/format";
+import { useLocale } from "../lib/locale";
 import type { Overlay } from "../hooks/useAxiom";
 
 interface ContextInfo {
@@ -31,31 +32,31 @@ interface Props {
 }
 
 const STATE_LABELS: Record<string, string> = {
-  idle: "Ожидание",
-  connecting: "Подключение",
-  thinking: "Размышляет",
-  tool_call: "Инструмент",
-  searching: "Веб-поиск",
-  receiving: "Генерация",
-  completed: "Завершено",
-  cancelled: "Остановлено",
-  error: "Ошибка",
+  idle: "ui.state.idle",
+  connecting: "ui.live.connecting",
+  thinking: "ui.live.thinking",
+  tool_call: "ui.live.tool_call",
+  searching: "ui.live.searching",
+  receiving: "ui.live.receiving",
+  completed: "ui.state.completed",
+  cancelled: "ui.live.cancelled",
+  error: "ui.live.error",
+};
+
+const TITLE_KEY: Record<string, string> = {
+  help: "ui.overlay.title.help",
+  status: "ui.overlay.title.status",
+  tools: "ui.overlay.title.tools",
+  harness: "ui.overlay.title.status",
+  context: "ui.overlay.title.context",
 };
 
 export default function OverlayPanel(props: Props) {
   const { overlay, onClose, model, context, status, statusError, tools, toolsError, onReload, agents, providers, trajectory } = props;
+  const { t } = useLocale();
   if (!overlay) return null;
 
-  const title =
-    overlay === "help"
-      ? "Справка"
-      : overlay === "status"
-        ? "Состояние AXIOM"
-        : overlay === "tools"
-          ? "Инструменты агента"
-          : overlay === "harness"
-            ? "Harness"
-            : "Контекст";
+  const title = overlay === "harness" ? "Harness" : t(TITLE_KEY[overlay] ?? "ui.overlay.title.status");
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -64,11 +65,11 @@ export default function OverlayPanel(props: Props) {
           <h2>{title}</h2>
           <div className="modal-head-actions">
             {(overlay === "status" || overlay === "tools" || overlay === "context") && (
-              <button className="icon-btn" onClick={onReload} title="Обновить данные">
+              <button className="icon-btn" onClick={onReload} title={t("ui.overlay.refresh")}>
                 <RefreshCw size={15} strokeWidth={1.8} />
               </button>
             )}
-            <button className="icon-btn" onClick={onClose} title="Закрыть (Esc)">
+            <button className="icon-btn" onClick={onClose} title={t("ui.overlay.close")}>
               <X size={16} strokeWidth={1.8} />
             </button>
           </div>
@@ -97,40 +98,42 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function HelpBody() {
+  // W3.8: command/shortcut texts follow the core RU/EN catalog.
+  const { t } = useLocale();
+  const tt = (key: string) => t(key);
   return (
     <div className="help">
       <div className="help-section">
         <div className="help-title">
-          <Info size={14} strokeWidth={1.8} /> Команды
+          <Info size={14} strokeWidth={1.8} /> {t("ui.help.commands")}
         </div>
         <div className="help-grid">
           {COMMANDS.map((command) => (
             <div key={command.name} className="help-row">
               <code>
                 {command.name}
-                {command.argumentHint ? ` ${command.argumentHint}` : ""}
+                {localizedArgumentHint(command, tt) ? ` ${localizedArgumentHint(command, tt)}` : ""}
               </code>
-              <span>{command.description}</span>
+              <span>{localizedDescription(command, tt)}</span>
             </div>
           ))}
         </div>
       </div>
       <div className="help-section">
         <div className="help-title">
-          <Activity size={14} strokeWidth={1.8} /> Клавиши
+          <Activity size={14} strokeWidth={1.8} /> {t("ui.help.shortcuts")}
         </div>
         <div className="help-grid">
           {SHORTCUTS.map((shortcut) => (
             <div key={shortcut.keys} className="help-row">
               <kbd>{shortcut.keys}</kbd>
-              <span>{shortcut.label}</span>
+              <span>{localizedShortcutLabel(shortcut, tt)}</span>
             </div>
           ))}
         </div>
       </div>
       <div className="help-note">
-        AXIOM работает локально через Ollama: reasoning, инструменты, источники и метрики показываются
-        только тогда, когда их действительно вернул бэкенд.
+        {t("ui.help.note")}
       </div>
     </div>
   );
@@ -145,6 +148,7 @@ function StatusBody({
   error: string | null;
   model: ModelInfo | null;
 }) {
+  const { t } = useLocale();
   if (error) {
     return (
       <div className="panel-error">
@@ -156,7 +160,7 @@ function StatusBody({
   if (!status) {
     return (
       <div className="panel-loading">
-        <Loader2 size={15} className="spin" /> Читаю состояние ядра…
+        <Loader2 size={15} className="spin" /> {t("ui.overlay.reading_status")}
       </div>
     );
   }
@@ -164,18 +168,18 @@ function StatusBody({
   return (
     <div className="info-list">
       <Row label="Ollama" value={status.ollamaUrl} />
-      <Row label="Версия Ollama" value={status.version ?? "недоступна"} />
-      <Row label="Состояние" value={STATE_LABELS[status.state] ?? status.state} />
-      <Row label="Активная модель" value={status.activeModel?.displayName ?? model?.displayName ?? "—"} />
-      <Row label="Генерация" value={status.busy ? "выполняется" : "не выполняется"} />
-      <Row label="Разговоров в истории" value={String(status.historyCount)} />
-      <Row label="Конфигурация" value={<code>{status.configPath}</code>} />
-      {metrics.tokensOut != null && <Row label="Токенов (последний ответ)" value={String(metrics.tokensOut)} />}
-      {metrics.tokensIn != null && <Row label="Токенов промпта" value={String(metrics.tokensIn)} />}
+      <Row label={t("ui.overlay.ollama_version")} value={status.version ?? t("ui.overlay.unavailable")} />
+      <Row label={t("ui.overlay.state")} value={t(STATE_LABELS[status.state] ?? "") || status.state} />
+      <Row label={t("ui.settings.about.active_model")} value={status.activeModel?.displayName ?? model?.displayName ?? "—"} />
+      <Row label={t("ui.overlay.generation")} value={status.busy ? t("ui.overlay.running") : t("ui.overlay.not_running")} />
+      <Row label={t("ui.overlay.history_count")} value={String(status.historyCount)} />
+      <Row label={t("ui.overlay.config")} value={<code>{status.configPath}</code>} />
+      {metrics.tokensOut != null && <Row label={t("ui.overlay.tokens_out")} value={String(metrics.tokensOut)} />}
+      {metrics.tokensIn != null && <Row label={t("ui.overlay.tokens_in")} value={String(metrics.tokensIn)} />}
       {metrics.tokensPerSecond != null && (
-        <Row label="Скорость" value={`${metrics.tokensPerSecond.toFixed(1)} tok/s`} />
+        <Row label={t("ui.overlay.speed")} value={`${metrics.tokensPerSecond.toFixed(1)} tok/s`} />
       )}
-      {metrics.durationMs != null && <Row label="Длительность" value={formatDuration(metrics.durationMs)} />}
+      {metrics.durationMs != null && <Row label={t("ui.overlay.duration")} value={formatDuration(metrics.durationMs)} />}
     </div>
   );
 }
@@ -189,6 +193,7 @@ function ToolsBody({
   error: string | null;
   model: ModelInfo | null;
 }) {
+  const { t } = useLocale();
   const canUseTools = model ? model.capabilities.includes("tools") : null;
   return (
     <div className="info-list">
@@ -196,8 +201,7 @@ function ToolsBody({
         <div className="panel-note">
           <AlertTriangle size={14} strokeWidth={1.9} />
           <span>
-            {model?.displayName ?? "Текущая модель"} не сообщает о поддержке инструментов — вызовы через
-            неё недоступны, но веб-поиск всегда можно запустить принудительно.
+            {model?.displayName ?? t("ui.overlay.current_model")} {t("ui.overlay.no_tools")}
           </span>
         </div>
       )}
@@ -209,7 +213,7 @@ function ToolsBody({
       )}
       {!error && !tools && (
         <div className="panel-loading">
-          <Loader2 size={15} className="spin" /> Читаю инструменты агента…
+          <Loader2 size={15} className="spin" /> {t("ui.overlay.reading_tools")}
         </div>
       )}
       {tools?.map((tool) => (
@@ -222,24 +226,25 @@ function ToolsBody({
           <div className="tool-desc">{tool.description}</div>
         </div>
       ))}
-      {tools && tools.length === 0 && <Row label="Инструменты" value="агент не сообщает ни об одном" />}
+      {tools && tools.length === 0 && <Row label={t("ui.overlay.title.tools")} value={t("ui.overlay.tools_none")} />}
     </div>
   );
 }
 
 function ContextBody({ context, model }: { context: ContextInfo; model: ModelInfo | null }) {
+  const { t } = useLocale();
   const bar = context.ratio == null ? null : Math.round(context.ratio * 100);
   return (
     <div className="info-list">
-      <Row label="Модель" value={model?.displayName ?? "—"} />
+      <Row label={t("ui.settings.about.active_model")} value={model?.displayName ?? "—"} />
       <Row
-        label="Окно контекста"
-        value={context.window != null ? `${formatCount(context.window)} токенов` : "модель не сообщает"}
+        label={t("ui.overlay.context_window")}
+        value={context.window != null ? `${formatCount(context.window)} ${t("ui.overlay.tokens")}` : t("ui.overlay.model_no_report")}
       />
       {context.numCtx != null && <Row label="num_ctx" value={formatCount(context.numCtx)} />}
       <Row
-        label="Использовано (промпт)"
-        value={context.used != null ? `${formatCount(context.used)} токенов` : "—"}
+        label={t("ui.overlay.used_prompt")}
+        value={context.used != null ? `${formatCount(context.used)} ${t("ui.overlay.tokens")}` : "—"}
       />
       {bar != null && (
         <div className="ctx-bar-row">
@@ -249,20 +254,20 @@ function ContextBody({ context, model }: { context: ContextInfo; model: ModelInf
           <span className="ctx-bar-label">{bar}%</span>
         </div>
       )}
-      <Row label="Сообщений" value={String(context.turns)} />
-      <Row label="Файлов/изображений" value={String(context.images)} />
-      <Row label="Вызовов инструментов" value={String(context.toolCalls)} />
-      <Row label="Источников поиска" value={String(context.sources)} />
+      <Row label={t("ui.overlay.messages")} value={String(context.turns)} />
+      <Row label={t("ui.overlay.files_images")} value={String(context.images)} />
+      <Row label={t("ui.overlay.tool_calls")} value={String(context.toolCalls)} />
+      <Row label={t("ui.overlay.sources")} value={String(context.sources)} />
       {context.used == null && (
         <div className="panel-note">
           <Globe size={14} strokeWidth={1.8} />
-          <span>Точное потребление токенов появится после первой генерации — AXIOM не выдумывает цифры.</span>
+          <span>{t("ui.overlay.ctx_note")}</span>
 
         </div>
       )}
-      <Row label="Размер модели" value={formatBytes(model?.sizeBytes ?? null) || "—"} />
-      <Row label="Параметры" value={model?.parameterSize || "—"} />
-      <Row label="Квантование" value={model?.quantization || "—"} />
+      <Row label={t("ui.overlay.model_size")} value={formatBytes(model?.sizeBytes ?? null) || "—"} />
+      <Row label={t("ui.overlay.parameters")} value={model?.parameterSize || "—"} />
+      <Row label={t("ui.overlay.quantization")} value={model?.quantization || "—"} />
     </div>
   );
 }

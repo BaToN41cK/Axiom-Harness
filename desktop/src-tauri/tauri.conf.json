@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: https://icons.duckduckgo.com; connect-src 'self' ipc: https://axiom-harness.onrender.com http://127.0.0.1:1420 ws://127.0.0.1:1420; font-src 'self' data: asset:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {

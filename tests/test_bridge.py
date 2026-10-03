@@ -274,6 +274,83 @@ def test_saved_conversation_round_trips_through_the_bridge(tmp_path: Path) -> No
         proc.close()
 
 
+def test_tabs_open_activate_close_round_trip(bridge: BridgeProcess, tmp_path: Path) -> None:
+    """W3.3: chat tabs over the bridge — open, switch project, close follows."""
+    proj_a = tmp_path / "a"
+    proj_b = tmp_path / "b"
+    proj_a.mkdir()
+    proj_b.mkdir()
+    root_a = str(proj_a.resolve())
+
+    # The bridge starts in its launch directory; move the session to proj_a so
+    # the first tab is bound to a project the test controls.
+    switched = bridge.request(79, "set_workspace", {"path": root_a})
+    assert switched["ok"] is True
+
+    reply = bridge.request(80, "tabs")
+    assert reply["ok"] is True
+    rows = reply["data"]
+    assert len(rows) == 1 and rows[0]["active"] is True
+    first = rows[0]["id"]
+
+    opened = bridge.request(81, "tab_open", {"workspace": str(proj_b)})
+    assert opened["ok"] is True
+    payload = opened["data"]
+    assert len(payload["tabs"]) == 2
+    second = next(t["id"] for t in payload["tabs"] if t["active"])
+    assert payload["workspace"]["current"]["path"] == str(proj_b.resolve())
+    # A fresh tab starts with a blank conversation.
+    assert payload["messages"] == []
+
+    # Switching back to the first tab restores project A.
+    back = bridge.request(82, "tab_activate", {"id": first})
+    assert back["ok"] is True
+    assert back["data"]["workspace"]["current"]["path"] == root_a
+    active = next(t["id"] for t in back["data"]["tabs"] if t["active"])
+    assert active == first
+
+    # Closing the active (A) tab activates B and follows its project.
+    closed = bridge.request(83, "tab_close", {"id": first})
+    assert closed["ok"] is True
+    data = closed["data"]
+    assert [t["id"] for t in data["tabs"]] == [second]
+    assert data["tabs"][0]["active"] is True
+    assert data["workspace"]["current"]["path"] == str(proj_b.resolve())
+
+    # Unknown tab ids are rejected, not silently ignored.
+    missing = bridge.request(84, "tab_activate", {"id": "nope"})
+    assert missing["ok"] is False
+    assert "Unknown tab" in missing["error"]
+
+
+def test_knowledge_background_indexing_round_trip(bridge: BridgeProcess, tmp_path: Path) -> None:
+    """W3.3: knowledge_add with background=True returns pending, events report."""
+    docs = tmp_path / "kb"
+    docs.mkdir()
+    (docs / "runbook.md").write_text(
+        "# Runbook\n\nThe staging VPN gateway is gw-staging.internal.\n",
+        encoding="utf-8",
+    )
+    added = bridge.request(90, "knowledge_add", {
+        "name": "bg-kb", "path": str(docs), "background": True,
+    })
+    assert added["ok"] is True
+    assert added["data"]["pending"] is True
+
+    # A tiny folder indexes almost instantly; poll the honest idle state.
+    for _ in range(100):
+        state = bridge.request(91, "knowledge_indexing")
+        assert state["ok"] is True
+        if "bg-kb" not in state["data"]:
+            break
+        threading.Event().wait(0.05)
+    assert "bg-kb" not in bridge.request(92, "knowledge_indexing")["data"]
+
+    # The collection is fully searchable after the background pass.
+    hits = bridge.request(93, "knowledge_search", {"query": "staging VPN"})["data"]
+    assert hits and hits[0]["source"] == "runbook.md"
+
+
 def test_unknown_command_is_a_structured_error(bridge: BridgeProcess) -> None:
     reply = bridge.request(6, "no_such_command")
     assert reply["ok"] is False
@@ -745,3 +822,62 @@ def test_apply_patch_uses_workspace_tool_gate_when_allowed(tmp_path: Path) -> No
         assert target.read_text(encoding="utf-8") == "after\n"
     finally:
         proc.close()
+
+
+def test_mcp_add_status_remove_round_trip(bridge: BridgeProcess) -> None:
+    """W3.5: MCP servers can be added, probed honestly, listed and removed."""
+    assert bridge.request(1, "mcp_servers")["data"] == []
+
+    added = bridge.request(2, "mcp_add", {
+        "name": "demo",
+        "command": ["axiom-no-such-mcp-binary"],
+    })
+    assert added["ok"] is True
+    # A missing binary is reported honestly, not as a fabricated "connected" state.
+    assert added["data"]["ok"] is False
+    assert added["data"]["error"]
+    assert added["data"]["tools"] == []
+
+    listed = bridge.request(3, "mcp_servers")["data"]
+    assert [row["name"] for row in listed] == ["demo"]
+    assert listed[0]["command"] == ["axiom-no-such-mcp-binary"]
+
+    removed = bridge.request(4, "mcp_remove", {"name": "demo"})
+    assert removed["data"] == {"name": "demo", "removed": True}
+    assert bridge.request(5, "mcp_servers")["data"] == []
+
+
+def test_skills_list_pin_unpin_suggest(bridge: BridgeProcess) -> None:
+    """W3.5: skills can be inspected, pinned (persisted) and suggested per task."""
+    rows = bridge.request(1, "skills_list")["data"]
+    assert any(row["id"] == "python" for row in rows)
+    python = next(row for row in rows if row["id"] == "python")
+    assert python["source"] == "builtin"
+    assert python["pinned"] is False
+    assert python["instructions"]
+
+    pinned = bridge.request(2, "skills_pin", {"id": "python"})
+    assert pinned["data"] == {"id": "python", "pinned": True}
+    rows = bridge.request(3, "skills_list")["data"]
+    assert next(row for row in rows if row["id"] == "python")["pinned"] is True
+
+    # Task-based suggestion resolves real skill ids from trigger markers.
+    suggested = bridge.request(4, "skills_suggest", {"text": "почини pytest"})
+    assert "python" in suggested["data"]
+
+    unpinned = bridge.request(5, "skills_unpin", {"id": "python"})
+    assert unpinned["data"] == {"id": "python", "pinned": False}
+
+
+def test_mcp_and_pins_persist(tmp_path: Path) -> None:
+    """W3.5: manual pins and MCP servers survive a restart via config."""
+    proc = BridgeProcess(tmp_path / "axiom-home")
+    try:
+        proc.request(1, "mcp_add", {"name": "demo", "command": ["axiom-no-such-mcp-binary"]})
+        proc.request(2, "skills_pin", {"id": "typescript"})
+    finally:
+        proc.close()
+
+    saved = json.loads((tmp_path / "axiom-home" / "config.json").read_text(encoding="utf-8"))
+    assert saved["pinned_skills"] == ["typescript"]
+    assert saved["mcp_servers"] == [{"name": "demo", "command": ["axiom-no-such-mcp-binary"]}]

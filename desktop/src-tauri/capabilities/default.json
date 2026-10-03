@@ -6,8 +6,6 @@
   "permissions": [
     "core:default",
     "core:event:default",
-    "dialog:default",
-    "shell:allow-spawn",
-    "shell:allow-stdin-write"
+    "dialog:default"
   ]
 }

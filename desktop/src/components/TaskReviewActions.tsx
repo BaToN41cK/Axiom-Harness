@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, RotateCcw, X } from "lucide-react";
 import type { Task } from "../types";
+import { useLocale } from "../lib/locale";
 
 /** Reject restores files, so every entry point requires explicit confirmation. */
 export default function TaskReviewActions({ task, busy, onReview, onRecover }: {
@@ -12,6 +13,7 @@ export default function TaskReviewActions({ task, busy, onReview, onRecover }: {
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const { t } = useLocale();
   const locked = useRef(false);
   const rejectButton = useRef<HTMLButtonElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
@@ -28,9 +30,9 @@ export default function TaskReviewActions({ task, busy, onReview, onRecover }: {
     setError("");
     try {
       if (await onReview(task.id, decision)) setConfirming(false);
-      else setError("Решение не сохранено. Проверьте сообщение об ошибке и состояние файлов.");
+      else setError(t("ui.taskreview.not_saved"));
     } catch {
-      setError("Не удалось выполнить ревью. Проверьте состояние файлов перед повтором.");
+      setError(t("ui.taskreview.failed"));
     } finally { locked.current = false; setPending(false); }
   }
   async function recover() {
@@ -39,34 +41,34 @@ export default function TaskReviewActions({ task, busy, onReview, onRecover }: {
     setPending(true);
     setError("");
     try {
-      if (!await onRecover(task.id)) setError("Восстановление не завершено. Проверьте конфликтующие файлы и обновите задачи.");
+      if (!await onRecover(task.id)) setError(t("ui.taskreview.recover_incomplete"));
     } catch {
-      setError("Не удалось завершить восстановление. Файлы не следует удалять без проверки.");
+      setError(t("ui.taskreview.recover_failed"));
     } finally { locked.current = false; setPending(false); }
   }
   if (task.review_recovery) return <div className="task-review-recovery" role="alert" aria-busy={pending}>
-    <strong>Ревью прервано · {task.review_recovery === "recovery_required" ? "нужно ручное восстановление" : "есть незавершённый журнал"}</strong>
-    <p>{task.review_recovery_detail || "Обнаружен незавершённый журнал ревью. Не принимайте решение, пока состояние файлов не проверено."}</p>
-    {(task.review_recovery_paths ?? []).length > 0 && <div>Пути, требующие проверки: <ul>{task.review_recovery_paths?.map((path) => <li key={path}><code>{path}</code></li>)}</ul></div>}
+    <strong>{t("ui.taskreview.interrupted", { reason: task.review_recovery === "recovery_required" ? t("ui.taskreview.recovery_required") : t("ui.taskreview.unfinished_journal") })}</strong>
+    <p>{task.review_recovery_detail || t("ui.taskreview.journal_default")}</p>
+    {(task.review_recovery_paths ?? []).length > 0 && <div>{t("ui.taskreview.paths")} <ul>{task.review_recovery_paths?.map((path) => <li key={path}><code>{path}</code></li>)}</ul></div>}
     <p>{task.review_recovery_paths?.includes(".")
-      ? "Изменился родительский каталог или корень проекта. Верните исходный каталог после проверки его содержимого; не удаляйте сохранённые копии до завершения восстановления."
-      : "Сохраните конфликтующие файлы вне их текущих путей после ручной проверки. Повторная попытка не перезаписывает чужие изменения; сохранённые копии не удаляйте до успешного завершения."}</p>
-    <button type="button" className="task-btn mini ghost" disabled={busy || pending} onClick={() => void recover()}>{pending ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />} Повторить безопасное восстановление</button>
+      ? t("ui.taskreview.parent_changed")
+      : t("ui.taskreview.conflicts")}</p>
+    <button type="button" className="task-btn mini ghost" disabled={busy || pending} onClick={() => void recover()}>{pending ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />} {t("ui.taskreview.retry_recovery")}</button>
     {error && <p className="task-review-error" role="alert">{error}</p>}
   </div>;
   return <div className="task-review-actions" aria-busy={pending}>
-    <button type="button" className="task-btn mini primary" disabled={busy || pending || confirming} onClick={() => void decide("accept")}><Check size={12} /> Принять</button>
-    <button ref={rejectButton} type="button" className="task-btn mini danger" disabled={busy || pending} onClick={() => setConfirming(true)}><X size={12} /> Отклонить</button>
-    {confirming && <div className="task-review-confirm" role="group" aria-label="Подтверждение восстановления файлов"
+    <button type="button" className="task-btn mini primary" disabled={busy || pending || confirming} onClick={() => void decide("accept")}><Check size={12} /> {t("ui.taskreview.accept")}</button>
+    <button ref={rejectButton} type="button" className="task-btn mini danger" disabled={busy || pending} onClick={() => setConfirming(true)}><X size={12} /> {t("ui.taskreview.reject")}</button>
+    {confirming && <div className="task-review-confirm" role="group" aria-label={t("ui.taskreview.confirm_aria")}
       onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); cancel(); } }}>
       <div>
-        <strong>Отклонить изменения?</strong>
-        <p>AXIOM восстановит сохранённые файлы до задачи и удалит созданные ею файлы. Если обнаружены последующие ручные правки, восстановление будет заблокировано.</p>
-        <p>Проект: {task.scope ?? "не указан"} · сохранённых путей: {Object.keys(task.file_baselines ?? {}).length}</p>
+        <strong>{t("ui.taskreview.reject_title")}</strong>
+        <p>{t("ui.taskreview.reject_body")}</p>
+        <p>{t("ui.taskreview.scope", { scope: task.scope ?? t("ui.taskreview.no_scope"), n: String(Object.keys(task.file_baselines ?? {}).length) })}</p>
       </div>
       <div className="task-review-confirm-actions">
-        <button ref={cancelButton} type="button" className="task-btn mini ghost" disabled={pending} onClick={cancel}>Отмена</button>
-        <button type="button" className="task-btn mini danger" disabled={busy || pending} onClick={() => void decide("reject")}>{pending ? <Loader2 size={12} className="spin" /> : <X size={12} />} Восстановить и отклонить</button>
+        <button ref={cancelButton} type="button" className="task-btn mini ghost" disabled={pending} onClick={cancel}>{t("ui.common.cancel")}</button>
+        <button type="button" className="task-btn mini danger" disabled={busy || pending} onClick={() => void decide("reject")}>{pending ? <Loader2 size={12} className="spin" /> : <X size={12} />} {t("ui.taskreview.restore_reject")}</button>
       </div>
     </div>}
     {error && <p className="task-review-error" role="alert">{error}</p>}

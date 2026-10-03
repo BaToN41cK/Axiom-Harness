@@ -7,12 +7,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -232,7 +232,10 @@ fn find_root() -> PathBuf {
         }
     }
     for candidate in candidates {
-        if candidate.join("desktop/src-tauri/bridge/axiom_bridge.py").exists() {
+        if candidate
+            .join("desktop/src-tauri/bridge/axiom_bridge.py")
+            .exists()
+        {
             return candidate;
         }
     }
@@ -272,14 +275,14 @@ fn find_python() -> String {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status().is_ok() {
+            .status()
+            .is_ok()
+        {
             return candidate.to_string();
         }
     }
     "python".to_string()
 }
-
-
 
 fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
     let state: State<Bridge> = app.state();
@@ -349,7 +352,10 @@ fn spawn_bridge(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("failed to start Python core ({}): {}", python, e))?;
     #[cfg(windows)]
     {
-        if job.as_ref().is_some_and(|group| group.assign(&child).is_err()) {
+        if job
+            .as_ref()
+            .is_some_and(|group| group.assign(&child).is_err())
+        {
             job = None;
         }
     }
@@ -454,7 +460,10 @@ fn bridge_restart(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     let lower = url.trim().to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")) {
+    if !(lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:"))
+    {
         return Err("only http(s) and mailto links can be opened".to_string());
     }
     let target = url.trim().to_string();
@@ -477,8 +486,12 @@ fn open_url(url: String) -> Result<(), String> {
         let target_wide: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
         let result = unsafe {
             ShellExecuteW(
-                std::ptr::null_mut(), operation.as_ptr(), target_wide.as_ptr(),
-                std::ptr::null(), std::ptr::null(), 1,
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
             )
         };
         if result as isize > 32 {
@@ -512,6 +525,80 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+// --------------------------------------------------------------- tray (W3.3)
+/// Shared tray state: tooltip text and the running-task count label.
+struct TrayState {
+    running: Mutex<u32>,
+}
+
+/// Create the tray icon: Open AXIOM / Quit, live tooltip with the honest
+/// background-task count pushed from the webview (`tray_set_state`).
+fn setup_tray(app: &AppHandle) -> Result<(), tauri::Error> {
+    use tauri::menu::{Menu, MenuItem};
+
+    app.manage(TrayState {
+        running: Mutex::new(0),
+    });
+    let show = MenuItem::with_id(app, "axiom-tray-show", "Открыть AXIOM", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "axiom-tray-quit", "Выйти из AXIOM", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("AXIOM ships a window icon");
+    let tray = tauri::tray::TrayIconBuilder::with_id("axiom-tray")
+        .icon(icon)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("AXIOM")
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "axiom-tray-show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            "axiom-tray-quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            // Left click opens the window — the classic tray behaviour.
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+    app.manage(tray);
+    Ok(())
+}
+
+/// W3.3: the webview pushes the real running-task count + tooltip text
+/// (built from the core i18n catalog, so it follows the UI language).
+#[tauri::command]
+fn tray_set_state(app: AppHandle, running: u32, tooltip: String) -> Result<(), String> {
+    let state = app.try_state::<TrayState>();
+    let tray = app.try_state::<tauri::tray::TrayIcon>();
+    if let Some(state) = &state {
+        *state.running.lock().unwrap() = running;
+    }
+    if let Some(tray) = &tray {
+        tray.set_tooltip(Some(tooltip.as_str()))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(windows)]
@@ -539,6 +626,11 @@ pub fn run() {
                 stdin: Mutex::new(None),
                 generation: Arc::new(AtomicU64::new(0)),
             });
+            // W3.3: tray with Open/Quit; the tooltip mirrors the live
+            // background-task count pushed by the webview.
+            if let Err(err) = setup_tray(app.handle()) {
+                eprintln!("tray setup error: {err}");
+            }
             if let Err(err) = spawn_bridge(&handle) {
                 eprintln!("bridge startup error: {err}");
                 let _ = handle.emit("bridge://stderr", err.clone());
@@ -556,10 +648,22 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<Bridge>();
-                state.child.lock().unwrap().take();
-                state.stdin.lock().unwrap().take();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // W3.3: closing the window hides it to the tray instead of
+                    // killing the app - background tasks keep running. A real
+                    // exit stays available through the tray menu and /exit.
+                    if window.label() == "main" {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    let state = window.state::<Bridge>();
+                    state.child.lock().unwrap().take();
+                    *state.stdin.lock().unwrap() = None;
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -567,9 +671,9 @@ pub fn run() {
             bridge_restart,
             open_url,
             pick_folder,
-            quit_app
+            quit_app,
+            tray_set_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running AXIOM");
 }
-

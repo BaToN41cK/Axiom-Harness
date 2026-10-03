@@ -2,20 +2,23 @@ import { useEffect, useRef } from "react";
 import fallbackImage from "../assets/boot-space.jpg";
 
 /* ------------------------------------------------------------------ BlackHole
-   A live, procedurally rendered black hole (WebGL1 fragment shader):
-     - turbulent accretion disk with differential rotation (inner orbits are
-       faster), temperature colour ramp and Doppler beaming;
-     - gravitational lensing: the far side of the disk is bent over and under
-       the shadow, plus a crisp photon ring;
-     - background stars and red nebula dust are lensed around the hole.
+   A live, procedurally rendered black hole (WebGL1 fragment shader) — the
+   iconic edge-on silhouette in a red-and-black key:
+     - a dark, crisp event-horizon sphere at the centre;
+     - a bright red accretion disk seen nearly edge-on (a thin band through
+       the middle), with differential rotation, turbulence and Doppler beaming;
+     - gravitational lensing bends the far side of the disk up and over (and a
+       thinner image under) the shadow — the signature halo arc;
+     - a tight red photon ring hugs the horizon; swirling embers orbit the disk;
+     - the background star field and red nebula are lensed around the hole.
 
    Performance budget (the boot screen used to lag):
-     - rendered at a reduced internal resolution (≈0.55× CSS pixels, max
-       1280×720 back-buffer) and upscaled by the compositor;
+     - rendered at a reduced internal resolution (~0.55x CSS pixels, max
+       1280x720 back-buffer) and upscaled by the compositor;
      - frame rate capped at 40 fps; rendering pauses while the window is hidden;
      - no DOM layers, no blend modes, no backdrop-filter on top of it;
-     - `prefers-reduced-motion` → one static frame;
-     - no WebGL → the pre-rendered JPEG is shown instead. */
+     - `prefers-reduced-motion` -> one static frame;
+     - no WebGL -> the pre-rendered JPEG is shown instead. */
 
 const VERT = `
 attribute vec2 aPos;
@@ -30,6 +33,8 @@ uniform vec2 uCenter;   // black-hole centre, 0..1 of the viewport
 uniform float uSize;    // shadow radius in viewport heights
 uniform float uReveal;  // 0..1 intro
 
+#define TAU 6.2831853
+
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -43,10 +48,11 @@ float noise(vec2 p) {
 }
 float fbm(vec2 p) {
   float v = 0.0, a = 0.5;
-  for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + 11.7; a *= 0.5; }
+  for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + 11.7; a *= 0.5; }
   return v;
 }
 
+// Faint ash/ember star field behind the maelstrom (kept in the red/black key).
 vec3 starLayer(vec2 p, float scale, float density, float bright) {
   vec2 g = p * scale;
   vec2 id = floor(g);
@@ -56,32 +62,60 @@ vec3 starLayer(vec2 p, float scale, float density, float bright) {
   vec2 off = vec2(hash(id + 1.3), hash(id + 2.7)) - 0.5;
   float d = length(f - off * 0.7);
   float tw = 0.55 + 0.45 * sin(uTime * (0.8 + h * 2.5) + h * 40.0);
-  vec3 tint = mix(vec3(1.0, 0.82, 0.72), vec3(0.85, 0.9, 1.0), hash(id + 7.1));
-  return tint * smoothstep(0.09, 0.0, d) * tw * bright;
+  vec3 tint = mix(vec3(0.55, 0.52, 0.56), vec3(0.9, 0.28, 0.26), hash(id + 7.1));
+  return tint * smoothstep(0.08, 0.0, d) * tw * bright;
 }
 
-// Accretion-disk emission at disk-plane radius rd and orbital angle th.
-vec3 diskEmission(float rd, float th, float inner, float outer, float rs, float side) {
-  if (rd < inner * 0.85 || rd > outer) return vec3(0.0);
-  float w = 1.7 * pow(rs / rd, 1.5);            // Keplerian-ish angular speed
+// Red-and-black temperature ramp shared by every emissive layer: deep near-black
+// maroon -> blood red -> bright red crest. Deliberately no orange / gold.
+vec3 redRamp(float I) {
+  vec3 ember = vec3(0.14, 0.006, 0.012);
+  vec3 blood = vec3(0.85, 0.045, 0.05);
+  vec3 crest = vec3(1.0, 0.33, 0.26);
+  vec3 c = mix(ember, blood, smoothstep(0.05, 0.5, I));
+  c = mix(c, crest, smoothstep(0.65, 1.5, I));
+  return c * I;
+}
+
+// ------------------------------------------------------------- accretion disk
+// Emission of the accretion disk at disk-plane radius rd (in shadow radii) and
+// orbital angle th. Differential rotation (inner orbits faster) + turbulence +
+// Doppler beaming on the approaching side. Red-and-black only.
+vec3 diskEmission(float rd, float th, float inner, float outer, float side) {
+  if (rd < inner * 0.9 || rd > outer) return vec3(0.0);
+  float w = 2.2 * pow(1.0 / rd, 1.5);              // Keplerian-ish angular speed
   float a = th - uTime * w;
   vec2 cs = vec2(cos(a), sin(a));
-  float rr = rd / rs;
-  float n = fbm(cs * 3.4 + vec2(rr * 1.7, rr * 1.3));
-  float flame = fbm(cs * 1.6 + vec2(rr * 0.6 - uTime * 0.04, rr * 0.9));
-  float streak = noise(cs * 9.0 + vec2(rr * 6.5, 0.0));
-  float turb = 0.25 + 1.5 * n * (0.45 + 0.8 * flame) * (0.7 + 0.5 * streak);
-  float edgeIn = smoothstep(inner * 0.85, inner * 1.12, rd);
-  float edgeOut = 1.0 - smoothstep(outer * 0.45, outer, rd);
-  float temp = pow(inner / rd, 1.35);            // hotter towards the centre
-  float doppler = 1.0 + 0.75 * side;            // approaching side is brighter
+  float n = fbm(cs * 3.2 + vec2(rd * 1.7, rd * 1.1));
+  float flame = fbm(cs * 1.5 + vec2(rd * 0.5 - uTime * 0.05, rd * 0.8));
+  float streak = noise(cs * 9.0 + vec2(rd * 6.5, 0.0));
+  float turb = 0.3 + 1.5 * n * (0.45 + 0.8 * flame) * (0.7 + 0.5 * streak);
+  float edgeIn = smoothstep(inner * 0.9, inner * 1.15, rd);
+  float edgeOut = 1.0 - smoothstep(outer * 0.5, outer, rd);
+  float temp = pow(inner / rd, 1.4);               // hotter towards the centre
+  float doppler = 1.0 + 0.85 * side;               // approaching side brighter
   float I = temp * turb * edgeIn * edgeOut * doppler;
-  vec3 cool = vec3(0.62, 0.05, 0.02);
-  vec3 warm = vec3(1.0, 0.30, 0.05);
-  vec3 hot = vec3(1.0, 0.80, 0.52);
-  vec3 c = mix(cool, warm, smoothstep(0.08, 0.55, I));
-  c = mix(c, hot, smoothstep(0.7, 1.6, I));
-  return c * I * 2.1;
+  return redRamp(I) * 2.3;
+}
+
+// Swirling embers orbiting in the disk plane; share the disk's rotation.
+vec3 swirlParticles(vec2 dq, float inner, float outer) {
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 18; i++) {
+    float fi = float(i);
+    float seed = hash(vec2(fi, 3.0));
+    float orad = mix(inner * 1.05, outer * 0.95, hash(vec2(fi, 7.0)));
+    float w = 2.2 * pow(1.0 / orad, 1.5);
+    float ang = seed * TAU + uTime * w;
+    vec2 pp = vec2(cos(ang), sin(ang)) * orad;
+    float size = mix(0.05, 0.13, hash(vec2(fi, 11.0)));
+    float d = length(dq - pp);
+    float glow = exp(-pow(d / size, 2.0));
+    float tw = 0.55 + 0.45 * sin(uTime * (1.3 + seed * 2.6) + seed * 24.0);
+    vec3 tint = mix(vec3(0.95, 0.09, 0.07), vec3(1.0, 0.34, 0.26), tw);
+    acc += tint * glow * tw * mix(0.5, 1.2, hash(vec2(fi, 17.0)));
+  }
+  return acc;
 }
 
 void main() {
@@ -92,60 +126,69 @@ void main() {
   float rs = uSize;
   float r = length(p);
 
-  // ---- lensed background (stars + nebula bent around the hole)
-  vec2 dir = p / max(r, 1e-4);
-  vec2 bp = p - dir * (rs * rs * 1.6) / max(r, rs * 0.6);
-  vec2 sp = bp + vec2(uCenter.x * asp, uCenter.y);
   vec3 col = vec3(0.0);
-  float neb = fbm(sp * 1.7 + vec2(uTime * 0.006, 0.0));
-  float neb2 = fbm(sp * 4.3 + neb * 2.2);
-  float nebMask = 0.35 + 0.65 * smoothstep(-1.6, 0.1, p.x);
-  col += vec3(0.30, 0.03, 0.025) * pow(neb * neb2, 2.2) * 1.5 * nebMask;
-  col += vec3(0.035, 0.004, 0.006) * neb * nebMask;
-  col += starLayer(sp, 70.0, 0.962, 1.0);
-  col += starLayer(sp + 3.1, 140.0, 0.975, 0.55);
 
-  // ---- disk geometry: tilted plane, slightly rotated
-  float ang = -0.16;
-  mat2 R = mat2(cos(ang), sin(ang), -sin(ang), cos(ang));
-  vec2 q = R * p;
-  float tilt = 0.25;
-  vec2 dq = vec2(q.x, q.y / tilt);
+  // ---- lensed background: stars + red nebula bent around the hole
+  vec2 dir = p / max(r, 1e-4);
+  vec2 bp = p - dir * (rs * rs * 1.7) / max(r, rs * 0.6);
+  vec2 sp = bp + vec2(uCenter.x * asp, uCenter.y);
+  float neb = fbm(sp * 1.8 + vec2(uTime * 0.006, 0.0));
+  float neb2 = fbm(sp * 4.6 + neb * 2.1);
+  col += vec3(0.30, 0.02, 0.028) * pow(neb * neb2, 2.1) * 1.4;
+  col += vec3(0.04, 0.004, 0.008) * neb;
+  col += starLayer(sp, 70.0, 0.965, 1.0);
+  col += starLayer(sp + 3.1, 140.0, 0.976, 0.55);
+
+  // ---- disk geometry: a nearly edge-on plane (strong foreshortening), so the
+  // disk reads as a thin bright band through the middle of the hole.
+  float inner = 1.5;      // in shadow radii
+  float outer = 6.0;
+  float tilt = 0.17;      // small => near edge-on (the Gargantua look)
+  // Near side of the disk (crosses in FRONT of / below the shadow).
+  vec2 dq = vec2(p.x, p.y / tilt) / rs;
   float rd = length(dq);
   float th = atan(dq.y, dq.x);
-  float inner = rs * 1.45;
-  float outer = rs * 5.2;
   float side = -dq.x / max(rd, 1e-4);
+  vec3 diskFront = diskEmission(rd, th, inner, outer, side);
+  diskFront += swirlParticles(dq, inner, outer);
 
-  // ---- lensed image of the far side: a halo over and under the shadow
-  float phi = atan(q.y, q.x);
-  float lr = (r - rs * 1.03) / (rs * 1.5);
+  // ---- gravitational lensing: the FAR side of the disk is bent up and over
+  // the top of the shadow (and a thinner image under it) - the halo arc.
+  float phi = atan(p.y, p.x);
+  float lr = (r - rs * 1.05) / (rs * 2.2);
+  vec3 halo = vec3(0.0);
   if (lr > 0.0 && lr < 1.0) {
-    float rdl = inner + lr * (outer - inner) * 0.4;
-    vec3 halo = diskEmission(rdl, phi + 1.57, inner, outer, rs, -cos(phi) * 0.6);
-    float sp = sin(phi);
-    float arc = 0.18 + 1.0 * pow(max(sp, 0.0), 0.55) + 0.22 * pow(max(-sp, 0.0), 1.8);
-    float fade = smoothstep(0.0, 0.06, lr) * (1.0 - smoothstep(0.3, 1.0, lr));
-    col += halo * arc * fade * 1.25;
+    float rdl = inner + lr * (outer - inner);
+    halo = diskEmission(rdl, phi + 1.57, inner, outer, -cos(phi) * 0.7);
+    float s = sin(phi);
+    float arc = 0.2 + 1.0 * pow(max(s, 0.0), 0.5) + 0.3 * pow(max(-s, 0.0), 1.6);
+    float fade = smoothstep(0.0, 0.05, lr) * (1.0 - smoothstep(0.45, 1.0, lr));
+    halo *= arc * fade * 1.3;
   }
+  col += halo;
 
-  // ---- photon ring + soft glow
-  float ring = exp(-pow((r - rs * 1.035) / (rs * 0.022), 2.0));
-  col += vec3(1.0, 0.72, 0.45) * ring * 0.9;
-  col += vec3(1.0, 0.32, 0.10) * 0.035 * rs / max(r - rs * 0.9, rs * 0.08);
+  // ---- photon ring + soft glow hugging the horizon (red-hot)
+  float ring = exp(-pow((r - rs * 1.045) / (rs * 0.02), 2.0));
+  col += vec3(1.0, 0.42, 0.32) * ring * 1.0;
+  col += vec3(1.0, 0.16, 0.08) * 0.04 * rs / max(r - rs * 0.9, rs * 0.08);
 
-  // ---- event horizon (shadow)
-  float shadow = smoothstep(rs * 0.98, rs * 1.03, r);
+  // ---- event horizon: crisp black sphere swallows everything inside.
+  float shadow = smoothstep(rs * 0.97, rs * 1.03, r);
   col *= shadow;
 
-  // ---- disk: near half crosses in front of the shadow, far half is hidden
-  vec3 disk = diskEmission(rd, th, inner, outer, rs, side);
-  float behind = step(0.0, q.y) * (1.0 - smoothstep(rs * 0.98, rs * 1.06, r));
-  col += disk * (1.0 - behind);
+  // ---- composite the front half of the disk IN FRONT of the shadow.
+  // The near half (p.y below the centre line) is drawn after occlusion so it
+  // crosses over the black sphere; the far half behind is hidden by it.
+  float behind = step(0.0, p.y) * (1.0 - smoothstep(rs * 0.97, rs * 1.06, r));
+  col += diskFront * (1.0 - behind);
 
-  // ---- tone map + intro
-  col = 1.0 - exp(-col * 1.25);
-  col = pow(col, vec3(0.95));
+  // ---- gentle vignette to seat the hole in black and protect the text side
+  float vig = 1.0 - smoothstep(0.5, 1.25, length(uv - 0.5));
+  col *= 0.4 + 0.6 * vig;
+
+  // ---- tone map + intro reveal
+  col = 1.0 - exp(-col * 1.3);
+  col = pow(col, vec3(0.92));
   col *= uReveal;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -183,6 +226,10 @@ export default function BlackHole({ className }: Props) {
       canvas.style.display = "none";
       if (fallbackRef.current) fallbackRef.current.style.display = "block";
     };
+    // Each (re)mount starts from the live-canvas state; a fallback left behind
+    // by a previous StrictMode mount must not stick if this mount succeeds.
+    canvas.style.display = "block";
+    if (fallbackRef.current) fallbackRef.current.style.display = "none";
 
     const gl = canvas.getContext("webgl", {
       antialias: false,
@@ -256,13 +303,13 @@ export default function BlackHole({ className }: Props) {
       const narrow = cssW < 860;
       gl.uniform2f(uRes, width, height);
       gl.uniform1f(uTime, t + 12.0);
-      // Keep the black hole alive: the whole thing drifts on a slow Lissajous
-      // orbit and its shadow radius breathes, while the disk keeps rotating.
+      // Keep the vortex alive: the whole maelstrom drifts on a slow Lissajous
+      // orbit and its horizon radius breathes, while the spiral keeps winding.
       const driftX = 0.05 * Math.sin(t * 0.23 + 0.4);
       const driftY = 0.04 * Math.sin(t * 0.31 + 2.1);
       const breathe = 1.0 + 0.022 * Math.sin(t * 0.34 + 0.6);
-      gl.uniform2f(uCenter, (narrow ? 0.9 : 0.76) + driftX, 0.52 + driftY);
-      gl.uniform1f(uSize, (narrow ? 0.1 : 0.125) * breathe);
+      gl.uniform2f(uCenter, (narrow ? 0.72 : 0.72) + driftX, 0.5 + driftY);
+      gl.uniform1f(uSize, (narrow ? 0.085 : 0.11) * breathe);
       gl.uniform1f(uReveal, reduceMotion ? 1 : Math.min(1, t / 1.4) ** 1.6);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
@@ -306,7 +353,12 @@ export default function BlackHole({ className }: Props) {
       gl.deleteProgram(prog);
       gl.deleteShader(vs);
       gl.deleteShader(fs);
-      gl.getExtension("WEBGL_lose_context")?.loseContext();
+      // NB: do NOT call WEBGL_lose_context.loseContext() here. React StrictMode
+      // (dev) mounts → cleans up → mounts again on the SAME <canvas> node; a
+      // force-lost context stays lost, so the remount's getContext() returns a
+      // dead context and every shader "fails" with a null info log, dropping us
+      // onto the JPEG fallback. Deleting the GL objects above is enough; the
+      // context itself is reclaimed when the canvas is garbage-collected.
     };
   }, []);
 

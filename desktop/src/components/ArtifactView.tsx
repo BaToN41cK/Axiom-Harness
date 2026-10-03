@@ -15,13 +15,14 @@ import {
   downloadText,
   svgToPng,
 } from "../lib/artifacts";
+import { useLocale } from "../lib/locale";
 
 const TYPE_LABEL: Record<Artifact["type"], string> = {
-  table: "Таблица",
-  comparison: "Сравнение",
-  checklist: "Чек-лист",
-  mermaid: "Диаграмма",
-  chart: "График",
+  table: "ui.artifact.type.table",
+  comparison: "ui.artifact.type.comparison",
+  checklist: "ui.artifact.type.checklist",
+  mermaid: "ui.artifact.type.mermaid",
+  chart: "ui.artifact.type.chart",
 };
 
 function slugOf(artifact: Artifact): string {
@@ -97,6 +98,7 @@ function renderBody(artifact: Artifact) {
 export default function ArtifactView({ artifact }: { artifact: Artifact }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useLocale();
   const slug = slugOf(artifact);
   const canTabular = artifact.type !== "mermaid";
 
@@ -116,13 +118,13 @@ export default function ArtifactView({ artifact }: { artifact: Artifact }) {
   return (
     <div className="artifact-card">
       <header className="artifact-head">
-        <span className="artifact-kind">{TYPE_LABEL[artifact.type]}</span>
+        <span className="artifact-kind">{t(TYPE_LABEL[artifact.type])}</span>
         {artifact.title && <span className="artifact-title">{artifact.title}</span>}
         <span className="artifact-actions">
           <button
             type="button"
             onClick={() => downloadText(`${slug}.md`, artifactToMarkdown(artifact), "text/markdown")}
-            title="Скачать Markdown"
+            title={t("ui.artifact.download_md")}
           >
             MD
           </button>
@@ -130,7 +132,7 @@ export default function ArtifactView({ artifact }: { artifact: Artifact }) {
             <button
               type="button"
               onClick={() => downloadText(`${slug}.csv`, artifactToCsv(artifact), "text/csv")}
-              title="Скачать CSV"
+              title={t("ui.artifact.download_csv")}
             >
               CSV
             </button>
@@ -139,13 +141,13 @@ export default function ArtifactView({ artifact }: { artifact: Artifact }) {
             <button
               type="button"
               onClick={() => downloadText(`${slug}.svg`, artifactToSvg(artifact), "image/svg+xml")}
-              title="Скачать SVG"
+              title={t("ui.artifact.download_svg")}
             >
               SVG
             </button>
           )}
           {canTabular && (
-            <button type="button" onClick={() => void exportPng()} disabled={busy} title="Скачать PNG">
+            <button type="button" onClick={() => void exportPng()} disabled={busy} title={t("ui.artifact.download_png")}>
               PNG
             </button>
           )}

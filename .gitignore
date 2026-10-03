@@ -8,7 +8,11 @@ dist/
 
 # Environments
 .venv/
+.venv-tts/
 venv/
+
+# Local TTS models (large weights, never tracked).
+/models/tts/
 
 # Tooling
 .pytest_cache/
@@ -27,6 +31,7 @@ data/*.sqlite3-shm
 
 # Desktop (Tauri + React)
 desktop/node_modules/
+desktop/node-compile-cache/
 desktop/dist/
 desktop/src-tauri/target/
 desktop/data/

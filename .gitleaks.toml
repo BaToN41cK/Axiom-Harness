@@ -1,0 +1,7 @@
+# Gitleaks config: fail CI on real leaked credentials, ignore known
+# test-fixture strings. Verified locally with gitleaks 8.28
+# (`gitleaks detect --no-git`): the only findings were gitignored build
+# output, a gitignored local dev data file, and the fixture below.
+[allowlist]
+description = "payment-backend test fixture label, not a credential"
+regexes = ['''AX1-unmatched-label''']

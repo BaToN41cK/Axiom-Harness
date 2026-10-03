@@ -89,6 +89,24 @@
   --ax-radius-lg: 10px;
   --ax-radius-pill: 999px;
 
+  /* ---------- Control heights: the single ladder for interactive elements.
+     xs = icon-only squares in dense strips, sm = small buttons / tab / menu
+     rows, md = default buttons and inputs. Every control resolves to one of
+     these three heights — no ad-hoc 26/28/32 variants. */
+  --ax-ctl-h-xs: 20px;
+  --ax-ctl-h-sm: 24px;
+  --ax-ctl-h-md: 30px;
+
+  /* ---------- Interface size: compact / standard / enlarged ----------
+     Applied as a root `zoom` factor (see styles.css) so every surface,
+     control and label scales together and proportions never drift. */
+  --ax-ui-scale: 1;
+
+  /* Base body text size (Settings → Appearance → font size). Chat markdown,
+     the composer and body copy follow this value; component chrome keeps its
+     own fixed px sizes from the type scale above. */
+  --ax-font-body: 14px;
+
   /* ---------- Typography ---------- */
   --ax-font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ax-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -141,3 +159,12 @@
     --ax-motion-slow: 0ms;
   }
 }
+
+/* ---------- Interface sizes -------------------------------------------------
+   One switch, set by App.tsx from Config.density. `zoom` is used instead of
+   rem scaling because the legacy component CSS is all in px; zoom multiplies
+   every px uniformly (layout included) so the whole interface moves as one
+   piece. Chromium-based WebView (Tauri) supports it since Chrome 128. */
+:root[data-ui-size="compact"] { --ax-ui-scale: 0.875; }
+:root[data-ui-size="standard"] { --ax-ui-scale: 1; }
+:root[data-ui-size="enlarged"] { --ax-ui-scale: 1.15; }

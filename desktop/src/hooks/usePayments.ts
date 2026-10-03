@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { openExternal } from "../bridge";
 import { payments, paymentToken } from "../lib/payments";
 import type { Account, Payment } from "../lib/payments";
+import { useLocale } from "../lib/locale";
 
 export type OAuthProvider = "github" | "google";
 export type OAuthStage = "starting" | "browser" | "waiting" | "redeeming" | "done";
@@ -13,9 +14,10 @@ export interface OAuthProgress {
   url: string | null;
 }
 
-const message = (error: unknown) => error instanceof Error ? error.message : "Не удалось связаться с платёжным сервером.";
+const message = (error: unknown, t: (key: string) => string) => error instanceof Error ? error.message : t("ui.pay.server_error");
 
 export function usePayments() {
+  const { t } = useLocale();
   const [account, setAccount] = useState<Account | null>(null);
   const [payment, setPayment] = useState<Payment | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +71,7 @@ export function usePayments() {
       if (mounted.current) {
         setAccount(null);
         setPayment(null);
-        setError(message(e));
+        setError(message(e, t));
       }
     } finally { lock.current = false; }
   }, []);
@@ -96,7 +98,7 @@ export function usePayments() {
         setPayment(result.account.latest_payment);
       }
     } catch (e) {
-      if (mounted.current) setError(message(e));
+      if (mounted.current) setError(message(e, t));
     } finally { lock.current = false; if (mounted.current) setBusy(false); }
   }, []);
 
@@ -117,7 +119,7 @@ export function usePayments() {
     try {
       const start = await payments.oauthStart(provider);
       if (cancelled()) return;
-      if (!start.authorization_url.startsWith("https://") || !start.poll_token) throw new Error("Некорректная OAuth-ссылка.");
+      if (!start.authorization_url.startsWith("https://") || !start.poll_token) throw new Error(t("ui.pay.invalid_oauth"));
       stage("browser", start.authorization_url);
       await openExternal(start.authorization_url);
       stage("waiting");
@@ -126,7 +128,7 @@ export function usePayments() {
         if (cancelled()) return;
         const status = await payments.oauthStatus(start.poll_token);
         if (cancelled()) return;
-        if (status.status === "error") throw new Error("Вход через провайдера не выполнен. Вернитесь в AXIOM и попробуйте ещё раз.");
+        if (status.status === "error") throw new Error(t("ui.pay.oauth_failed"));
         if (status.status !== "success" || !status.code) continue;
         stage("redeeming");
         const result = await payments.oauthRedeem(status.code);
@@ -142,9 +144,9 @@ export function usePayments() {
         }
         return;
       }
-      throw new Error("Время ожидания входа истекло. Запустите вход ещё раз.");
+      throw new Error(t("ui.pay.oauth_timeout"));
     } catch (e) {
-      if (!cancelled()) setError(message(e));
+      if (!cancelled()) setError(message(e, t));
     } finally {
       if (generation === oauthGeneration.current) {
         lock.current = false;
@@ -176,7 +178,7 @@ export function usePayments() {
       const result = await operation();
       if (mounted.current) setPayment(result.payment);
     } catch (e) {
-      if (mounted.current) setError(message(e));
+      if (mounted.current) setError(message(e, t));
     } finally { lock.current = false; if (mounted.current) setBusy(false); }
   }, []);
 
@@ -190,7 +192,7 @@ export function usePayments() {
       const result = await payments.buyProFromBalance(token);
       if (mounted.current) setAccount(result.account);
     } catch (e) {
-      if (mounted.current) setError(message(e));
+      if (mounted.current) setError(message(e, t));
     } finally { lock.current = false; if (mounted.current) setBusy(false); }
   }, []);
 
@@ -213,7 +215,7 @@ export function usePayments() {
           setAccount(result.account);
           setError(null);
         }
-      } catch (e) { if (!stopped) setError(message(e)); }
+      } catch (e) { if (!stopped) setError(message(e, t)); }
       finally { lock.current = false; }
       if (!stopped && payment?.status === "pending") timer = setTimeout(poll, 3000);
     };

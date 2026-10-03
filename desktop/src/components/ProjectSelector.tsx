@@ -3,6 +3,7 @@ import { Check, ChevronDown, FolderOpen, Globe, MessageSquare, Pin, X } from "lu
 import type { ProjectInfo } from "../types";
 import Presence from "./Presence";
 import { playUiSound } from "../lib/sound";
+import { useLocale } from "../lib/locale";
 
 interface Props {
   current: ProjectInfo | null;
@@ -25,6 +26,7 @@ interface Props {
  */
 export default function ProjectSelector(props: Props) {
   const { current, recent, pinned, onOpen, onSwitch, onClear, onRemove, onTogglePin } = props;
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -44,7 +46,7 @@ export default function ProjectSelector(props: Props) {
         onClick={() => { playUiSound("panel"); setOpen((v) => !v); }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={current?.path ?? "Глобальный чат — проект не открыт"}
+        title={current?.path ?? t("ui.project.global_title")}
       >
         {current ? (
           <FolderOpen size={14} strokeWidth={1.8} />
@@ -57,7 +59,7 @@ export default function ProjectSelector(props: Props) {
       </button>
       <Presence open={open}>
         <div className="ws-menu" role="listbox">
-          <div className="ws-menu-title">Проекты</div>
+          <div className="ws-menu-title">{t("ui.project.title")}</div>
           {current && (
             <div className="ws-item active">
               <span className="ws-dot">{currentPinned ? "◆" : "●"}</span>
@@ -67,14 +69,14 @@ export default function ProjectSelector(props: Props) {
               </span>
               <button
                 className="icon-btn tiny"
-                title={currentPinned ? "Открепить проект" : "Прикрепить проект"}
+                title={currentPinned ? t("ui.project.unpin") : t("ui.project.pin")}
                 onClick={() => void onTogglePin(current.path)}
               >
                 <Pin size={12} strokeWidth={1.8} fill={currentPinned ? "currentColor" : "none"} />
               </button>
               <button
                 className="icon-btn tiny ws-leave"
-                title="Удалить проект из списка"
+                title={t("ui.project.remove_list")}
                 onClick={() => setConfirmRemove(current.path)}
               >
                 <X size={12} strokeWidth={1.8} />
@@ -82,7 +84,7 @@ export default function ProjectSelector(props: Props) {
             </div>
           )}
           {pinned.filter((p) => p.path !== current?.path).length > 0 && (
-            <div className="ws-subtitle">Прикрепленные</div>
+            <div className="ws-subtitle">{t("ui.project.pinned")}</div>
           )}
           {pinned
             .filter((p) => p.path !== current?.path)
@@ -101,12 +103,12 @@ export default function ProjectSelector(props: Props) {
                     <span className="ws-item-path">{p.path}</span>
                   </span>
                 </button>
-                <button className="icon-btn tiny" title="Открепить проект" onClick={() => void onTogglePin(p.path)}>
+                <button className="icon-btn tiny" title={t("ui.project.unpin")} onClick={() => void onTogglePin(p.path)}>
                   <Pin size={12} strokeWidth={1.8} fill="currentColor" />
                 </button>
               </div>
             ))}
-          {others.length > 0 && <div className="ws-subtitle">Недавние</div>}
+          {others.length > 0 && <div className="ws-subtitle">{t("ui.project.recent")}</div>}
           {others.map((p) => (
             <div key={p.path} className="ws-item">
               <button
@@ -122,7 +124,7 @@ export default function ProjectSelector(props: Props) {
                   <span className="ws-item-path">{p.path}</span>
                 </span>
               </button>
-              <button className="icon-btn tiny" title="Удалить из списка" onClick={() => setConfirmRemove(p.path)}>
+              <button className="icon-btn tiny" title={t("ui.project.remove_list")} onClick={() => setConfirmRemove(p.path)}>
                 <X size={12} strokeWidth={1.8} />
               </button>
             </div>
@@ -134,7 +136,7 @@ export default function ProjectSelector(props: Props) {
                 <Check size={14} strokeWidth={2} className="ws-check" />
                 <span className="ws-item-text">
                   <span className="ws-item-name">Global Chat</span>
-                  <span className="ws-item-path">Без папки проекта</span>
+                  <span className="ws-item-path">{t("ui.project.no_folder")}</span>
                 </span>
               </button>
             </div>
@@ -146,13 +148,13 @@ export default function ProjectSelector(props: Props) {
                 setOpen(false);
                 void onClear();
               }}
-              title="Общаться без проекта: файловые инструменты отключены"
+              title={t("ui.project.global_hint")}
             >
               <MessageSquare size={14} strokeWidth={1.8} /> Global Chat
             </button>
           )}
           <button className="ws-open" onClick={() => { setOpen(false); void onOpen(); }}>
-            <FolderOpen size={14} strokeWidth={1.8} /> Открыть проект…
+            <FolderOpen size={14} strokeWidth={1.8} /> {t("ui.project.open")}
           </button>
         </div>
       </Presence>
@@ -162,18 +164,16 @@ export default function ProjectSelector(props: Props) {
         <div className="modal-backdrop" onClick={() => setConfirmRemove(null)}>
           <div className="modal confirm" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
-              <h2>⚠ Удалить проект из списка?</h2>
+              <h2>{t("ui.project.remove_title")}</h2>
             </div>
             <div className="modal-body">
               <code className="confirm-detail">{confirmRemove}</code>
               <p className="about-text">
-                Проект исчезнет из списка селектора. <b>Файлы на диске не удаляются</b>,
-                а открытый проект останется активным, пока вы не переключитесь сами.
-                Вернуть его в список можно кнопкой «Открыть проект…».
+                {t("ui.project.remove_body")}
               </p>
             </div>
             <div className="modal-foot">
-              <button className="btn ghost" onClick={() => setConfirmRemove(null)}>Отказаться</button>
+              <button className="btn ghost" onClick={() => setConfirmRemove(null)}>{t("ui.project.dismiss")}</button>
               <div className="modal-foot-spacer" />
               <button
                 className="btn danger"
@@ -184,7 +184,7 @@ export default function ProjectSelector(props: Props) {
                   if (target) void onRemove(target);
                 }}
               >
-                Удалить из списка
+                {t("ui.project.remove_action")}
               </button>
             </div>
           </div>

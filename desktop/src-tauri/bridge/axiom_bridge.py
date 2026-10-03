@@ -128,6 +128,10 @@ def _conversation_full(c) -> dict:
             "name": m.name,
             "images": list(m.images or []),
             "artifacts": list(m.artifacts or []),
+            # W3.9 branch promotion: previous regenerated versions (oldest first).
+            # ``content`` is always the active branch; frontend ``branchIndex``
+            # -1 means active, 0..n-1 selects ``alternates[i]`` for promotion.
+            "alternates": list(getattr(m, "alternates", None) or []),
         }
         for m in c.messages
     ]
@@ -572,6 +576,32 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         # W3.3: ids of tasks executing right now, for an honest active-task
         # count in the UI (tray/sidebar/completion toasts).
         return session.running_task_ids()
+    if cmd == "tabs":
+        # W3.3: open chat tabs (project/model/context isolation).
+        return session.tab_rows()
+    if cmd == "tab_open":
+        workspace_set = "workspace" in args
+        rows = session.tab_open(
+            workspace_set=workspace_set,
+            workspace=(str(args["workspace"]) if args.get("workspace") else None)
+            if workspace_set else None,
+        )
+        info = session.workspace_info()
+        return {"tabs": rows, "messages": _conversation_full(session.conversation)["messages"],
+                "conversation": _conversation_summary(session.conversation),
+                "workspace": {"current": info.to_json() if info else None}}
+    if cmd == "tab_activate":
+        rows = session.tab_activate(str(args.get("id") or ""))
+        info = session.workspace_info()
+        return {"tabs": rows, "messages": _conversation_full(session.conversation)["messages"],
+                "conversation": _conversation_summary(session.conversation),
+                "workspace": {"current": info.to_json() if info else None}}
+    if cmd == "tab_close":
+        rows = session.tab_close(str(args.get("id") or ""))
+        info = session.workspace_info()
+        return {"tabs": rows, "messages": _conversation_full(session.conversation)["messages"],
+                "conversation": _conversation_summary(session.conversation),
+                "workspace": {"current": info.to_json() if info else None}}
     if cmd == "health":
         available = await session.client.is_available()
         version = None
@@ -602,6 +632,65 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         }
     if cmd == "tools":
         return session.tools_info()
+    if cmd == "mcp_servers":
+        # W3.5: the live MCP registry with last probe status/log for the GUI.
+        return session.mcp.describe()
+    if cmd == "mcp_add":
+        name = str(args.get("name") or "").strip()
+        command = args.get("command")
+        if not name or not isinstance(command, list) or not command:
+            raise ValueError("name and a non-empty command list are required")
+        session.mcp.add_server(name, [str(c) for c in command])
+        session.config.mcp_servers = session.mcp.config_entries()
+        session.config.save()
+        return await session.mcp.probe(name)
+    if cmd == "mcp_remove":
+        name = str(args.get("name") or "").strip()
+        client = session.mcp.get(name)
+        if client is None:
+            return {"name": name, "removed": False}
+        for definition in client.server.tools:
+            session.tools.unregister(definition.name)
+        session.mcp.remove_server(name)
+        session.config.mcp_servers = session.mcp.config_entries()
+        session.config.save()
+        return {"name": name, "removed": True}
+    if cmd == "mcp_restart":
+        name = str(args.get("name") or "").strip()
+        return await session.mcp.restart(name, session.tools)
+    if cmd == "mcp_test":
+        name = str(args.get("name") or "").strip()
+        tool = str(args.get("tool") or "").strip() or None
+        arguments = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+        return await session.mcp.test(name, tool, arguments)
+    if cmd == "skills_list":
+        return session.skills_rows()
+    if cmd == "skills_pin":
+        skill_id = str(args.get("id") or "").strip()
+        ok = session.skills.pin(skill_id, source="manual")
+        if ok:
+            session._save_pinned_skills()
+        return {"id": skill_id, "pinned": skill_id in session.skills.pinned()}
+    if cmd == "skills_unpin":
+        skill_id = str(args.get("id") or "").strip()
+        session.skills.unpin(skill_id, source="manual")
+        session._save_pinned_skills()
+        return {"id": skill_id, "pinned": skill_id in session.skills.pinned()}
+    if cmd == "skills_suggest":
+        text = str(args.get("text") or "")
+        return [skill.id for skill in session.skills.resolve_for_task(text)]
+    if cmd == "rules_list":
+        # W4.5 rule sources as compact rows for the composer context chips:
+        # scope + display path (global/project AXIOM.md etc.). Content is not
+        # shipped — the chips only show what will be attached.
+        rows = []
+        for source in session.rules.sources:
+            rows.append({
+                "scope": source.scope,
+                "path": source.rel or source.path,
+                "chars": len(source.content),
+            })
+        return rows
     if cmd == "list_plugins":
         return [m.row() for m in session.plugins.list()]
     if cmd == "bundled_plugins":
@@ -790,7 +879,8 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         return session.knowledge_rows()
     if cmd == "knowledge_add":
         result = await session.knowledge_add_collection(
-            str(args.get("name") or ""), str(args.get("path") or "")
+            str(args.get("name") or ""), str(args.get("path") or ""),
+            detached=bool(args.get("background")),
         )
         if not result.get("ok"):
             raise ValueError(str(result.get("error") or "knowledge add failed"))
@@ -799,10 +889,20 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         removed = session.knowledge_remove_collection(str(args.get("name") or ""))
         return {"name": str(args.get("name") or ""), "removed": removed}
     if cmd == "knowledge_reindex":
-        result = await session.knowledge_reindex(str(args.get("name") or ""))
+        result = await session.knowledge_reindex(
+            str(args.get("name") or ""), detached=bool(args.get("background"))
+        )
         if not result.get("ok"):
             raise ValueError(str(result.get("error") or "knowledge reindex failed"))
         return result
+    if cmd == "knowledge_indexing":
+        # W3.3: names of collections being indexed right now (honest UI count).
+        return session.knowledge_indexing()
+    if cmd == "knowledge_cancel_index":
+        return {
+            "name": str(args.get("name") or ""),
+            "cancelled": session.knowledge_cancel_index(str(args.get("name") or "")),
+        }
     if cmd == "knowledge_search":
         return await session.knowledge_search_rows(
             str(args.get("query") or ""),
@@ -1138,6 +1238,33 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         if conversation is None:
             raise ValueError(f"conversation '{cid}' not found")
         return export_conversation(conversation)
+    if cmd == "branch_list":
+        # W3.9 branch promotion: inspect alternates of one assistant message.
+        cid = str(args.get("id", "") or "").strip() or None
+        try:
+            message_index = int(args.get("message_index", args.get("messageIndex", -1)))
+        except (TypeError, ValueError):
+            raise ValueError("message_index must be an integer") from None
+        info = session.list_branches(message_index, conversation_id=cid)
+        if info is None:
+            raise ValueError("message not found or not an assistant turn")
+        return info
+    if cmd == "branch_promote":
+        # W3.9 branch promotion: make alternates[i] the active answer.
+        cid = str(args.get("id", "") or "").strip() or None
+        try:
+            message_index = int(args.get("message_index", args.get("messageIndex", -1)))
+            branch_index = int(args.get("branch_index", args.get("branchIndex", -1)))
+        except (TypeError, ValueError):
+            raise ValueError("message_index and branch_index must be integers") from None
+        ok = session.promote_branch(message_index, branch_index, conversation_id=cid)
+        if not ok:
+            raise ValueError("cannot promote branch (unknown chat, bad index, or busy)")
+        target_id = cid or session.conversation.id
+        conversation = session.history_store.load(target_id)
+        if conversation is None:
+            return {"ok": True}
+        return {"ok": True, "conversation": _conversation_full(conversation)}
     if cmd == "artifact_list":
         # W3.17: list artifact documents for the current workspace.
         workspace = _artifact_workspace(session)
@@ -1213,6 +1340,19 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         return {"running": False, "output": ""}
     if cmd == "get_config":
         return json.loads(session.config.model_dump_json())
+    if cmd == "i18n":
+        # W3.8: the core TRANSLATIONS catalog is the single source of truth.
+        # The Desktop fetches it once per locale and renders tabs/topbar from it.
+        from axiom.core.i18n import TRANSLATIONS, locales, translate
+        requested = str(args.get("locale", "") or "").strip().lower()
+        locale = requested if requested in locales() else str(getattr(session.config, "locale", "en") or "en")
+        if locale not in locales():
+            locale = "en"
+        return {
+            "locale": locale,
+            "locales": locales(),
+            "strings": {key: translate(key, locale) for key in TRANSLATIONS},
+        }
     if cmd == "set_config":
         current = session.config.model_dump()
         autonomy_request = (args.get("patch") or {}).get("autonomy_mode")
@@ -1350,6 +1490,10 @@ async def _run() -> None:
     # Keep task events flowing independently of the command that launched a
     # task. On reconnect the UI also reloads persisted tasks through `tasks`.
     session.bus.subscribe("task.event", lambda payload: _write_line(
+        json.dumps({"type": "event", "event": payload}, ensure_ascii=False)))
+    # W3.3: the same for background knowledge indexing — started/completed/
+    # failed/cancelled phases arrive as events while the reply says `pending`.
+    session.bus.subscribe("knowledge.event", lambda payload: _write_line(
         json.dumps({"type": "event", "event": payload}, ensure_ascii=False)))
     # W2.4: ASK tool calls (including model-initiated memory writes) pause on a
     # real dialog in the shell instead of being silently denied.

@@ -49,8 +49,8 @@
     border-color var(--ax-motion) var(--ax-ease),
     color var(--ax-motion) var(--ax-ease);
 }
-.ax-btn-md { padding: 0 var(--ax-space-3); height: 30px; }
-.ax-btn-sm { padding: 0 var(--ax-space-2); height: 24px; font-size: var(--ax-text-sm); }
+.ax-btn-md { padding: 0 var(--ax-space-3); height: var(--ax-ctl-h-md); }
+.ax-btn-sm { padding: 0 var(--ax-space-2); height: var(--ax-ctl-h-sm); font-size: var(--ax-text-sm); }
 .ax-btn-block { width: 100%; }
 
 .ax-btn:hover:not(:disabled) { background: var(--ax-bg-hover); border-color: var(--ax-border-strong); }
@@ -97,7 +97,7 @@
     color var(--ax-motion) var(--ax-ease),
     border-color var(--ax-motion) var(--ax-ease);
 }
-.ax-icon-btn-sm { width: 20px; height: 20px; }
+.ax-icon-btn-sm { width: var(--ax-ctl-h-sm); height: var(--ax-ctl-h-sm); }
 .ax-icon-btn-md { width: 26px; height: 26px; }
 .ax-icon-btn-lg { width: 32px; height: 32px; border-radius: var(--ax-radius); }
 .ax-icon-btn:hover:not(:disabled) { background: var(--ax-bg-hover); color: var(--ax-text); }
@@ -127,7 +127,7 @@
   gap: var(--ax-space-2);
   min-width: 0;
   padding: 0 var(--ax-space-2);
-  height: 28px;
+  height: var(--ax-ctl-h-md);
   border: 1px solid var(--ax-border);
   border-radius: var(--ax-radius);
   background: var(--ax-bg-inset);
@@ -249,7 +249,7 @@
   align-items: center;
   gap: var(--ax-space-2);
   padding: 0 var(--ax-space-3);
-  height: 26px;
+  height: var(--ax-ctl-h-sm);
   border: 1px solid transparent;
   border-radius: var(--ax-radius-sm);
   background: transparent;
@@ -272,7 +272,7 @@
   color: var(--ax-text);
 }
 .ax-tab.is-active svg { color: var(--ax-accent); }
-.ax-tabs-inline .ax-tab { height: 24px; padding: 0 var(--ax-space-2); }
+.ax-tabs-inline .ax-tab { height: var(--ax-ctl-h-sm); padding: 0 var(--ax-space-2); }
 .ax-tabpanel { min-height: 0; display: flex; flex-direction: column; }
 
 /* ============================ Card / Empty ============================ */
@@ -386,7 +386,7 @@
   align-items: center;
   gap: var(--ax-space-2);
   padding: var(--ax-space-1) var(--ax-space-2);
-  min-height: 26px;
+  min-height: var(--ax-ctl-h-sm);
   border: 0;
   border-radius: var(--ax-radius-sm);
   background: transparent;
@@ -491,8 +491,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: var(--ax-ctl-h-xs);
+  height: var(--ax-ctl-h-xs);
   flex: none;
   border: 0;
   border-radius: var(--ax-radius-sm);

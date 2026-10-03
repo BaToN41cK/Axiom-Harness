@@ -16,21 +16,22 @@ import {
 } from "lucide-react";
 import type { Task, TaskPlan, TaskPlanStep, TaskState } from "../types";
 import TaskReviewActions from "./TaskReviewActions";
+import { useLocale } from "../lib/locale";
 
 export const STATE_CONFIG: Record<
   TaskState,
   { label: string; tone: "pending" | "info" | "active" | "success" | "warning" | "error" | "muted" }
 > = {
-  pending: { label: "План готов к исполнению", tone: "pending" },
-  analyzing: { label: "Анализ проекта…", tone: "info" },
-  planning: { label: "Формирование плана…", tone: "info" },
-  executing: { label: "Выполнение шагов…", tone: "active" },
-  verifying: { label: "Проверка результатов…", tone: "warning" },
-  waiting_for_permission: { label: "Ожидает разрешения", tone: "warning" },
-  waiting_for_user: { label: "Требуется решение", tone: "warning" },
-  completed: { label: "Завершена успешно", tone: "success" },
-  failed: { label: "Ошибка выполнения", tone: "error" },
-  cancelled: { label: "Остановлена", tone: "muted" },
+  pending: { label: "ui.taskcard.state.pending", tone: "pending" },
+  analyzing: { label: "ui.taskcard.state.analyzing", tone: "info" },
+  planning: { label: "ui.taskcard.state.planning", tone: "info" },
+  executing: { label: "ui.taskcard.state.executing", tone: "active" },
+  verifying: { label: "ui.taskcard.state.verifying", tone: "warning" },
+  waiting_for_permission: { label: "ui.taskcard.state.waiting_for_permission", tone: "warning" },
+  waiting_for_user: { label: "ui.taskcard.state.waiting_for_user", tone: "warning" },
+  completed: { label: "ui.taskcard.state.completed", tone: "success" },
+  failed: { label: "ui.taskcard.state.failed", tone: "error" },
+  cancelled: { label: "ui.taskcard.state.cancelled", tone: "muted" },
 };
 
 interface TaskCardProps {
@@ -50,6 +51,7 @@ interface TaskCardProps {
 
 export function TaskCard(props: TaskCardProps) {
   const { task, busy, onResume, onCancel, onSave, onDelete, onReview, onRecover, onInspect } = props;
+  const { t } = useLocale();
   const [acknowledged, setAcknowledged] = useState(false);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [editStepText, setEditStepText] = useState("");
@@ -110,7 +112,7 @@ export function TaskCard(props: TaskCardProps) {
       id: `step-${Date.now().toString(36)}`,
       goal: newStepGoal.trim(),
       tools: [],
-      done_when: "Выполнено",
+      done_when: t("ui.taskexec.state.completed"),
       state: "pending",
       result: "",
     };
@@ -126,15 +128,15 @@ export function TaskCard(props: TaskCardProps) {
           {task.state === "completed" && <CheckCircle2 size={12} strokeWidth={2.4} />}
           {isActive && <Loader2 size={12} className="spin" />}
           {(task.state === "waiting_for_user" || task.state === "waiting_for_permission") && <AlertTriangle size={12} />}
-          <span>{stateMeta.label}</span>
+          <span>{t(stateMeta.label)}</span>
         </span>
 
         <div className="task-card-header-actions">
           <button
             type="button"
             className="task-btn-icon"
-            title="Открыть выполнение на главном экране"
-            aria-label="Открыть выполнение на главном экране"
+            title={t("ui.taskcard.open_execution")}
+            aria-label={t("ui.taskcard.open_execution")}
             onClick={() => onInspect(task.id)}
           >
             <Play size={13} strokeWidth={1.8} />
@@ -142,8 +144,8 @@ export function TaskCard(props: TaskCardProps) {
           {!isActive && (
             <button
               className="task-btn-icon danger"
-              title="Удалить задачу"
-              aria-label="Удалить задачу"
+              title={t("ui.taskcard.delete")}
+              aria-label={t("ui.taskcard.delete")}
               onClick={() => void onDelete(task.id)}
             >
               <Trash2 size={13} strokeWidth={1.8} />
@@ -159,7 +161,7 @@ export function TaskCard(props: TaskCardProps) {
       {task.pending_tool && (
         <div className={`task-pending-tool ${task.state === "waiting_for_permission" ? "waiting" : ""}`}>
           <strong>
-            {task.state === "waiting_for_permission" ? "Запрос разрешения" : "Активный инструмент"}
+            {task.state === "waiting_for_permission" ? t("ui.taskcard.permission") : t("ui.taskcard.active_tool")}
             {typeof task.pending_tool.name === "string" ? ` · ${task.pending_tool.name}` : ""}
           </strong>
           {Boolean(task.pending_tool.arguments) && Object.keys(task.pending_tool.arguments as object).length > 0 && (
@@ -177,14 +179,14 @@ export function TaskCard(props: TaskCardProps) {
             />
           </div>
           <span className="task-progress-label">
-            {completedSteps} из {steps.length} шагов ({progressPercent}%)
+            {t("ui.taskcard.steps", { done: String(completedSteps), total: String(steps.length), pct: String(progressPercent) })}
           </span>
         </div>
       )}
 
       {steps.length > 0 ? (
         <div className="task-plan-section">
-          <div className="task-plan-title">План выполнения:</div>
+          <div className="task-plan-title">{t("ui.taskcard.plan")}</div>
           <ul className="task-steps-list">
             {steps.map((step, idx) => {
               const isCompleted = step.state === "completed";
@@ -202,8 +204,8 @@ export function TaskCard(props: TaskCardProps) {
                     className={`task-step-checkbox ${step.state}`}
                     title={
                       isCompleted
-                        ? "Шаг выполнен (клик — отменить)"
-                        : "Клик — пометить выполненным"
+                        ? t("ui.taskcard.step_done")
+                        : t("ui.taskcard.step_toggle")
                     }
                     disabled={isActive}
                     onClick={() => handleToggleStep(step.id)}
@@ -248,7 +250,7 @@ export function TaskCard(props: TaskCardProps) {
                         <span className="task-step-idx">{idx + 1}.</span>
                         <span
                           className={`task-step-text ${isCompleted ? "done" : ""}`}
-                          title="Кликните на карандаш для редактирования"
+                          title={t("ui.taskcard.step_edit_hint")}
                         >
                           {step.goal}
                         </span>
@@ -257,7 +259,7 @@ export function TaskCard(props: TaskCardProps) {
 
                     {step.result && (
                       <details className="task-step-result-details">
-                        <summary>Результат шага</summary>
+                        <summary>{t("ui.taskcard.step_result")}</summary>
                         <pre>{step.result}</pre>
                       </details>
                     )}
@@ -268,7 +270,7 @@ export function TaskCard(props: TaskCardProps) {
                       <button
                         type="button"
                         className="task-btn-icon"
-                        title="Редактировать формулировку шага"
+                        title={t("ui.taskcard.step_edit")}
                         onClick={() => handleStartEditStep(step)}
                       >
                         <Pencil size={11} strokeWidth={1.8} />
@@ -276,7 +278,7 @@ export function TaskCard(props: TaskCardProps) {
                       <button
                         type="button"
                         className="task-btn-icon danger"
-                        title="Удалить шаг из плана"
+                        title={t("ui.taskcard.step_delete")}
                         onClick={() => handleDeleteStep(step.id)}
                       >
                         <Trash2 size={11} strokeWidth={1.8} />
@@ -295,7 +297,7 @@ export function TaskCard(props: TaskCardProps) {
                   <input
                     type="text"
                     className="task-step-input"
-                    placeholder="Например: Добавить проверку входных данных..."
+                    placeholder={t("ui.taskcard.step_placeholder")}
                     value={newStepGoal}
                     autoFocus
                     onChange={(e) => setNewStepGoal(e.target.value)}
@@ -310,14 +312,14 @@ export function TaskCard(props: TaskCardProps) {
                     disabled={!newStepGoal.trim()}
                     onClick={handleAddNewStep}
                   >
-                    Добавить
+                    {t("ui.taskcard.add")}
                   </button>
                   <button
                     type="button"
                     className="task-btn mini ghost"
                     onClick={() => setAddingStep(false)}
                   >
-                    Отмена
+                    {t("ui.common.cancel")}
                   </button>
                 </div>
               ) : (
@@ -327,7 +329,7 @@ export function TaskCard(props: TaskCardProps) {
                   onClick={() => setAddingStep(true)}
                 >
                   <Plus size={12} strokeWidth={2} />
-                  <span>Добавить шаг в план</span>
+                  <span>{t("ui.taskcard.add_step")}</span>
                 </button>
               )}
             </div>
@@ -335,14 +337,14 @@ export function TaskCard(props: TaskCardProps) {
         </div>
       ) : (
         <div className="task-no-plan-hint">
-          План выполнения ещё не сформирован.
+          {t("ui.taskcard.no_plan")}
         </div>
       )}
       {task.changed_files.length > 0 && (
         <div className="task-changed-files">
           <div className="task-meta-label">
             <FileCode size={12} />
-            <span>Изменённые файлы ({task.changed_files.length}):</span>
+            <span>{t("ui.taskcard.changed_files", { n: String(task.changed_files.length) })}</span>
           </div>
           <div className="task-files-tags">
             {task.changed_files.map((file) => (
@@ -356,7 +358,7 @@ export function TaskCard(props: TaskCardProps) {
 
       {Object.keys(task.diffs ?? {}).length > 0 && (
         <details className="task-details-box review-diff" open={task.state === "completed" && task.review_status === "pending"}>
-          <summary>Ревью изменений ({Object.keys(task.diffs).length} файлов) · {task.review_status === "accepted" ? "принято" : task.review_status === "rejected" ? "отклонено" : "ожидает решения"}</summary>
+          <summary>{t("ui.taskcard.review", { n: String(Object.keys(task.diffs).length), status: task.review_status === "accepted" ? t("ui.taskcard.accepted") : task.review_status === "rejected" ? t("ui.taskcard.rejected") : t("ui.taskcard.pending") })}</summary>
           {Object.entries(task.diffs).map(([path, diff]) => (
             <details key={path} className="task-diff-file" open>
               <summary>{path}</summary>
@@ -368,7 +370,7 @@ export function TaskCard(props: TaskCardProps) {
 
       {task.commands?.length > 0 && (
         <details className="task-details-box tests">
-          <summary>Команды задачи ({task.commands.length})</summary>
+          <summary>{t("ui.taskcard.commands", { n: String(task.commands.length) })}</summary>
           {task.commands.map((command, index) => (
             <div className="task-verification-item" key={`${String(command.tool)}-${index}`}>
               <strong>{String(command.tool)} · {String(command.state)}</strong>
@@ -381,7 +383,7 @@ export function TaskCard(props: TaskCardProps) {
 
       {task.active_processes?.length > 0 && (
         <details className="task-details-box tests" open={isActive}>
-          <summary>Дочерние процессы ({task.active_processes.length})</summary>
+          <summary>{t("ui.taskcard.processes", { n: String(task.active_processes.length) })}</summary>
           {task.active_processes.map((process, index) => (
             <div className="task-verification-item" key={`${String(process.pid)}-${index}`}>
               <strong>PID {String(process.pid)} · {String(process.state)}</strong>
@@ -393,7 +395,7 @@ export function TaskCard(props: TaskCardProps) {
 
       {task.errors.length > 0 && (
         <details className="task-details-box errors">
-          <summary>Ошибки выполнения ({task.errors.length})</summary>
+          <summary>{t("ui.taskcard.errors", { n: String(task.errors.length) })}</summary>
           {task.errors.map((error, index) => (
             <div className="task-error-item" key={`${error.type}-${error.step_id ?? "task"}-${index}`}>
               <strong>{error.type}{error.tool ? ` · ${error.tool}` : ""}</strong>
@@ -407,14 +409,14 @@ export function TaskCard(props: TaskCardProps) {
 
       {task.tests.length > 0 && (
         <details className="task-details-box tests">
-          <summary>Результаты проверки ({task.tests.length})</summary>
+          <summary>{t("ui.taskcard.checks", { n: String(task.tests.length) })}</summary>
           {task.tests.map((report, index) => (
             <div className="task-verification-item" key={`verification-${index}`}>
               <strong className={report.ok === true && report.executed === true ? "passed" : "failed"}>
-                {report.ok === true && report.executed === true ? "Проверка пройдена" : "Проверка не пройдена"}
+                {report.ok === true && report.executed === true ? t("ui.taskcard.check_passed") : t("ui.taskcard.check_failed")}
               </strong>
               {typeof report.summary === "string" && <p>{report.summary}</p>}
-              {typeof report.error === "string" && <p className="verification-error">Причина: {report.error}</p>}
+              {typeof report.error === "string" && <p className="verification-error">{t("ui.taskcard.reason", { error: report.error })}</p>}
               {Boolean(report.checks) && <pre>{JSON.stringify(report.checks, null, 2)}</pre>}
             </div>
           ))}
@@ -429,23 +431,23 @@ export function TaskCard(props: TaskCardProps) {
             onClick={() => void onCancel(task.id)}
           >
             <Square size={13} fill="currentColor" />
-            <span>Остановить</span>
+            <span>{t("ui.taskcard.stop")}</span>
           </button>
         ) : task.state === "completed" ? (
           <div className="task-completed-note">
             <CheckCircle2 size={14} className="text-success" />
-            <span>{task.review_recovery ? "Ревью требует восстановления" : task.review_status === "pending" ? "Проверка пройдена · результат готов к ревью" : task.review_status === "accepted" ? "Изменения приняты" : "Изменения отклонены"}</span>
+            <span>{task.review_recovery ? t("ui.task.review_recovery") : task.review_status === "pending" ? t("ui.taskcard.completed_review_pending") : task.review_status === "accepted" ? t("ui.taskexec.accepted") : t("ui.taskexec.rejected")}</span>
             {(task.review_status === "pending" || task.review_recovery) && (
               <TaskReviewActions key={task.id} task={task} busy={busy} onReview={onReview} onRecover={onRecover} />
             )}
             <button
               type="button"
               className="task-btn mini ghost"
-              title="Запустить повторно"
+              title={t("ui.taskcard.rerun")}
               onClick={() => void onResume(task.id, true)}
             >
               <RotateCcw size={12} />
-              <span>Повторить</span>
+              <span>{t("ui.taskcard.repeat")}</span>
             </button>
           </div>
         ) : (
@@ -457,7 +459,7 @@ export function TaskCard(props: TaskCardProps) {
                   checked={acknowledged}
                   onChange={(e) => setAcknowledged(e.target.checked)}
                 />
-                <span>Подтверждаю состояние файлов после прерывания</span>
+                <span>{t("ui.taskcard.acknowledge")}</span>
               </label>
             )}
             <button
@@ -472,8 +474,8 @@ export function TaskCard(props: TaskCardProps) {
               <Play size={13} fill="currentColor" />
               <span>
                 {task.state === "pending"
-                  ? "Приступить к реализации"
-                  : "Продолжить выполнение"}
+                  ? t("ui.taskcard.start")
+                  : t("ui.taskcard.continue")}
               </span>
             </button>
           </div>

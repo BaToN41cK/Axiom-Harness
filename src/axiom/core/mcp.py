@@ -31,6 +31,9 @@ class MCPClient:
         self.server = server
         self.timeout = timeout
         self._id = 0
+        #: Honest last-probe state for the W3.5 GUI (status/log/test controls).
+        self.last_error: str | None = None
+        self.last_log: str = ""
 
     def _next_id(self) -> int:
         self._id += 1
@@ -58,10 +61,20 @@ class MCPClient:
         finally:
             if proc.returncode is None:
                 await terminate_process_tree(proc)
+            if proc.stderr is not None:
+                try:
+                    tail = await asyncio.wait_for(proc.stderr.read(), timeout=1.0)
+                except Exception:
+                    tail = b""
+                if tail:
+                    self.last_log = tail.decode("utf-8", "replace")[:4000]
 
     async def list_tools(self) -> list[ToolDefinition]:
         try:
             response = await self._rpc("tools/list")
+            if isinstance(response, dict) and response.get("error"):
+                self.last_error = str(response["error"])[:1000]
+                return []
             result = response.get("result", {}) if isinstance(response, dict) else {}
             items = result.get("tools", []) if isinstance(result, dict) else []
             out: list[ToolDefinition] = []
@@ -74,8 +87,10 @@ class MCPClient:
                     parameters=item.get("inputSchema") or {},
                     permission=ToolPermission.ASK))
             self.server.tools = out
+            self.last_error = None
             return out
-        except Exception:
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
             return []
 
     async def call_tool(self, tool: str, arguments: dict | None = None) -> ToolResult:
@@ -114,14 +129,75 @@ class MCPManager:
     def servers(self) -> list[str]:
         return list(self._servers)
 
+    def get(self, name: str) -> MCPClient | None:
+        return self._servers.get(name)
+
+    def describe(self) -> list[dict]:
+        """GUI rows: name, command, registered tools and last probe state."""
+        return [{
+            "name": c.server.name,
+            "command": list(c.server.command),
+            "tools": [t.name for t in c.server.tools],
+            "ok": c.last_error is None,
+            "error": c.last_error,
+            "log": c.last_log,
+        } for c in self._servers.values()]
+
+    def config_entries(self) -> list[dict]:
+        """The persisted ``Config.mcp_servers`` projection of this registry."""
+        return [{"name": c.server.name, "command": list(c.server.command)}
+                for c in self._servers.values()]
+
     async def register_all(self, registry) -> list[str]:
         names: list[str] = []
         for client in self._servers.values():
-            for definition in await client.list_tools():
-                async def _handler(_c: MCPClient = client, _n: str = definition.name,
-                                   **kwargs) -> ToolResult:
-                    return await _c.call_tool(_n, kwargs)
-
-                registry.register(definition, _handler)
-                names.append(definition.name)
+            names.extend(await self._register_client(client, registry))
         return names
+
+    async def _register_client(self, client: MCPClient, registry) -> list[str]:
+        names: list[str] = []
+        for definition in await client.list_tools():
+            async def _handler(_c: MCPClient = client, _n: str = definition.name,
+                               **kwargs) -> ToolResult:
+                return await _c.call_tool(_n, kwargs)
+
+            registry.register(definition, _handler)
+            names.append(definition.name)
+        return names
+
+    async def probe(self, name: str) -> dict:
+        """Run a fresh ``tools/list`` probe and report honest status/log."""
+        client = self._servers.get(name)
+        if client is None:
+            raise ValueError(f"MCP server '{name}' not found")
+        await client.list_tools()
+        return {"name": name, "tools": [t.name for t in client.server.tools],
+                "ok": client.last_error is None, "error": client.last_error,
+                "log": client.last_log}
+
+    async def test(self, name: str, tool: str | None = None,
+                   arguments: dict | None = None) -> dict:
+        """Test one server: a real tool call when ``tool`` is given, else a probe."""
+        client = self._servers.get(name)
+        if client is None:
+            raise ValueError(f"MCP server '{name}' not found")
+        if tool:
+            result = await client.call_tool(tool, arguments or {})
+            return {"name": name, "tool": tool, "ok": result.ok,
+                    "content": result.content, "error": result.error,
+                    "log": client.last_log}
+        return await self.probe(name)
+
+    async def restart(self, name: str, registry) -> dict:
+        """Re-probe a server and re-register its tools (stateless stdio restart)."""
+        client = self._servers.get(name)
+        if client is None:
+            raise ValueError(f"MCP server '{name}' not found")
+        for definition in client.server.tools:
+            registry.unregister(definition.name)
+        client.server.tools = []
+        client.last_error = None
+        client.last_log = ""
+        registered = await self._register_client(client, registry)
+        return {"name": name, "tools": registered, "ok": client.last_error is None,
+                "error": client.last_error, "log": client.last_log}

@@ -3,6 +3,7 @@ import { Check, ChevronDown, Cpu, Eye, Loader2, RefreshCw, Sparkles, Wrench, Ale
 import type { ModelInfo } from "../types";
 import { formatBytes, formatCount } from "../lib/format";
 import Presence from "./Presence";
+import { useLocale } from "../lib/locale";
 
 interface Props {
   models: ModelInfo[];
@@ -38,16 +39,17 @@ function providerLabel(providerId: string): string {
 }
 
 /** Describes a model in the words Ollama actually supports. */
-function describe(model: ModelInfo): string {
-  if (model.capabilities.includes("thinking")) return "Reasoning model";
-  if (model.capabilities.includes("tools")) return "Tool-capable model";
-  if (model.capabilities.includes("vision")) return "Vision model";
-  if (model.capabilities.length) return "General model";
-  return "Возможности неизвестны";
+function describe(model: ModelInfo, t: (key: string) => string): string {
+  if (model.capabilities.includes("thinking")) return t("ui.model.desc.reasoning");
+  if (model.capabilities.includes("tools")) return t("ui.model.desc.tools");
+  if (model.capabilities.includes("vision")) return t("ui.model.desc.vision");
+  if (model.capabilities.length) return t("ui.model.desc.general");
+  return t("ui.model.desc.unknown");
 }
 
 export default function ModelSelector(props: Props) {
   const { models, active, loading, error, switching, disabled, openSignal, onSelect, onRefresh } = props;
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -97,7 +99,7 @@ export default function ModelSelector(props: Props) {
     setSelectionError(null);
     const selected = await onSelect(name, providerId);
     if (selected) setOpen(false);
-    else setSelectionError(`Не удалось выбрать ${providerId}/${name}. Проверьте провайдера, endpoint и API-ключ.`);
+    else setSelectionError(t("ui.model.select_failed", { provider: providerId, name }));
   };
 
   const busy = switching != null;
@@ -138,12 +140,12 @@ export default function ModelSelector(props: Props) {
           setOpen((v) => !v);
           if (!open) onRefresh();
         }}
-        title={active ? `${providerLabel(active.providerId ?? "ollama")} · ${active.name} — сменить модель` : "Выбрать модель"}
+        title={active ? `${providerLabel(active.providerId ?? "ollama")} · ${active.name} — ${t("ui.model.switch")}` : t("ui.model.choose")}
         aria-haspopup="listbox"
         aria-expanded={open}
       >
         {busy ? <Loader2 size={14} className="spin" /> : <Cpu size={14} strokeWidth={1.8} />}
-        <span className="model-btn-label" key={`${active?.providerId}/${active?.name}`}>{active?.displayName ?? "Модель не выбрана"}</span>
+        <span className="model-btn-label" key={`${active?.providerId}/${active?.name}`}>{active?.displayName ?? t("ui.model.none")}</span>
         {active && (
           <span className="model-btn-caps">
             {CAPABILITY_LABELS.filter((c) => active.capabilities.includes(c.key)).map((c) => (
@@ -159,10 +161,10 @@ export default function ModelSelector(props: Props) {
           <div className="model-menu-head">
             <span>MODEL</span>
             <div className="model-menu-actions">
-              <button className="icon-btn tiny" onClick={onRefresh} disabled={loading} title="Обновить список из Ollama">
+              <button className="icon-btn tiny" onClick={onRefresh} disabled={loading} title={t("ui.model.refresh")}>
                 {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} strokeWidth={1.8} />}
               </button>
-              <button className="icon-btn tiny" onClick={() => setOpen(false)} title="Закрыть (Esc)">
+              <button className="icon-btn tiny" onClick={() => setOpen(false)} title={t("ui.model.close")}>
                 <X size={13} strokeWidth={1.8} />
               </button>
             </div>
@@ -178,8 +180,7 @@ export default function ModelSelector(props: Props) {
           <div className="model-menu-list">
             {!loading && items.length === 0 && !error && (
               <div className="model-menu-empty">
-                Моделей пока нет. Установите через <code>ollama pull qwen3:8b</code> или подключите
-                API-провайдера — список подтянется автоматически.
+                {t("ui.model.empty")}
               </div>
             )}
             {items.map((model, index) => {
@@ -209,10 +210,10 @@ export default function ModelSelector(props: Props) {
                       <span className="model-item-name">{model.displayName}</span>
                       <span className="model-item-state">
                         <span className={"dot" + (model.loaded ? " on" : "")} />
-                        {isExternal ? `${providerLabel(providerId)} · API` : model.loaded ? "Ollama · готова" : "Ollama"}
+                        {isExternal ? `${providerLabel(providerId)} · API` : model.loaded ? `Ollama · ${t("ui.model.ready")}` : "Ollama"}
                       </span>
                     </span>
-                    <span className="model-item-sub">{describe(model)}</span>
+                    <span className="model-item-sub">{describe(model, t)}</span>
                     <span className="model-item-meta">
                       {model.name}
                       {model.parameterSize ? ` · ${model.parameterSize}` : ""}
@@ -227,7 +228,7 @@ export default function ModelSelector(props: Props) {
                         key={key}
                         className={"cap" + (model.capabilities.includes(key) ? " on" : "")}
                         title={
-                          model.capabilities.includes(key) ? label : `${label}: Ollama не сообщает поддержку`
+                          model.capabilities.includes(key) ? label : t("ui.model.cap_missing", { label })
                         }
                       >
                         <Icon size={12} strokeWidth={1.8} />
@@ -240,7 +241,7 @@ export default function ModelSelector(props: Props) {
           </div>
 
           <div className="model-menu-foot">
-            Данные: Ollama <code>/api/tags</code> · <code>/api/ps</code> · <kbd>Esc</kbd> закрыть
+            {t("ui.model.foot")}
           </div>
         </div>
       </Presence>

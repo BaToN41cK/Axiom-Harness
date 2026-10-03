@@ -16,6 +16,7 @@ import remarkGfm from "remark-gfm";
 import type { TreeNode } from "../types";
 import CodeBlock from "./CodeBlock";
 import { parseGitStatus } from "../lib/gitStatus";
+import { useLocale } from "../lib/locale";
 
 interface Props {
   root: string | null;
@@ -61,6 +62,7 @@ function isMarkdown(name: string): boolean {
 /** File explorer of the current project (§15). Real tree from the backend. */
 export default function Explorer(props: Props) {
   const { root, tree, loading, gitStatus, openFile, onRefresh, onOpenFile, onCloseFile, search, onSearch, searchResults, searchLoading, onOpenSearchHit } = props;
+  const { t } = useLocale();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggle = (path: string) => setCollapsed((m) => ({ ...m, [path]: !m[path] }));
   const git = useMemo(() => parseGitStatus(gitStatus), [gitStatus]);
@@ -108,26 +110,26 @@ export default function Explorer(props: Props) {
     <aside className="explorer">
       <div className="ex-head">
         <span className="ex-title">Explorer</span>
-        <button className="icon-btn tiny" title="Обновить" onClick={onRefresh}>
+        <button className="icon-btn tiny" title={t("ui.common.refresh")} onClick={onRefresh}>
           <RefreshCw size={12} strokeWidth={1.8} />
         </button>
       </div>
       <div className="ex-root" title={root ?? ""}>
-        {root ? (root.split(/[\\/]/).pop() ?? root) : "нет активного проекта"}
+        {root ? (root.split(/[\\/]/).pop() ?? root) : t("ui.explorer.no_project")}
       </div>
       <div className="ex-search" aria-busy={searchLoading}>
         <input
           value={search}
           onChange={(event) => onSearch(event.target.value)}
-          placeholder="Поиск по проекту…"
+          placeholder={t("ui.explorer.search_placeholder")}
           disabled={!root}
-          aria-label="Поиск по проекту"
+          aria-label={t("ui.explorer.search_aria")}
         />
-        {searchLoading && <span className="ex-search-hint">поиск…</span>}
+        {searchLoading && <span className="ex-search-hint">{t("ui.explorer.searching")}</span>}
       </div>
       {search && !searchLoading && searchResults.length > 0 && (
         <div className="ex-search-results">
-          <div className="ex-search-title">Найдено: {searchResults.length}</div>
+          <div className="ex-search-title">{t("ui.explorer.found", { n: String(searchResults.length) })}</div>
           {searchResults.slice(0, 20).map((hit) => (
             <button key={hit.path} className="ex-search-hit" onClick={() => onOpenSearchHit(hit.path)}>
               <span>{hit.path}</span>
@@ -136,14 +138,14 @@ export default function Explorer(props: Props) {
           ))}
         </div>
       )}
-      {search && !searchLoading && searchResults.length === 0 && <div className="ex-empty">Совпадений нет</div>}
+      {search && !searchLoading && searchResults.length === 0 && <div className="ex-empty">{t("ui.summary.no_matches")}</div>}
       <div className="ex-tree">
         {!root ? (
-          <div className="ex-empty"><b>Проект не открыт</b><span>Выберите папку, чтобы агент мог читать и изменять файлы.</span></div>
+          <div className="ex-empty"><b>{t("ui.explorer.not_open")}</b><span>{t("ui.explorer.choose_folder")}</span></div>
         ) : loading ? (
-          <div className="ex-empty">Читаю файлы…</div>
+          <div className="ex-empty">{t("ui.explorer.reading")}</div>
         ) : tree.length === 0 ? (
-          <div className="ex-empty">Пустая папка</div>
+          <div className="ex-empty">{t("ui.explorer.empty_folder")}</div>
         ) : (
           renderNodes(tree, 0)
         )}
@@ -170,13 +172,14 @@ function FilePreview({
   onClose: () => void;
 }) {
   const { html, language: lang } = useMemo(() => highlightSource(content, path), [content, path]);
+  const { t } = useLocale();
   const isMD = isMarkdown(path);
 
   return (
     <div className="ex-file">
       <div className="ex-file-head">
         <span className="ex-file-name">{path}</span>
-        <button className="icon-btn tiny" onClick={onClose} title="Закрыть">
+        <button className="icon-btn tiny" onClick={onClose} title={t("ui.common.close")}>
           <X size={12} strokeWidth={1.8} />
         </button>
       </div>

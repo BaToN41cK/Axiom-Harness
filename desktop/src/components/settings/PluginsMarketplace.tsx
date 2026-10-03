@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import type { PluginInstallResult, PluginRow } from "../../types";
 import PluginPanelHost from "../PluginPanelHost";
+import { useLocale } from "../../lib/locale";
+import { plural } from "../../lib/i18n";
 import calculatorCover from "../../assets/plugins/calculator.webp";
 import datetimeCover from "../../assets/plugins/datetime.webp";
 import notesCover from "../../assets/plugins/notes.webp";
@@ -25,15 +27,15 @@ const COVERS: Record<string, string> = {
 };
 
 const META: Record<string, { title: string; category: string; icon: ReactNode }> = {
-  calculator: { title: "Калькулятор", category: "Утилиты", icon: <Calculator size={18} /> },
-  datetime: { title: "Дата и время", category: "Утилиты", icon: <Clock size={18} /> },
-  notes: { title: "Заметки", category: "Продуктивность", icon: <NotebookPen size={18} /> },
-  security: { title: "Безопасность", category: "Безопасность", icon: <Shield size={18} /> },
-  texttools: { title: "Текстовые инструменты", category: "Текст", icon: <Type size={18} /> },
+  calculator: { title: "ui.plugins.meta.calculator", category: "ui.plugins.category.utilities", icon: <Calculator size={18} /> },
+  datetime: { title: "ui.plugins.meta.datetime", category: "ui.plugins.category.utilities", icon: <Clock size={18} /> },
+  notes: { title: "ui.plugins.meta.notes", category: "ui.plugins.category.productivity", icon: <NotebookPen size={18} /> },
+  security: { title: "ui.plugins.meta.security", category: "ui.plugins.category.security", icon: <Shield size={18} /> },
+  texttools: { title: "ui.plugins.meta.texttools", category: "ui.plugins.category.text", icon: <Type size={18} /> },
 };
 
 const CAP_LABEL: Record<string, string> = {
-  tools: "Инструменты агента", skills: "Навыки", providers: "Провайдеры моделей", ui: "Расширения интерфейса", hooks: "Хуки",
+  tools: "ui.plugins.cap.tools", skills: "ui.plugins.cap.skills", providers: "ui.plugins.cap.providers", ui: "ui.plugins.cap.ui", hooks: "ui.plugins.cap.hooks",
 };
 
 function hash(s: string): number {
@@ -45,7 +47,7 @@ function hash(s: string): number {
 function metaOf(p: PluginRow) {
   const known = META[p.name];
   if (known) return known;
-  const category = p.providers.length ? "Модели" : p.skills.length ? "Навыки" : p.tools.length ? "Инструменты" : "Расширения";
+  const category = p.providers.length ? "ui.plugins.category.models" : p.skills.length ? "ui.plugins.category.skills" : p.tools.length ? "ui.plugins.category.tools" : "ui.plugins.category.extensions";
   const title = p.name.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
   return { title, category, icon: <Puzzle size={18} /> };
 }
@@ -85,6 +87,7 @@ export default function PluginsMarketplace({
   const [filter, setFilter] = useState<Filter>("all");
   const [category, setCategory] = useState<string | null>(null);
   const [openName, setOpenName] = useState<string | null>(null);
+  const { t, locale, strings } = useLocale();
 
   const entries = useMemo<Entry[]>(() => {
     const installed = new Set(rows.map((r) => r.name));
@@ -129,23 +132,23 @@ export default function PluginsMarketplace({
     <div className="pm">
       <div className="pm-hero">
         <div className="pm-hero-text">
-          <h3>Каталог расширений</h3>
-          <p>Расширяйте агента новыми инструментами, навыками и провайдерами. Плагины устанавливаются выключенными и запускаются только с вашего разрешения.</p>
+          <h3>{t("ui.plugins.title")}</h3>
+          <p>{t("ui.plugins.sub")}</p>
         </div>
         <button className="btn pm-hero-btn" disabled={loading} onClick={() => onRequestTrust(null, "install", onInstall)}>
-          {loading ? <Loader2 size={14} className="spin" /> : <FolderOpen size={14} />} Из папки
+          {loading ? <Loader2 size={14} className="spin" /> : <FolderOpen size={14} />} {t("ui.plugins.from_folder")}
         </button>
       </div>
 
       <div className="pm-toolbar">
         <label className="pm-search">
           <Search size={14} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Поиск плагинов, инструментов, авторов" spellCheck={false} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("ui.plugins.search")} spellCheck={false} />
         </label>
         <div className="pm-filters" role="tablist">
           {(["all", "installed", "enabled", "catalog"] as Filter[]).map((f) => (
             <button key={f} role="tab" aria-selected={filter === f} className={filter === f ? "active" : ""} onClick={() => setFilter(f)}>
-              {{ all: "Все", installed: "Установленные", enabled: "Включённые", catalog: "Каталог" }[f]}
+              {{ all: t("ui.plugins.filter.all"), installed: t("ui.plugins.filter.installed"), enabled: t("ui.plugins.filter.enabled"), catalog: t("ui.plugins.filter.catalog") }[f]}
               <span>{counts[f]}</span>
             </button>
           ))}
@@ -154,16 +157,16 @@ export default function PluginsMarketplace({
 
       {categories.length > 1 && (
         <div className="pm-cats">
-          <button className={!category ? "active" : ""} onClick={() => setCategory(null)}>Все категории</button>
-          {categories.map((c) => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(category === c ? null : c)}>{c}</button>)}
+          <button className={!category ? "active" : ""} onClick={() => setCategory(null)}>{t("ui.plugins.all_categories")}</button>
+          {categories.map((c) => <button key={c} className={category === c ? "active" : ""} onClick={() => setCategory(category === c ? null : c)}>{t(c)}</button>)}
         </div>
       )}
 
       {visible.length === 0 ? (
         <div className="pm-empty">
           <Package size={28} />
-          <strong>{entries.length ? "Ничего не найдено" : "Плагинов пока нет"}</strong>
-          <span>{entries.length ? "Попробуйте изменить запрос или фильтр." : "Установите плагин из папки — подробнее в docs/plugins.md."}</span>
+          <strong>{entries.length ? t("ui.plugins.not_found") : t("ui.plugins.none")}</strong>
+          <span>{entries.length ? t("ui.plugins.not_found_hint") : t("ui.plugins.none_hint")}</span>
         </div>
       ) : (
         <div className="pm-grid">
@@ -174,32 +177,32 @@ export default function PluginsMarketplace({
                 onKeyDown={(e) => { if (e.key === "Enter") setOpenName(plugin.name); }}>
                 <div className="pm-card-media">
                   <Cover plugin={plugin} />
-                  <span className="pm-cover-chip">{m.category}</span>
-                  {installed && <span className={"pm-cover-state" + (plugin.enabled ? " on" : "")}>{plugin.enabled ? "Включён" : "Установлен"}</span>}
+                  <span className="pm-cover-chip">{t(m.category)}</span>
+                  {installed && <span className={"pm-cover-state" + (plugin.enabled ? " on" : "")}>{plugin.enabled ? t("ui.plugins.enabled") : t("ui.plugins.installed")}</span>}
                 </div>
                 <div className="pm-card-body">
                   <div className="pm-card-title">
                     <span className="pm-icon">{m.icon}</span>
                     <div>
-                      <strong>{m.title}</strong>
-                      <span>{plugin.author || "Неизвестный автор"}{plugin.bundled && <BadgeCheck size={12} className="pm-verified" />}</span>
+                      <strong>{t(m.title)}</strong>
+                      <span>{plugin.author || t("ui.plugins.unknown_author")}{plugin.bundled && <BadgeCheck size={12} className="pm-verified" />}</span>
                     </div>
                   </div>
-                  <p className="pm-card-desc">{plugin.description || "Пользовательский плагин AXIOM"}</p>
+                  <p className="pm-card-desc">{plugin.description || t("ui.plugins.custom")}</p>
                   <div className="pm-card-foot">
-                    {plugin.tools.length > 0 && <span className="pm-tag" title="Инструменты"><Wrench size={11} /> {plugin.tools.length} {plugin.tools.length === 1 ? "инструмент" : plugin.tools.length < 5 ? "инструмента" : "инструментов"}</span>}
+                    {plugin.tools.length > 0 && <span className="pm-tag" title={t("ui.plugins.tools")}><Wrench size={11} /> {plural("ui.plugins.tool", plugin.tools.length, locale, strings)}</span>}
                     <span className="pm-spacer" />
                     {installed ? (
                       <button
                         className={"switch" + (plugin.enabled ? " on" : "")}
                         role="switch"
                         aria-checked={plugin.enabled}
-                        aria-label={`${plugin.enabled ? "Выключить" : "Включить"} ${m.title}`}
+                        aria-label={`${plugin.enabled ? t("ui.plugins.disable") : t("ui.plugins.enable")} ${t(m.title)}`}
                         disabled={loading}
                         onClick={(e) => { e.stopPropagation(); toggle(plugin); }}
                       ><span className="switch-knob" /></button>
                     ) : (
-                      <button className="btn primary small pm-get" disabled={loading} onClick={(e) => { e.stopPropagation(); install(plugin); }}>Установить</button>
+                      <button className="btn primary small pm-get" disabled={loading} onClick={(e) => { e.stopPropagation(); install(plugin); }}>{t("ui.plugins.install")}</button>
                     )}
                   </div>
                 </div>
@@ -210,8 +213,7 @@ export default function PluginsMarketplace({
       )}
 
       <div className="plugin-security-note">
-        Код плагина выполняется с правами процесса AXIOM. Манифест и `ui.scopes` не ограничивают Python-доступ.
-        Включение плагина означает согласие запускать его код в этой и следующих сессиях, пока плагин включён.
+        {t("ui.plugins.security_note")}
       </div>
     </div>
   );
@@ -228,51 +230,52 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
 }) {
   const { plugin, installed } = entry;
   const m = metaOf(plugin);
+  const { t } = useLocale();
   const [tab, setTab] = useState<Tab>(plugin.readme ? "docs" : "overview");
 
   const panel = plugin.ui_block?.extensions.find((e) => e.type === "panel");
 
   const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
-    { id: "overview", label: "Обзор", icon: <Info size={13} /> },
-    { id: "docs", label: "Документация", icon: <BookOpen size={13} /> },
-    ...(panel ? [{ id: "panel" as Tab, label: "Панель", icon: <Puzzle size={13} /> }] : []),
-    { id: "permissions", label: "Разрешения", icon: <ShieldAlert size={13} /> },
-    { id: "details", label: "Сведения", icon: <FileText size={13} /> },
+    { id: "overview", label: t("ui.plugins.tab.overview"), icon: <Info size={13} /> },
+    { id: "docs", label: t("ui.plugins.tab.docs"), icon: <BookOpen size={13} /> },
+    ...(panel ? [{ id: "panel" as Tab, label: t("ui.plugins.tab.panel"), icon: <Puzzle size={13} /> }] : []),
+    { id: "permissions", label: t("ui.plugins.tab.permissions"), icon: <ShieldAlert size={13} /> },
+    { id: "details", label: t("ui.plugins.tab.details"), icon: <FileText size={13} /> },
   ];
 
   return (
     <div className="pm pm-detail">
-      <button className="pm-back" onClick={onBack}><ArrowLeft size={14} /> Все плагины</button>
+      <button className="pm-back" onClick={onBack}><ArrowLeft size={14} /> {t("ui.plugins.back")}</button>
 
       <div className="pm-detail-hero">
         <Cover plugin={plugin} large />
         <div className="pm-detail-head">
           <span className="pm-icon pm-icon--lg">{m.icon}</span>
           <div className="pm-detail-title">
-            <h3>{m.title}</h3>
-            <span>{plugin.author || "Неизвестный автор"}{plugin.bundled && <> <BadgeCheck size={13} className="pm-verified" /> Встроенный AXIOM</>} · v{plugin.version}</span>
+            <h3>{t(m.title)}</h3>
+            <span>{plugin.author || t("ui.plugins.unknown_author")}{plugin.bundled && <> <BadgeCheck size={13} className="pm-verified" /> {t("ui.plugins.builtin")}</>} · v{plugin.version}</span>
           </div>
           <div className="pm-detail-actions">
             {installed ? (
               <>
                 <button className={"btn " + (plugin.enabled ? "" : "primary")} disabled={loading} onClick={() => onToggle(plugin)}>
-                  {plugin.enabled ? "Выключить" : "Включить"}
+                  {plugin.enabled ? t("ui.plugins.disable") : t("ui.plugins.enable")}
                 </button>
-                <button className="btn danger ghost" disabled={loading} onClick={() => onRemove(plugin)} aria-label={`Удалить плагин ${plugin.name}`}>
+                <button className="btn danger ghost" disabled={loading} onClick={() => onRemove(plugin)} aria-label={t("ui.plugins.remove_aria", { name: plugin.name })}>
                   <Trash2 size={14} />
                 </button>
               </>
             ) : (
-              <button className="btn primary" disabled={loading} onClick={() => onInstall(plugin)}>Установить</button>
+              <button className="btn primary" disabled={loading} onClick={() => onInstall(plugin)}>{t("ui.plugins.install")}</button>
             )}
           </div>
         </div>
-        <p className="pm-detail-desc">{plugin.description || "Пользовательский плагин AXIOM"}</p>
+        <p className="pm-detail-desc">{plugin.description || t("ui.plugins.custom")}</p>
         <div className="pm-stats">
-          <div><strong>{plugin.tools.length}</strong><span>инструментов</span></div>
-          <div><strong>{plugin.skills.length}</strong><span>навыков</span></div>
-          <div><strong>{plugin.providers.length}</strong><span>провайдеров</span></div>
-          <div><strong className={installed ? (plugin.enabled ? "ok" : "") : ""}>{installed ? (plugin.enabled ? "Вкл." : "Выкл.") : "—"}</strong><span>{installed ? "статус" : "не установлен"}</span></div>
+          <div><strong>{plugin.tools.length}</strong><span>{t("ui.plugins.tools_count")}</span></div>
+          <div><strong>{plugin.skills.length}</strong><span>{t("ui.plugins.skills_count")}</span></div>
+          <div><strong>{plugin.providers.length}</strong><span>{t("ui.plugins.providers_count")}</span></div>
+          <div><strong className={installed ? (plugin.enabled ? "ok" : "") : ""}>{installed ? (plugin.enabled ? t("ui.plugins.on") : t("ui.plugins.off")) : "—"}</strong><span>{installed ? t("ui.plugins.status") : t("ui.plugins.not_installed")}</span></div>
         </div>
       </div>
 
@@ -289,7 +292,7 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
           <div className="pm-overview">
             {plugin.tools.length > 0 && (
               <section>
-                <h4>Инструменты для агента</h4>
+                <h4>{t("ui.plugins.tools_for_agent")}</h4>
                 <div className="pm-tools">
                   {plugin.tools.map((t) => <div key={t} className="pm-tool"><Wrench size={13} /><code>{t}</code></div>)}
                 </div>
@@ -297,22 +300,22 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
             )}
             {plugin.skills.length > 0 && (
               <section>
-                <h4>Навыки</h4>
+                <h4>{t("ui.plugins.skills_section")}</h4>
                 <div className="pm-tools">{plugin.skills.map((t) => <div key={t} className="pm-tool"><BookOpen size={13} /><code>{t}</code></div>)}</div>
               </section>
             )}
             {plugin.providers.length > 0 && (
               <section>
-                <h4>Провайдеры моделей</h4>
+                <h4>{t("ui.plugins.providers_section")}</h4>
                 <div className="pm-tools">{plugin.providers.map((t) => <div key={t} className="pm-tool"><Package size={13} /><code>{t}</code></div>)}</div>
               </section>
             )}
             <section>
-              <h4>Как использовать</h4>
+              <h4>{t("ui.plugins.how_to")}</h4>
               <ol className="pm-howto">
-                <li>{installed ? "Плагин установлен." : "Нажмите «Установить» — плагин скопируется в ~/.axiom/plugins/."}</li>
-                <li>Включите плагин и подтвердите доверие к его коду.</li>
-                <li>Попросите агента в чате — он сам вызовет нужный инструмент{plugin.tools[0] ? <>, например <code>{plugin.tools[0]}</code></> : null}.</li>
+                <li>{installed ? t("ui.plugins.howto.1_installed") : t("ui.plugins.howto.1_install")}</li>
+                <li>{t("ui.plugins.howto.2")}</li>
+                <li>{t("ui.plugins.howto.3", { example: plugin.tools[0] ? t("ui.plugins.howto.3_example", { tool: plugin.tools[0] }) : "" })}</li>
               </ol>
             </section>
           </div>
@@ -324,7 +327,7 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{plugin.readme}</ReactMarkdown>
             </div>
           ) : (
-            <div className="pm-empty"><BookOpen size={24} /><strong>Документации нет</strong><span>Автор не добавил README.md в папку плагина.</span></div>
+            <div className="pm-empty"><BookOpen size={24} /><strong>{t("ui.plugins.no_docs")}</strong><span>{t("ui.plugins.no_docs_hint")}</span></div>
           )
         )}
 
@@ -333,19 +336,19 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
             <div className="pm-perm-warn">
               <ShieldAlert size={16} />
               <div>
-                <strong>Плагин выполняет Python-код без изоляции</strong>
-                <span>После включения код может читать и изменять доступные файлы, обращаться к сети, переменным окружения и запускать процессы с правами AXIOM.</span>
+                <strong>{t("ui.plugins.perm_warn_title")}</strong>
+                <span>{t("ui.plugins.perm_warn_body")}</span>
               </div>
             </div>
-            <h4>Возможности из манифеста</h4>
+            <h4>{t("ui.plugins.manifest_caps")}</h4>
             <div className="pm-tools">
               {plugin.capabilities.length
-                ? plugin.capabilities.map((c) => <div key={c} className="pm-tool"><Shield size={13} /><span>{CAP_LABEL[c] ?? c}</span><code>{c}</code></div>)
-                : <span className="pm-muted">Не заявлены</span>}
+                ? plugin.capabilities.map((c) => <div key={c} className="pm-tool"><Shield size={13} /><span>{t(CAP_LABEL[c] ?? c)}</span><code>{c}</code></div>)
+                : <span className="pm-muted">{t("ui.plugins.not_declared")}</span>}
             </div>
             {plugin.ui_block?.scopes?.length ? (
               <>
-                <h4>UI scopes (информативно)</h4>
+                <h4>{t("ui.plugins.ui_scopes")}</h4>
                 <div className="pm-tools">{plugin.ui_block.scopes.map((sc) => <div key={sc} className="pm-tool"><code>{sc}</code></div>)}</div>
               </>
             ) : null}
@@ -354,12 +357,12 @@ function PluginDetail({ entry, loading, onBack, onInstall, onToggle, onRemove }:
 
         {tab === "details" && (
           <dl className="pm-dl">
-            <dt>Идентификатор</dt><dd><code>{plugin.name}</code></dd>
-            <dt>Версия</dt><dd>{plugin.version}</dd>
+            <dt>{t("ui.plugins.id")}</dt><dd><code>{plugin.name}</code></dd>
+            <dt>{t("ui.plugins.version")}</dt><dd>{plugin.version}</dd>
             <dt>API</dt><dd>v{plugin.api_version}</dd>
-            <dt>Автор</dt><dd>{plugin.author || "—"}</dd>
-            <dt>Источник</dt><dd>{plugin.bundled ? "Каталог AXIOM" : "Пользовательский"}</dd>
-            <dt>Папка</dt><dd><code>{plugin.source_dir || "~/.axiom/plugins/" + plugin.name}</code></dd>
+            <dt>{t("ui.plugins.author")}</dt><dd>{plugin.author || "—"}</dd>
+            <dt>{t("ui.plugins.source")}</dt><dd>{plugin.bundled ? t("ui.plugins.source.catalog") : t("ui.plugins.source.custom")}</dd>
+            <dt>{t("ui.plugins.folder")}</dt><dd><code>{plugin.source_dir || "~/.axiom/plugins/" + plugin.name}</code></dd>
           </dl>
         )}
 

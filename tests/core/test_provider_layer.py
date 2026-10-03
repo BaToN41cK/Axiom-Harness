@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import httpx
 
@@ -13,6 +14,7 @@ from axiom.core.providers.manager import ProviderManager
 from axiom.core.providers.openai_compat import OpenAICompatibleProvider
 from axiom.core.providers.runtime import ProviderChatClient
 from axiom.core.router import ModelRouter, RouteTarget
+from axiom.core.secrets import is_protected
 from axiom.core.tools.meta import category_of, resolve_tools_for_task, tools_for_agent
 
 
@@ -122,10 +124,20 @@ def test_manager_set_key_persists_locally_and_never_leaks_into_rows(tmp_path, mo
     rows = mgr.status_rows()
     deepseek = next(row for row in rows if row["id"] == "deepseek")
     assert deepseek["configured"] is True
-    # The key is stored on disk, but никогда не попадает в UI-строки.
+    # The key is stored on disk, but never reaches UI rows.
     assert "sk-test-123" not in json.dumps(rows, ensure_ascii=False)
-    saved = json.loads((tmp_path / "providers.json").read_text(encoding="utf-8"))
-    assert saved["deepseek"]["api_key"] == "sk-test-123"
+    raw = (tmp_path / "providers.json").read_text(encoding="utf-8")
+    stored = json.loads(raw)["deepseek"]["api_key"]
+    if sys.platform == "win32":
+        # DPAPI blob on disk: no plaintext, reloads to the working key.
+        assert "sk-test-123" not in raw
+        assert is_protected(stored)
+    else:
+        # POSIX keeps the value with 0600 file permissions as the boundary.
+        assert stored == "sk-test-123"
+    fresh = ProviderManager()
+    assert fresh.has_key("deepseek") is True
+    assert fresh._configs["deepseek"].api_key == "sk-test-123"
 
 
 class _Provider(Provider):

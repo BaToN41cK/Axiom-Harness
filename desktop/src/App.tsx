@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 import { Folder, FileText, GitBranch, ListChecks, Moon, PanelLeft, PanelRight, Sun, Terminal as TerminalIcon } from "lucide-react";
 import BootScreen from "./components/BootScreen";
-import ProjectSelector from "./components/ProjectSelector";
 import OverlayPanel from "./components/OverlayPanel";
 import SettingsModal from "./components/SettingsModal";
 import Sidebar from "./components/Sidebar";
 import MessageList from "./components/MessageList";
 import Composer from "./components/Composer";
 import ModelSelector from "./components/ModelSelector";
+import ChatTabs from "./components/ChatTabs";
 import { useAxiom } from "./hooks/useAxiom";
 import Presence from "./components/Presence";
 import { installSoundActivation, playUiSound } from "./lib/sound";
 import { clampRightPanelWidth } from "./lib/panelSize";
+import { normalizeLocale } from "./lib/i18n";
+import { LocaleProvider, useLocale } from "./lib/locale";
 import TaskExecution from "./components/TaskExecution";
 import Balance from "./components/Balance";
 
@@ -41,10 +43,13 @@ const THEME_LABELS: Record<ThemePreset, string> = {
 
 function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   const panelRef = useRef<HTMLElement>(null);
+  // W3.8: navigation labels come from the core RU/EN catalog (see lib/locale).
+  const { t } = useLocale();
   useEffect(() => { if (panelRef.current) panelRef.current.inert = !s.rightPanelOpen; }, [s.rightPanelOpen]);
-  const [tab, setTab] = useState<"files" | "terminal" | "git" | "tasks" | "documents">("files");
+  const tab = s.rightPanelTab;
+  const setTab = s.setRightPanelTab;
   // A file opened from task review must be visible even from another tab.
-  useEffect(() => { if (s.openFile) setTab("files"); }, [s.openFile]);
+  useEffect(() => { if (s.openFile) setTab("files"); }, [s.openFile, setTab]);
   const pickTab = (next: typeof tab) => {
     if (tab !== next) playUiSound("panel");
     setTab(next);
@@ -83,25 +88,25 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
       className="workbench-side"
       style={{ "--side-w": `${s.rightPanelWidth}px` } as CSSProperties}
     >
-      <div className="side-resizer" onMouseDown={startDrag} title="Изменить размер панели" />
+      <div className="side-resizer" onMouseDown={startDrag} title={t("ui.panel.resize")} />
       <div className="side-tabs">
         <button className={tab === "files" ? "active" : ""} onClick={() => pickTab("files")}>
           <Folder size={13} strokeWidth={1.8} />
-          <span>Файлы</span>
+          <span>{t("ui.tabs.files")}</span>
         </button>
         <button className={tab === "terminal" ? "active" : ""} onClick={() => pickTab("terminal")}>
           <TerminalIcon size={13} strokeWidth={1.8} />
-          <span>Терминал</span>
+          <span>{t("ui.tabs.terminal")}</span>
         </button>
         <button className={tab === "git" ? "active" : ""} onClick={() => pickTab("git")}>
           <GitBranch size={13} strokeWidth={1.8} />
-          <span>Git</span>
+          <span>{t("ui.tabs.git")}</span>
         </button>
         <button className={tab === "tasks" ? "active" : ""} onClick={() => pickTab("tasks")}>
-          <ListChecks size={13} strokeWidth={1.8} /><span>Задачи</span>
+          <ListChecks size={13} strokeWidth={1.8} /><span>{t("ui.tabs.tasks")}</span>
         </button>
         <button className={tab === "documents" ? "active" : ""} onClick={() => pickTab("documents")}>
-          <FileText size={13} strokeWidth={1.8} /><span>Документы</span>
+          <FileText size={13} strokeWidth={1.8} /><span>{t("ui.tabs.documents")}</span>
         </button>
       </div>
       {tab === "tasks" && (
@@ -170,9 +175,10 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
   );
 }
 
-export default function App() {
-  const s = useAxiom();
+function Shell({ s }: { s: AxiomStore }) {
   useEffect(installSoundActivation, []);
+  // W3.8: topbar labels follow the core RU/EN catalog (see lib/locale).
+  const { t } = useLocale();
 
   // Reflect the configured theme on <html>; styles.css owns the complete palette.
   // The coordinated fade is enabled only for the duration of a theme switch.
@@ -196,6 +202,25 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("no-anim", s.config?.animations === false);
   }, [s.config?.animations]);
+
+  // Unified visual system: interface size (compact/standard/enlarged) and the
+  // base body font size both come from the core config. tokens.css owns the
+  // scale; <html data-ui-size> picks the preset, --ax-font-body carries px.
+  const density = s.config?.density ?? "comfortable";
+  const uiSize = density === "compact" ? "compact" : density === "spacious" ? "enlarged" : "standard";
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.uiSize = uiSize;
+  }, [uiSize]);
+  useEffect(() => {
+    const root = document.documentElement;
+    const size = s.config?.font_size;
+    if (size == null) {
+      root.style.removeProperty("--ax-font-body");
+    } else {
+      root.style.setProperty("--ax-font-body", `${size}px`);
+    }
+  }, [s.config?.font_size]);
 
   const toasts = <div className="toast-stack" aria-live="polite" aria-atomic="false">{s.toasts.map((toast) => (
     <div key={toast.id} className={"toast toast-" + toast.kind + (toast.leaving ? " leaving" : "")}>
@@ -239,6 +264,18 @@ export default function App() {
            onRemovePlugin={s.removePlugin}
            bundledPlugins={s.bundledPlugins}
            onInstallBundledPlugin={s.installBundledPlugin}
+           mcpRows={s.mcpRows}
+           mcpLoading={s.mcpLoading}
+           onLoadMcp={s.loadMcp}
+           onAddMcp={s.addMcp}
+           onRemoveMcp={s.removeMcp}
+           onRestartMcp={s.restartMcp}
+           onTestMcp={s.testMcp}
+           skillRows={s.skillRows}
+           skillLoading={s.skillLoading}
+           onLoadSkills={s.loadSkills}
+           onToggleSkill={s.toggleSkill}
+           onSuggestSkills={s.suggestSkills}
 
            memoryRows={s.memoryRows}
            memoryLoading={s.memoryLoading}
@@ -291,41 +328,41 @@ export default function App() {
         onOpenModels={() => void s.openOverlay("status")}
         onClose={() => s.toggleSidebar()}
         activeModel={s.modelDetail}
+        workspace={s.workspace}
+        onOpenWorkspaceDialog={s.openWorkspaceDialog}
+        onSwitchWorkspace={(path) => void s.switchWorkspace(path)}
+        onClearWorkspace={() => void s.clearWorkspace()}
+        tasks={s.tasks}
+        focusedTaskId={s.focusedTaskId}
+        onInspectTask={s.setFocusedTaskId}
+        onOpenTaskPanel={() => s.openRightPanel("tasks")}
       />
 
       <div className="main">
         <header className="topbar">
           <button
             className="icon-btn"
-            title="Панель показать, скрыть L (Ctrl+B)"
-            aria-label="Панель показать, скрыть L"
+            title={t("ui.sidebar.toggle")}
+            aria-label={t("ui.sidebar.toggle")}
             aria-pressed={s.sidebarOpen}
             onClick={() => s.toggleSidebar()}
           >
             <PanelLeft size={17} strokeWidth={1.8} />
           </button>
-          <ProjectSelector
-            current={s.workspace?.current ?? null}
-            recent={s.workspace?.recent ?? []}
-            pinned={s.workspace?.pinned ?? []}
-            onOpen={s.openWorkspaceDialog}
-            onSwitch={(path) => void s.switchWorkspace(path)}
-            onClear={() => void s.clearWorkspace()}
-            onRemove={(path) => void s.removeWorkspace(path)}
-            onTogglePin={(path) => void s.toggleWorkspacePin(path)}
-          />
+          {/* Project navigation moved to the left rail (§4 main-task
+              workspace): the topbar keeps only the route context here. */}
           <div className="topbar-spacer" />
-          <div className="topbar-context" title="Текущий маршрут">
+          <div className="topbar-context" title={t("ui.topbar.route")}>
             <span className="topbar-provider">{s.activeModelProvider === "ollama" ? "Ollama" : s.activeModelProvider}</span>
-            <span className="topbar-model">{s.activeModel ?? "модель не выбрана"}</span>
-            <span className="topbar-tools">{s.activeModelInfo?.capabilities.includes("tools") ? "Tools включены" : "Только текст"}</span>
+            <span className="topbar-model">{s.activeModel ?? t("ui.topbar.no_model")}</span>
+            <span className="topbar-tools">{s.activeModelInfo?.capabilities.includes("tools") ? t("ui.topbar.tools_on") : t("ui.topbar.tools_off")}</span>
           </div>
           <div className="access-dot" title={s.accessTitle}>{s.accessLabel}</div>
           <Balance />
           <button
             className="icon-btn"
-            title={`Тема: ${THEME_LABELS[theme]} · Переключить на ${THEME_LABELS[nextTheme]}`}
-            aria-label={`Тема ${THEME_LABELS[theme]}. Переключить на ${THEME_LABELS[nextTheme]}`}
+            title={t("ui.topbar.theme", { current: THEME_LABELS[theme], next: THEME_LABELS[nextTheme] })}
+            aria-label={t("ui.topbar.theme_aria", { current: THEME_LABELS[theme], next: THEME_LABELS[nextTheme] })}
             onClick={() => s.config && void s.saveConfig({ theme: nextTheme })}
           >
             {theme === "light" ? (
@@ -336,8 +373,8 @@ export default function App() {
           </button>
           <button
             className="icon-btn"
-            title="Панель показать, скрыть R"
-            aria-label="Панель показать, скрыть R"
+            title={t("ui.panel.toggle_right")}
+            aria-label={t("ui.panel.toggle_right")}
             aria-pressed={s.rightPanelOpen}
             onClick={s.toggleRightPanel}
           >
@@ -347,6 +384,15 @@ export default function App() {
 
         <div className={"workbench" + (s.rightPanelOpen ? "" : " panel-closed")}>
           <div className="workbench-chat">
+            {/* W3.3: project/model/context-isolated chat tabs. */}
+            <ChatTabs
+              tabs={s.tabs}
+              runningTasks={s.runningTaskCount}
+              indexing={s.knowledgeIndexing}
+              onOpen={() => void s.openTab()}
+              onActivate={(id) => void s.activateTab(id)}
+              onClose={(id) => void s.closeTab(id)}
+            />
             {s.focusedTaskId || s.taskRequestPending ? (
               <TaskExecution
                 task={s.tasks.find((task) => task.id === s.focusedTaskId) ?? null}
@@ -365,6 +411,7 @@ export default function App() {
               modelCapabilities={s.activeModelInfo?.capabilities ?? []}
               globalChat={!s.workspace?.current}
               onEdit={s.editLastUser}
+              onQuote={s.quoteToPrompt}
               onOpen={s.openExternal}
               onSuggestion={s.send}
               onStop={s.cancel}
@@ -392,6 +439,17 @@ export default function App() {
               context={s.context}
               onOpenContext={() => s.openOverlay("context")}
               composerRef={s.composerRef}
+              rules={s.ruleRows}
+              skills={s.skillRows}
+              selectedRules={s.composerRules}
+              selectedSkills={s.composerSkills}
+              onToggleRule={s.toggleComposerRule}
+              onToggleSkill={s.toggleComposerSkill}
+              onEnsureContextLoaded={() => void s.loadComposerSkills()}
+              autonomyMode={(s.config?.autonomy_mode as string | undefined) ?? "auto"}
+              onAutonomyChange={(mode) => {
+                if (s.config && s.config.autonomy_mode !== mode) void s.saveConfig({ autonomy_mode: mode });
+              }}
               modelSelector={
                 <ModelSelector
                   models={s.models}
@@ -435,6 +493,18 @@ export default function App() {
            onRemovePlugin={s.removePlugin}
            bundledPlugins={s.bundledPlugins}
            onInstallBundledPlugin={s.installBundledPlugin}
+           mcpRows={s.mcpRows}
+           mcpLoading={s.mcpLoading}
+           onLoadMcp={s.loadMcp}
+           onAddMcp={s.addMcp}
+           onRemoveMcp={s.removeMcp}
+           onRestartMcp={s.restartMcp}
+           onTestMcp={s.testMcp}
+           skillRows={s.skillRows}
+           skillLoading={s.skillLoading}
+           onLoadSkills={s.loadSkills}
+           onToggleSkill={s.toggleSkill}
+           onSuggestSkills={s.suggestSkills}
 
            memoryRows={s.memoryRows}
            memoryLoading={s.memoryLoading}
@@ -482,5 +552,16 @@ export default function App() {
 
       {toasts}
     </div>
+  );
+}
+
+export default function App() {
+  const s = useAxiom();
+  // "ru" until the config arrives: preserves the historical default paint.
+  const locale = normalizeLocale((s.config as { locale?: unknown } | null)?.locale ?? "ru");
+  return (
+    <LocaleProvider locale={locale}>
+      <Shell s={s} />
+    </LocaleProvider>
   );
 }

@@ -2,6 +2,7 @@ import { Check, ChevronDown, Globe, Loader2, TriangleAlert, X, Ban, FileText, Ex
 import { useState } from "react";
 import type { SourceItem, ToolActivity } from "../types";
 import { toolLabel } from "../hooks/useAxiom";
+import { useLocale } from "../lib/locale";
 
 /** Host of a URL for display ("" when the URL is unparsable). */
 export function hostOf(url: string): string {
@@ -62,6 +63,7 @@ function ToolGlyph({ name }: { name: string }) {
 
 /** Tool activity with real running / success / failed / cancelled states. */
 export function ToolActivityList({ calls }: ToolProps) {
+  const { t, locale, strings } = useLocale();
   if (calls.length === 0) return null;
   return (
     <div className="tool-list">
@@ -71,26 +73,26 @@ export function ToolActivityList({ calls }: ToolProps) {
             <span className="tool-icon">
               <ToolGlyph name={call.name} />
             </span>
-            <span className="tool-name">{toolLabel(call.name)}</span>
+            <span className="tool-name">{toolLabel(call.name, locale, strings)}</span>
             <span className="tool-state">
               {call.state === "running" && (
                 <>
-                  <Loader2 size={12} className="spin" /> выполняется
+                  <Loader2 size={12} className="spin" /> {t("ui.toolbits.running")}
                 </>
               )}
               {call.state === "ok" && (
                 <>
-                  <Check size={12} strokeWidth={2.3} /> готово
+                  <Check size={12} strokeWidth={2.3} /> {t("ui.toolbits.done")}
                 </>
               )}
               {call.state === "failed" && (
                 <>
-                  <X size={12} strokeWidth={2.3} /> ошибка
+                  <X size={12} strokeWidth={2.3} /> {t("ui.toolbits.error")}
                 </>
               )}
               {call.state === "cancelled" && (
                 <>
-                  <Ban size={12} strokeWidth={2.1} /> отменено
+                  <Ban size={12} strokeWidth={2.1} /> {t("ui.toolbits.cancelled")}
                 </>
               )}
               {call.durationMs != null && call.state !== "running" && (
@@ -114,13 +116,14 @@ interface SourcesProps {
 /** Real search results — rendered as preview cards: index, favicon, title, url, snippet. */
 export function SourcesList({ sources, onOpen }: SourcesProps) {
   const [open, setOpen] = useState(true);
+  const { t } = useLocale();
   if (sources.length === 0) return null;
   return (
     <div className="sources">
       <button className="sources-toggle" onClick={() => setOpen((v) => !v)}>
         <Globe size={13} strokeWidth={1.8} />
         <span>
-          Источники · {sources.length}
+          {t("ui.toolbits.sources", { n: String(sources.length) })}
         </span>
         <ChevronDown size={13} strokeWidth={1.8} className={"chevron" + (open ? " open" : "")} />
       </button>

@@ -1,18 +1,24 @@
 import { memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Ban, Check, ChevronRight, FileCode2, FilePen, FilePlus2, FileSearch, FileText, FolderTree, GitBranch,
+  Ban, Check, ChevronRight, ClipboardCheck, FileCode2, FilePen, FilePlus2, FileSearch, FileText, FolderTree, GitBranch,
   Globe, Loader2, Search, SquareTerminal, Trash2, Wrench, X,
 } from "lucide-react";
 import type { ToolActivity } from "../types";
 import { toolLabel } from "../hooks/useAxiom";
+import { useLocale } from "../lib/locale";
+import { plural as pluralCount, tVar } from "../lib/i18n";
 import "../styles/tool-activity.css";
 
 /* ================================================================ helpers */
 
-type Kind = "read" | "edit" | "write" | "patch" | "search" | "files" | "list" | "run" | "web" | "fetch" | "git" | "delete" | "other";
+type Kind = "read" | "edit" | "write" | "patch" | "search" | "files" | "list" | "run" | "checks" | "web" | "fetch" | "git" | "delete" | "other";
+
+/** Verification tools (§34) — their own card kind, not plain commands. */
+const CHECK_TOOLS = new Set(["run_tests", "run_linter", "build_project", "verify_changes"]);
 
 function kindOf(name: string): Kind {
+  if (CHECK_TOOLS.has(name)) return "checks";
   switch (name) {
     case "read_file": return "read";
     case "edit_file": return "edit";
@@ -32,23 +38,20 @@ function kindOf(name: string): Kind {
 const ICONS: Record<Kind, ReactNode> = {
   read: <FileText size={14} />, edit: <FilePen size={14} />, write: <FilePlus2 size={14} />, patch: <FileCode2 size={14} />,
   search: <Search size={14} />, files: <FileSearch size={14} />, list: <FolderTree size={14} />, run: <SquareTerminal size={14} />,
-  web: <Globe size={14} />, fetch: <Globe size={14} />, git: <GitBranch size={14} />, delete: <Trash2 size={14} />, other: <Wrench size={14} />,
+  checks: <ClipboardCheck size={14} />, web: <Globe size={14} />, fetch: <Globe size={14} />, git: <GitBranch size={14} />, delete: <Trash2 size={14} />, other: <Wrench size={14} />,
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const lines = (s: string): string[] => (s === "" ? [] : s.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n"));
 
-function fmtMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)} мс`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} с`;
-  return `${Math.floor(ms / 60_000)} м ${Math.round((ms % 60_000) / 1000)} с`;
-}
-
-function plural(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
+/** Duration chip; units follow the core RU/EN catalog. */
+function fmtMs(ms: number, locale: unknown, strings?: Record<string, string> | null): string {
+  if (ms < 1000) return tVar("ui.summary.ms", locale, strings, { n: String(Math.round(ms)) });
+  if (ms < 60_000) return tVar("ui.summary.sec", locale, strings, { n: (ms / 1000).toFixed(1) });
+  return tVar("ui.summary.min", locale, strings, {
+    n: String(Math.floor(ms / 60_000)),
+    s: String(Math.round((ms % 60_000) / 1000)),
+  });
 }
 
 /** Line diff (LCS) — exact for typical edit_file snippets, capped for huge inputs. */
@@ -97,6 +100,7 @@ function highlight(text: string, query: string): ReactNode {
 /* ================================================================ bodies */
 
 function CodeLines({ rows, start = 1, max = 40, kind }: { rows: DiffLine[] | string[]; start?: number; max?: number; kind?: "diff" | "plain" }) {
+  const { t, locale, strings } = useLocale();
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, max);
   let lnA = start, lnB = start;
@@ -123,7 +127,7 @@ function CodeLines({ rows, start = 1, max = 40, kind }: { rows: DiffLine[] | str
       </table>
       {rows.length > max && (
         <button className="ta-more" onClick={() => setAll(!all)}>
-          {all ? "Свернуть" : `Показать ещё ${rows.length - max} ${plural(rows.length - max, "строку", "строки", "строк")}`}
+          {all ? t("ui.summary.collapse") : pluralCount("ui.summary.more", rows.length - max, locale, strings)}
         </button>
       )}
     </div>
@@ -131,6 +135,7 @@ function CodeLines({ rows, start = 1, max = 40, kind }: { rows: DiffLine[] | str
 }
 
 function SearchBody({ output, query }: { output: string; query: string }) {
+  const { locale, strings, t } = useLocale();
   const groups = useMemo(() => {
     const map = new Map<string, { line: string; text: string }[]>();
     for (const raw of lines(output).slice(0, 400)) {
@@ -142,7 +147,7 @@ function SearchBody({ output, query }: { output: string; query: string }) {
     }
     return [...map.entries()];
   }, [output]);
-  if (!groups.length) return <pre className="ta-pre">{output.slice(0, 4000) || "Совпадений нет"}</pre>;
+  if (!groups.length) return <pre className="ta-pre">{output.slice(0, 4000) || t("ui.summary.no_matches")}</pre>;
   return (
     <div className="ta-search">
       {groups.slice(0, 12).map(([file, hits]) => (
@@ -151,10 +156,10 @@ function SearchBody({ output, query }: { output: string; query: string }) {
           {hits.slice(0, 6).map((h, i) => (
             <div key={i} className="ta-search-hit"><span className="ta-ln">{h.line}</span><code>{highlight(h.text.trim(), query)}</code></div>
           ))}
-          {hits.length > 6 && <div className="ta-search-rest">ещё {hits.length - 6}</div>}
+          {hits.length > 6 && <div className="ta-search-rest">{tVar("ui.summary.more_hits", locale, strings, { k: String(hits.length - 6) })}</div>}
         </div>
       ))}
-      {groups.length > 12 && <div className="ta-search-rest">и ещё {groups.length - 12} {plural(groups.length - 12, "файл", "файла", "файлов")}</div>}
+      {groups.length > 12 && <div className="ta-search-rest">{pluralCount("ui.summary.more_files", groups.length - 12, locale, strings)}</div>}
     </div>
   );
 }
@@ -173,12 +178,13 @@ function FileListBody({ output }: { output: string }) {
 }
 
 function TerminalBody({ command, output, failed }: { command: string; output: string; failed: boolean }) {
+  const { t, locale, strings } = useLocale();
   const out = lines(output);
   const tail = out.slice(-60);
   return (
     <div className={"ta-term" + (failed ? " failed" : "")}>
-      <div className="ta-term-bar"><span /><span /><span /><em>терминал</em></div>
-      <pre><span className="ta-prompt">$</span> {command}{"\n"}{out.length > 60 ? `… ${out.length - 60} строк скрыто\n` : ""}{tail.join("\n")}</pre>
+      <div className="ta-term-bar"><span /><span /><span /><em>{t("ui.summary.terminal")}</em></div>
+      <pre><span className="ta-prompt">$</span> {command}{"\n"}{out.length > 60 ? `${pluralCount("ui.summary.hidden", out.length - 60, locale, strings)}\n` : ""}{tail.join("\n")}</pre>
     </div>
   );
 }
@@ -187,7 +193,7 @@ function TerminalBody({ command, output, failed }: { command: string; output: st
 
 interface Summary { stat?: ReactNode; body?: ReactNode; target?: ReactNode; openByDefault?: boolean }
 
-function summarize(call: ToolActivity): Summary {
+function summarize(call: ToolActivity, locale: unknown, strings?: Record<string, string> | null): Summary {
   const k = kindOf(call.name);
   const a = call.args ?? {};
   const out = call.output ?? "";
@@ -219,11 +225,15 @@ function summarize(call: ToolActivity): Summary {
     }
     case "read": {
       const s = Number(a.start_line) || 0, e = Number(a.end_line) || 0;
-      const range = s ? `строки ${s}${e ? "–" + e : "+"}` : null;
+      const range = s
+        ? e
+          ? tVar("ui.summary.lines", locale, strings, { s: String(s), e: String(e) })
+          : tVar("ui.summary.lines_from", locale, strings, { s: String(s) })
+        : null;
       const textLines = lines(out).slice(0, 400).map((l) => l.replace(/^\s*\d+[:|\t]\s?/, ""));
       return {
         target: path ? <PathChip path={path} /> : call.detail,
-        stat: range ? <span className="ta-meta">{range}</span> : out ? <span className="ta-meta">{lines(out).length} {plural(lines(out).length, "строка", "строки", "строк")}</span> : null,
+        stat: range ? <span className="ta-meta">{range}</span> : out ? <span className="ta-meta">{pluralCount("ui.summary.line", lines(out).length, locale, strings)}</span> : null,
         body: textLines.length ? <CodeLines rows={textLines} start={s || 1} max={14} /> : null,
       };
     }
@@ -231,8 +241,8 @@ function summarize(call: ToolActivity): Summary {
       const q = str(a.query);
       const hits = lines(out).filter((l) => /^.+?:\d+:/.test(l)).length;
       return {
-        target: <span className="ta-query">«{q}»{str(a.glob) && <em> в {str(a.glob)}</em>}</span>,
-        stat: call.state === "ok" ? <span className="ta-meta">{hits} {plural(hits, "совпадение", "совпадения", "совпадений")}</span> : null,
+        target: <span className="ta-query">«{q}»{str(a.glob) && <em> {tVar("ui.summary.in_glob", locale, strings, { glob: str(a.glob) })}</em>}</span>,
+        stat: call.state === "ok" ? <span className="ta-meta">{pluralCount("ui.summary.match", hits, locale, strings)}</span> : null,
         body: out ? <SearchBody output={out} query={q} /> : null,
         openByDefault: hits > 0 && hits <= 12,
       };
@@ -242,13 +252,29 @@ function summarize(call: ToolActivity): Summary {
       const n = lines(out).filter((l) => l.trim()).length;
       return {
         target: k === "files" ? <span className="ta-query">{str(a.pattern) || call.detail}</span> : path ? <PathChip path={path || "."} /> : call.detail,
-        stat: out ? <span className="ta-meta">{n} {plural(n, "элемент", "элемента", "элементов")}</span> : null,
+        stat: out ? <span className="ta-meta">{pluralCount("ui.summary.item", n, locale, strings)}</span> : null,
         body: out ? <FileListBody output={out} /> : null,
       };
     }
     case "run": {
       const cmd = str(a.command) || call.detail;
       return { target: <code className="ta-cmd">{cmd}</code>, body: <TerminalBody command={cmd} output={out} failed={call.state === "failed"} />, openByDefault: call.state === "running" || call.state === "failed" };
+    }
+    case "checks": {
+      // Verification tools (§34): the concise verdict shows immediately;
+      // the full step output (BUILD/TEST/LINT) is expandable.
+      const failed = call.state === "failed";
+      const verdict = failed
+        ? tVar("ui.toolgroup.check_failed", locale, strings, {})
+        : call.state === "ok"
+          ? tVar("ui.toolgroup.check_passed", locale, strings, {})
+          : null;
+      return {
+        target: <span className="ta-query">{toolLabel(call.name, locale, strings)}</span>,
+        stat: verdict ? <span className={"ta-meta" + (failed ? " failed" : "")}>{verdict}</span> : null,
+        body: out ? <TerminalBody command={call.name} output={out} failed={failed} /> : null,
+        openByDefault: failed,
+      };
     }
     case "delete":
       return { target: path ? <PathChip path={path} /> : call.detail };
@@ -258,24 +284,29 @@ function summarize(call: ToolActivity): Summary {
 }
 
 const ToolCard = memo(function ToolCard({ call, last }: { call: ToolActivity; last: boolean }) {
+  const { locale, strings, t } = useLocale();
   const k = kindOf(call.name);
-  const info = summarize(call);
+  const info = summarize(call, locale, strings);
   const [open, setOpen] = useState<boolean | null>(null);
+  const [showArgs, setShowArgs] = useState(false);
   const isOpen = open ?? (!!info.openByDefault || call.state === "failed");
-  const hasBody = !!info.body || (call.state === "failed" && !!call.error);
+  const argKeys = call.args ? Object.keys(call.args) : [];
+  // Result preview renders first; the raw arguments sit behind their own toggle
+  // so the collapsed card stays concise (agent-action cards, §5).
+  const hasBody = !!info.body || (call.state === "failed" && !!call.error) || argKeys.length > 0;
   return (
     <li className={`ta-item ta-k-${k} ${call.state}` + (last ? " last" : "")}>
       <span className="ta-node">{call.state === "running" ? <Loader2 size={13} className="spin" /> : ICONS[k]}</span>
       <div className="ta-card">
         <button className="ta-head" onClick={() => hasBody && setOpen(!isOpen)} aria-expanded={hasBody ? isOpen : undefined} disabled={!hasBody}>
-          <span className="ta-label">{toolLabel(call.name)}</span>
+          <span className="ta-label">{toolLabel(call.name, locale, strings)}</span>
           <span className="ta-target">{info.target}</span>
           {info.stat}
           <span className="ta-state">
             {call.state === "ok" && <Check size={12} strokeWidth={2.6} />}
             {call.state === "failed" && <X size={12} strokeWidth={2.6} />}
             {call.state === "cancelled" && <Ban size={12} />}
-            {call.durationMs != null && call.state !== "running" && <span>{fmtMs(call.durationMs)}</span>}
+            {call.durationMs != null && call.state !== "running" && <span>{fmtMs(call.durationMs, locale, strings)}</span>}
           </span>
           {hasBody && <ChevronRight size={13} className={"ta-chev" + (isOpen ? " open" : "")} />}
         </button>
@@ -283,6 +314,14 @@ const ToolCard = memo(function ToolCard({ call, last }: { call: ToolActivity; la
           <div className="ta-body">
             {call.state === "failed" && call.error && <div className="ta-error">{call.error}</div>}
             {info.body}
+            {argKeys.length > 0 && (
+              <div className="ta-args">
+                <button className="ta-more" onClick={() => setShowArgs(!showArgs)}>
+                  {showArgs ? t("ui.summary.collapse") : t("ui.toolcall.args")}
+                </button>
+                {showArgs && <pre className="ta-pre">{JSON.stringify(call.args, null, 2)}</pre>}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -292,24 +331,26 @@ const ToolCard = memo(function ToolCard({ call, last }: { call: ToolActivity; la
 
 /** Summary chips: what the agent did this turn. */
 function Overview({ calls }: { calls: ToolActivity[] }) {
+  const { t, locale, strings } = useLocale();
   const count = (pred: (k: Kind) => boolean) => calls.filter((c) => pred(kindOf(c.name))).length;
   const items: [number, string, ReactNode][] = [
-    [count((k) => k === "read"), "Чтение", <FileText size={12} key="r" />],
-    [count((k) => k === "edit" || k === "write" || k === "patch"), "Правки", <FilePen size={12} key="e" />],
-    [count((k) => k === "search" || k === "files" || k === "list"), "Поиск", <Search size={12} key="s" />],
-    [count((k) => k === "run"), "Команды", <SquareTerminal size={12} key="c" />],
-    [count((k) => k === "web" || k === "fetch"), "Веб", <Globe size={12} key="w" />],
+    [count((k) => k === "read"), t("ui.toolgroup.read"), <FileText size={12} key="r" />],
+    [count((k) => k === "edit" || k === "write" || k === "patch"), t("ui.toolgroup.edit"), <FilePen size={12} key="e" />],
+    [count((k) => k === "search" || k === "files" || k === "list"), t("ui.toolgroup.search"), <Search size={12} key="s" />],
+    [count((k) => k === "run"), t("ui.toolgroup.run"), <SquareTerminal size={12} key="c" />],
+    [count((k) => k === "checks"), t("ui.toolgroup.checks"), <ClipboardCheck size={12} key="v" />],
+    [count((k) => k === "web" || k === "fetch"), t("ui.toolgroup.web"), <Globe size={12} key="w" />],
   ];
   const running = calls.some((c) => c.state === "running");
   const failed = calls.filter((c) => c.state === "failed").length;
   return (
     <div className="ta-overview">
       <span className={"ta-overview-dot" + (running ? " live" : "")} />
-      <strong>{running ? "Агент работает" : "Действия агента"}</strong>
+      <strong>{running ? t("ui.overview.working") : t("ui.overview.actions")}</strong>
       {items.filter(([n]) => n > 0).map(([n, label, icon]) => (
         <span key={label} className="ta-chip">{icon}{label}<b>{n}</b></span>
       ))}
-      {failed > 0 && <span className="ta-chip bad"><X size={12} />{failed} {plural(failed, "ошибка", "ошибки", "ошибок")}</span>}
+      {failed > 0 && <span className="ta-chip bad"><X size={12} />{pluralCount("ui.overview.error", failed, locale, strings)}</span>}
     </div>
   );
 }

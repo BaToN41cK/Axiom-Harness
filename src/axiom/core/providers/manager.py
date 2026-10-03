@@ -11,6 +11,7 @@ from axiom.core.providers.base import ModelProfile, Provider, ProviderStatus
 from axiom.core.providers.known import KNOWN_PROVIDERS, find_known
 from axiom.core.providers.ollama_provider import OllamaProvider
 from axiom.core.providers.openai_compat import OpenAICompatibleProvider
+from axiom.core.secrets import SecretsError, protect, secure_file, unprotect
 
 
 @dataclass
@@ -36,8 +37,13 @@ class ProviderManager:
             if isinstance(raw, dict):
                 for pid, item in raw.items():
                     if isinstance(item, dict):
+                        try:
+                            key = unprotect(str(item.get("api_key") or ""))
+                        except SecretsError:
+                            # Corrupt/foreign blob: treat as missing, user re-enters.
+                            key = ""
                         self._configs[str(pid)] = ProviderConfig(
-                            id=str(pid), api_key=str(item.get("api_key") or ""),
+                            id=str(pid), api_key=key,
                             base_url=str(item.get("base_url") or ""),
                             enabled=bool(item.get("enabled", True)),
                             status=str(item.get("status") or "not_configured"))
@@ -45,13 +51,20 @@ class ProviderManager:
             pass
 
     def save(self) -> None:
+        # Fail closed: protection runs before any byte hits the disk, so a
+        # SecretsError aborts the whole save instead of writing plaintext.
+        payload = {}
+        for pid, cfg in self._configs.items():
+            entry = vars(cfg).copy()
+            entry["api_key"] = protect(cfg.api_key)
+            payload[pid] = entry
         try:
             p = self._path()
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps({k: vars(v) for k, v in self._configs.items()},
-                                      ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(p)
+            secure_file(p)
         except OSError:
             pass
 

@@ -1,0 +1,81 @@
+# Release-security audit: every PR must keep these green. Live tests
+# (tests/live, AXIOM_LIVE_OLLAMA=1) stay opt-in and never run here; ordinary
+# tests require no API keys and no Ollama.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install core with dev extras
+        run: pip install -e ".[dev]"
+      - name: Ruff on changed Python files
+        shell: bash
+        # Full-tree lint still carries pre-existing debt in TUI widgets; the
+        # gate covers the PR diff so new violations turn the check red.
+        run: |
+          base=$(git merge-base HEAD origin/${{ github.base_ref || 'master' }} 2>/dev/null || git rev-parse HEAD~1)
+          files=$(git diff --name-only "$base" HEAD -- '*.py')
+          if [ -z "$files" ]; then exit 0; fi
+          # shellcheck disable=SC2086
+          ruff check $files
+      - name: Deterministic tests
+        run: python -m pytest tests payment-backend -q
+
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: node --test scripts/
+      - run: npm run build
+
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+      - run: cargo check --locked
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: npm audit (moderate+)
+        working-directory: desktop
+        run: npm audit --audit-level=moderate

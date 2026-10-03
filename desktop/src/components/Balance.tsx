@@ -8,10 +8,12 @@ import Presence from "./Presence";
 import { usePayments } from "../hooks/usePayments";
 import { axiomUsd, paymentBackendConfigured, paymentToken } from "../lib/payments";
 import { paymentQr } from "../lib/paymentQr";
+import { useLocale } from "../lib/locale";
 import "../styles/payments.css";
 
 export default function Balance() {
   const s = usePayments();
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("300");
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -33,7 +35,7 @@ export default function Balance() {
     const url = s.payment?.payment_url;
     if (!url || !url.startsWith("https://")) return;
     try { setLinkError(null); await openExternal(url); }
-    catch { setLinkError("Не удалось открыть браузер. Отсканируйте QR-код или попробуйте ещё раз."); }
+    catch { setLinkError(t("ui.pay.open_failed")); }
   };
   const balanceLabel = s.account ? axiomUsd(s.account.balance_minor) : "—";
   const pending = s.payment?.status === "pending";
@@ -41,26 +43,26 @@ export default function Balance() {
   return <>
     <button
       className={"balance-pill" + (s.account?.pro_active ? " balance-pro" : "")}
-      title={`Баланс ${balanceLabel} AXIOM USD-кредитов · AXIOM PRO`}
-      aria-label={`Баланс ${balanceLabel} AXIOM USD-кредитов. Открыть баланс и AXIOM PRO`}
+      title={t("ui.pay.balance_title", { amount: balanceLabel })}
+      aria-label={t("ui.pay.balance_aria", { amount: balanceLabel })}
       aria-haspopup="dialog"
       aria-expanded={open}
       onClick={() => { setOpen(true); if (paymentToken.get()) void s.refresh(); }}
     >
-      <Wallet size={14} /><span className="balance-label">{s.account ? "Баланс" : "Войти"}</span><strong>{s.account ? balanceLabel : "AXIOM"}</strong>
+      <Wallet size={14} /><span className="balance-label">{s.account ? t("ui.pay.balance") : t("ui.pay.signin")}</span><strong>{s.account ? balanceLabel : "AXIOM"}</strong>
       {s.account?.pro_active && <Crown size={13} className="balance-crown" aria-label="AXIOM PRO" />}
       <span className="balance-plus"><Plus size={13} /></span>
-      {pending && <span className="balance-pending" aria-label="Ожидание оплаты" />}
+      {pending && <span className="balance-pending" aria-label={t("ui.pay.pending")} />}
     </button>
     {createPortal(<Presence open={open}>
       <div className="modal-backdrop payment-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
         <section className={"modal payment-dialog" + (paymentBackendConfigured && !s.account ? " payment-dialog--auth" : s.account ? " payment-dialog--account" : "")} role="dialog" aria-modal="true" aria-labelledby="payment-title">
           <div className="modal-head">
-            <h2 id="payment-title">{s.account ? "Аккаунт" : "Вход в AXIOM"}</h2>
-            <button className="icon-btn" aria-label="Закрыть платежи" onClick={() => setOpen(false)}><X size={16} /></button>
+            <h2 id="payment-title">{s.account ? t("ui.pay.account") : t("ui.pay.signin_axiom")}</h2>
+            <button className="icon-btn" aria-label={t("ui.pay.close")} onClick={() => setOpen(false)}><X size={16} /></button>
           </div>
           {!paymentBackendConfigured ? <div className="modal-body">
-            <p className="payment-note payment-unavailable">Платёжный сервер не настроен в этой сборке AXIOM.</p>
+            <p className="payment-note payment-unavailable">{t("ui.pay.unavailable")}</p>
           </div> : !s.account ? <div className="modal-body auth-body">
             <AuthPanel s={s} />
           </div> : <div className="modal-body acct-body">

@@ -2,6 +2,7 @@ import { forwardRef } from "react";
 import type { InputHTMLAttributes, ReactNode } from "react";
 import { Search, X } from "lucide-react";
 import { IconButton } from "./Button";
+import { useLocale } from "../../lib/locale";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   icon?: ReactNode;
@@ -66,6 +67,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
   { value, onValueChange, label, className = "", ...rest },
   ref,
 ) {
+  const { t } = useLocale();
   return (
     <div className={"ax-input-shell ax-search" + (className ? ` ${className}` : "")}>
       <span className="ax-input-icon">
@@ -82,7 +84,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(functi
       />
       {value && (
         <IconButton
-          label="Очистить поиск"
+          label={t("ui.input.clear_search")}
           size="sm"
           className="ax-search-clear"
           onClick={() => onValueChange("")}

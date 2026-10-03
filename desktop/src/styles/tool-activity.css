@@ -27,6 +27,7 @@
 .ta-k-read .ta-node { color: #79c0ff; }
 .ta-k-search .ta-node, .ta-k-files .ta-node, .ta-k-list .ta-node { color: #d2a8ff; }
 .ta-k-run .ta-node { color: #7ee787; }
+.ta-k-checks .ta-node { color: var(--ax-info-text); }
 .ta-k-delete .ta-node { color: var(--ax-error-text); }
 
 .ta-card { min-width: 0; border: 1px solid var(--ax-border); border-radius: 10px; background: var(--ax-bg-panel); overflow: hidden; transition: border-color .15s ease; }
@@ -45,6 +46,7 @@
 .ta-query em { font-style: normal; color: var(--ax-text-faint); font-family: var(--ax-font-mono); font-size: 11px; }
 .ta-cmd { font-family: var(--ax-font-mono); font-size: 11.5px; color: var(--ax-text); }
 .ta-meta { font-size: 11px; color: var(--ax-text-faint); white-space: nowrap; }
+.ta-meta.failed { color: var(--ax-error-text); font-weight: 650; }
 .ta-delta { display: inline-flex; gap: 6px; font-family: var(--ax-font-mono); font-size: 11px; white-space: nowrap; }
 .ta-delta .add { color: #56d364; font-weight: 600; }
 .ta-delta .del { color: #f47067; font-weight: 600; }
@@ -55,6 +57,8 @@
 .ta-chev.open { transform: rotate(90deg); }
 
 .ta-body { border-top: 1px solid var(--ax-border); animation: ta-in .2s ease both; }
+.ta-args { border-top: 1px solid var(--ax-border); }
+.ta-args .ta-more { border-top: 0; }
 .ta-error { padding: 8px 11px; font: 11.5px/1.5 var(--ax-font-mono); color: var(--ax-error-text); background: var(--ax-error-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* code / diff */

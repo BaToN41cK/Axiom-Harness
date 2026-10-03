@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { request } from "../bridge";
 import type { PluginRow, UIExtension } from "../types";
+import { useLocale } from "../lib/locale";
 
 /**
  * W3.1 — isolated host for a plugin UI panel.
@@ -17,6 +18,7 @@ export default function PluginPanelHost({ plugin, extension }: { plugin: PluginR
   const [html, setHtml] = useState<string | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [reloadKey, setReloadKey] = useState(0);
+  const { t } = useLocale();
 
   useEffect(() => {
     let alive = true;
@@ -64,8 +66,8 @@ export default function PluginPanelHost({ plugin, extension }: { plugin: PluginR
   if (status === "error" || html === null) {
     return (
       <div className="plugin-panel-empty">
-        <span>Панель «{String(extension.meta?.title ?? extension.id)}»</span>
-        <small>Плагин не предоставил UI-документ (ui/index.html) — панель недоступна.</small>
+        <span>{t("ui.plugin.panel_title", { title: String(extension.meta?.title ?? extension.id) })}</span>
+        <small>{t("ui.plugin.panel_unavailable")}</small>
       </div>
     );
   }
@@ -73,8 +75,8 @@ export default function PluginPanelHost({ plugin, extension }: { plugin: PluginR
   return (
     <div className="plugin-panel">
       <div className="plugin-panel-bar">
-        <span className="plugin-panel-title">Панель «{String(extension.meta?.title ?? extension.id)}»</span>
-        <button className="btn ghost" onClick={() => setReloadKey((n) => n + 1)} title="Перезагрузить панель (hot reload)">Обновить</button>
+        <span className="plugin-panel-title">{t("ui.plugin.panel_title", { title: String(extension.meta?.title ?? extension.id) })}</span>
+        <button className="btn ghost" onClick={() => setReloadKey((n) => n + 1)} title={t("ui.plugin.reload")}>{t("ui.common.refresh")}</button>
       </div>
       <iframe
         ref={iframeRef}

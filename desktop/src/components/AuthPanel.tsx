@@ -5,6 +5,7 @@ import {
   ShieldCheck, Sparkles, User, Wallet, X,
 } from "lucide-react";
 import type { usePayments, OAuthProvider, OAuthStage } from "../hooks/usePayments";
+import { useLocale } from "../lib/locale";
 import "../styles/auth.css";
 
 type Payments = ReturnType<typeof usePayments>;
@@ -41,7 +42,7 @@ function passwordScore(pw: string): { score: 0 | 1 | 2 | 3 | 4; label: string } 
   if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) score += 1;
   if (pw.length < 12) score = Math.min(score, 1);
   const s = Math.max(1, Math.min(4, score)) as 1 | 2 | 3 | 4;
-  return { score: s, label: ["", "Слабый", "Средний", "Хороший", "Надёжный"][s] };
+  return { score: s, label: ["", "ui.auth.pw.weak", "ui.auth.pw.medium", "ui.auth.pw.good", "ui.auth.pw.strong"][s] };
 }
 
 function mmss(ms: number): string {
@@ -51,13 +52,14 @@ function mmss(ms: number): string {
 
 /* ------------------------------------------------------------- OAuth progress */
 const STAGES: { id: OAuthStage; title: string; hint: string }[] = [
-  { id: "starting", title: "Создаём защищённую ссылку", hint: "Одноразовый токен привязан к этому устройству" },
-  { id: "browser", title: "Открываем браузер", hint: "Страница провайдера откроется в системном браузере" },
-  { id: "waiting", title: "Ожидаем подтверждение", hint: "Разрешите доступ на странице провайдера" },
-  { id: "redeeming", title: "Создаём сессию AXIOM", hint: "Получаем токен и загружаем аккаунт" },
+  { id: "starting", title: "ui.auth.stage.starting.title", hint: "ui.auth.stage.starting.hint" },
+  { id: "browser", title: "ui.auth.stage.browser.title", hint: "ui.auth.stage.browser.hint" },
+  { id: "waiting", title: "ui.auth.stage.waiting.title", hint: "ui.auth.stage.waiting.hint" },
+  { id: "redeeming", title: "ui.auth.stage.redeeming.title", hint: "ui.auth.stage.redeeming.hint" },
 ];
 
 function OAuthProgressView({ s }: { s: Payments }) {
+  const { t } = useLocale();
   const o = s.oauth!;
   const [now, setNow] = useState(Date.now());
   const [copied, setCopied] = useState(false);
@@ -82,8 +84,8 @@ function OAuthProgressView({ s }: { s: Payments }) {
         <span className="auth-oauth-ring auth-oauth-ring--2" />
         <span className="auth-oauth-logo">{o.provider === "github" ? <GithubMark size={30} /> : <GoogleMark size={30} />}</span>
       </div>
-      <h3 className="auth-oauth-title">Вход через {PROVIDER_NAME[o.provider]}</h3>
-      <p className="auth-oauth-sub">Завершите вход в браузере и вернитесь в AXIOM — окно обновится само.</p>
+      <h3 className="auth-oauth-title">{t("ui.auth.oauth_title", { provider: PROVIDER_NAME[o.provider] })}</h3>
+      <p className="auth-oauth-sub">{t("ui.auth.oauth_sub")}</p>
 
       <ol className="auth-stepper">
         {STAGES.map((stage, index) => {
@@ -94,8 +96,8 @@ function OAuthProgressView({ s }: { s: Payments }) {
                 {state === "done" ? <Check size={12} strokeWidth={3} /> : state === "active" ? <Loader2 size={12} className="spin" /> : index + 1}
               </span>
               <span className="auth-step-text">
-                <strong>{stage.title}</strong>
-                <span>{stage.hint}</span>
+                <strong>{t(stage.title)}</strong>
+                <span>{t(stage.hint)}</span>
               </span>
             </li>
           );
@@ -104,23 +106,23 @@ function OAuthProgressView({ s }: { s: Payments }) {
 
       <div className="auth-oauth-timer">
         <div className="auth-oauth-timer-bar"><span style={{ transform: `scaleX(${1 - elapsedShare})` }} /></div>
-        <span>Ссылка действует ещё <b>{mmss(left)}</b></span>
+        <span>{t("ui.auth.link_valid", { time: mmss(left) })}</span>
       </div>
 
       <div className="auth-oauth-actions">
         <button className="btn" disabled={!o.url} onClick={() => void s.reopenOAuth()}>
-          <RefreshCw size={14} /> Открыть снова
+          <RefreshCw size={14} /> {t("ui.auth.reopen")}
         </button>
         <button className="btn" disabled={!o.url} onClick={() => void copy()}>
-          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Скопировано" : "Скопировать ссылку"}
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? t("ui.code.copied") : t("ui.auth.copy_link")}
         </button>
         <button className="btn ghost" onClick={s.cancelOAuth}>
-          <X size={14} /> Отменить
+          <X size={14} /> {t("ui.auth.cancel")}
         </button>
       </div>
 
       <p className="auth-security">
-        <ShieldCheck size={13} /> AXIOM никогда не видит ваш пароль от {PROVIDER_NAME[o.provider]}. Не открывайте ссылки входа, присланные другими людьми.
+        <ShieldCheck size={13} /> {t("ui.auth.security", { provider: PROVIDER_NAME[o.provider] })}
       </p>
     </div>
   );
@@ -128,6 +130,7 @@ function OAuthProgressView({ s }: { s: Payments }) {
 
 /* ------------------------------------------------------------------ AuthPanel */
 export default function AuthPanel({ s }: { s: Payments }) {
+  const { t } = useLocale();
   // Re-check OAuth availability every time the sign-in screen opens.
   useEffect(() => {
     if (s.providersState !== "ready") void s.loadProviders();
@@ -152,9 +155,9 @@ export default function AuthPanel({ s }: { s: Payments }) {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setLocalError(null);
-    if (!userValid) { setLocalError("Логин: 3–48 символов — латиница, цифры, точка, дефис или подчёркивание."); return; }
-    if (!passValid) { setLocalError("Пароль должен содержать не менее 12 символов."); return; }
-    if (create && password !== confirmation) { setLocalError("Пароли не совпадают."); return; }
+    if (!userValid) { setLocalError(t("ui.auth.err.login")); return; }
+    if (!passValid) { setLocalError(t("ui.auth.err.pass")); return; }
+    if (create && password !== confirmation) { setLocalError(t("ui.auth.err.mismatch")); return; }
     void s.authenticate(username.trim(), password, create);
   };
 
@@ -173,12 +176,12 @@ export default function AuthPanel({ s }: { s: Payments }) {
           <span className="auth-hero-core" />
         </div>
         <div className="auth-hero-brand">AXIOM</div>
-        <p className="auth-hero-tag">Локальный AI-агент и IDE.<br />Один аккаунт для баланса и PRO.</p>
+        <p className="auth-hero-tag">{t("ui.auth.hero_tag")}<br />{t("ui.auth.hero_tag2")}</p>
         <ul className="auth-hero-list">
-          <li><Wallet size={14} /> Баланс AXIOM и подписка PRO</li>
-          <li><ShieldCheck size={14} /> Вход через OAuth — без передачи паролей</li>
-          <li><KeyRound size={14} /> Сессия хранится только на этом устройстве</li>
-          <li><Sparkles size={14} /> Код и модели остаются локальными</li>
+          <li><Wallet size={14} /> {t("ui.auth.hero.balance")}</li>
+          <li><ShieldCheck size={14} /> {t("ui.auth.hero.oauth")}</li>
+          <li><KeyRound size={14} /> {t("ui.auth.hero.session")}</li>
+          <li><Sparkles size={14} /> {t("ui.auth.hero.local")}</li>
         </ul>
       </aside>
 
@@ -186,13 +189,13 @@ export default function AuthPanel({ s }: { s: Payments }) {
       <div className="auth-main">
         {s.oauth ? <OAuthProgressView s={s} /> : <>
           <div className="auth-head">
-            <h3>{create ? "Создать аккаунт" : "С возвращением"}</h3>
-            <p>{create ? "Пара минут — и баланс с PRO будут привязаны к аккаунту." : "Войдите, чтобы управлять балансом и AXIOM PRO."}</p>
+            <h3>{create ? t("ui.auth.create_title") : t("ui.auth.welcome_back")}</h3>
+            <p>{create ? t("ui.auth.create_sub") : t("ui.auth.login_sub")}</p>
           </div>
 
-          <div className="auth-tabs" role="tablist" aria-label="Режим входа">
-            <button role="tab" aria-selected={!create} className={!create ? "active" : ""} onClick={() => switchMode("login")} disabled={s.busy}>Вход</button>
-            <button role="tab" aria-selected={create} className={create ? "active" : ""} onClick={() => switchMode("register")} disabled={s.busy}>Регистрация</button>
+          <div className="auth-tabs" role="tablist" aria-label={t("ui.auth.mode_aria")}>
+            <button role="tab" aria-selected={!create} className={!create ? "active" : ""} onClick={() => switchMode("login")} disabled={s.busy}>{t("ui.auth.login")}</button>
+            <button role="tab" aria-selected={create} className={create ? "active" : ""} onClick={() => switchMode("register")} disabled={s.busy}>{t("ui.auth.register")}</button>
             <span className="auth-tabs-thumb" style={{ transform: `translateX(${create ? 100 : 0}%)` }} />
           </div>
 
@@ -203,11 +206,11 @@ export default function AuthPanel({ s }: { s: Payments }) {
               onClick={() => void s.authenticateWithProvider("github")}
             >
               <span className="auth-provider-icon"><GithubMark /></span>
-              <span className="auth-provider-text">Продолжить с GitHub</span>
+              <span className="auth-provider-text">{t("ui.auth.continue_github")}</span>
               {s.providersState === "loading" && !s.providers.github
-                ? <span className="auth-provider-badge"><Loader2 size={11} className="spin" /> проверка</span>
+                ? <span className="auth-provider-badge"><Loader2 size={11} className="spin" /> {t("ui.auth.checking")}</span>
                 : s.providersState === "ready" && !s.providers.github
-                  ? <span className="auth-provider-badge">не настроено</span>
+                  ? <span className="auth-provider-badge">{t("ui.auth.not_configured")}</span>
                   : <ArrowRight size={15} className="auth-provider-arrow" />}
             </button>
             <button
@@ -216,62 +219,62 @@ export default function AuthPanel({ s }: { s: Payments }) {
               onClick={() => void s.authenticateWithProvider("google")}
             >
               <span className="auth-provider-icon"><GoogleMark /></span>
-              <span className="auth-provider-text">Продолжить с Google</span>
+              <span className="auth-provider-text">{t("ui.auth.continue_google")}</span>
               {s.providersState === "loading" && !s.providers.google
-                ? <span className="auth-provider-badge"><Loader2 size={11} className="spin" /> проверка</span>
+                ? <span className="auth-provider-badge"><Loader2 size={11} className="spin" /> {t("ui.auth.checking")}</span>
                 : s.providersState === "ready" && !s.providers.google
-                  ? <span className="auth-provider-badge">не настроено</span>
+                  ? <span className="auth-provider-badge">{t("ui.auth.not_configured")}</span>
                   : <ArrowRight size={15} className="auth-provider-arrow" />}
             </button>
           </div>
 
           {s.providersState === "error" && (
             <div className="auth-hint auth-hint--warn auth-server-note">
-              <AlertTriangle size={12} /> Сервер входа не ответил — он мог «спать». Кнопки работают, сервер проснётся при нажатии.
-              <button className="auth-link" onClick={() => void s.loadProviders()}>Проверить снова</button>
+              <AlertTriangle size={12} /> {t("ui.auth.server_note")}
+              <button className="auth-link" onClick={() => void s.loadProviders()}>{t("ui.auth.check_again")}</button>
             </div>
           )}
 
-          <div className="auth-divider"><span>или по логину и паролю</span></div>
+          <div className="auth-divider"><span>{t("ui.auth.or_credentials")}</span></div>
 
           <form className="auth-form" onSubmit={submit} noValidate>
             <label className={"auth-field" + (username && !userValid ? " invalid" : "") + (userValid ? " valid" : "")}>
-              <span className="auth-label">Имя пользователя</span>
+              <span className="auth-label">{t("ui.auth.username")}</span>
               <span className="auth-input">
                 <User size={15} />
                 <input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="sergey.dev" maxLength={48} disabled={s.busy} autoFocus />
                 {userValid && <Check size={14} className="auth-ok" />}
               </span>
-              {create && <span className="auth-hint">3–48 символов: латиница, цифры, «.», «-», «_»</span>}
+              {create && <span className="auth-hint">{t("ui.auth.username_hint")}</span>}
             </label>
 
             <label className={"auth-field" + (password && !passValid ? " invalid" : "")}>
-              <span className="auth-label">Пароль</span>
+              <span className="auth-label">{t("ui.auth.password")}</span>
               <span className="auth-input">
                 <Lock size={15} />
-                <input type={show ? "text" : "password"} autoComplete={create ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} onKeyUp={onKey} onKeyDown={onKey} placeholder="минимум 12 символов" maxLength={256} disabled={s.busy} />
-                <button type="button" className="auth-eye" onClick={() => setShow(!show)} aria-label={show ? "Скрыть пароль" : "Показать пароль"}>
+                <input type={show ? "text" : "password"} autoComplete={create ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} onKeyUp={onKey} onKeyDown={onKey} placeholder={t("ui.auth.password_placeholder")} maxLength={256} disabled={s.busy} />
+                <button type="button" className="auth-eye" onClick={() => setShow(!show)} aria-label={show ? t("ui.auth.hide_password") : t("ui.auth.show_password")}>
                   {show ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </span>
-              {caps && <span className="auth-hint auth-hint--warn"><AlertTriangle size={12} /> Включён Caps Lock</span>}
+              {caps && <span className="auth-hint auth-hint--warn"><AlertTriangle size={12} /> {t("ui.auth.caps")}</span>}
               {create && password && (
                 <span className={"auth-meter s" + strength.score}>
                   <span className="auth-meter-bars"><i /><i /><i /><i /></span>
-                  <span className="auth-meter-label">{strength.label}</span>
+                  <span className="auth-meter-label">{t(strength.label)}</span>
                 </span>
               )}
             </label>
 
             {create && (
               <label className={"auth-field" + (confirmation && !matches ? " invalid" : "") + (confirmation && matches ? " valid" : "")}>
-                <span className="auth-label">Повторите пароль</span>
+                <span className="auth-label">{t("ui.auth.repeat_password")}</span>
                 <span className="auth-input">
                   <Lock size={15} />
                   <input type={show ? "text" : "password"} autoComplete="new-password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} maxLength={256} disabled={s.busy} />
                   {confirmation && (matches ? <Check size={14} className="auth-ok" /> : <X size={14} className="auth-bad" />)}
                 </span>
-                {create && <span className="auth-hint">Сохраните пароль — восстановление пока не подключено.</span>}
+                {create && <span className="auth-hint">{t("ui.auth.save_password")}</span>}
               </label>
             )}
 
@@ -283,14 +286,14 @@ export default function AuthPanel({ s }: { s: Payments }) {
             )}
 
             <button className="auth-submit" disabled={!canSubmit}>
-              {s.busy ? <><Loader2 size={15} className="spin" /> Подождите…</> : <>{create ? "Создать аккаунт" : "Войти в AXIOM"} <ArrowRight size={15} /></>}
+              {s.busy ? <><Loader2 size={15} className="spin" /> {t("ui.auth.wait")}</> : <>{create ? t("ui.auth.submit_create") : t("ui.auth.submit_login")} <ArrowRight size={15} /></>}
             </button>
           </form>
 
           <p className="auth-foot">
-            {create ? "Уже есть аккаунт? " : "Впервые в AXIOM? "}
+            {create ? t("ui.auth.have_account") : t("ui.auth.new_here")}
             <button className="auth-link" onClick={() => switchMode(create ? "login" : "register")} disabled={s.busy}>
-              {create ? "Войти" : "Создать аккаунт"}
+              {create ? t("ui.auth.signin_link") : t("ui.auth.create_link")}
             </button>
           </p>
         </>}

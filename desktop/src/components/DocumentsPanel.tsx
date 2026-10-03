@@ -5,6 +5,7 @@ import rehypeSanitize from "rehype-sanitize";
 import { Download, FileText, Plus, Save, Trash2 } from "lucide-react";
 import { request } from "../bridge";
 import type { ArtifactDocument, ArtifactMeta } from "../types";
+import { useLocale } from "../lib/locale";
 
 /**
  * W3.17 — Documents view: a list of editable artifact documents plus a Markdown
@@ -12,6 +13,7 @@ import type { ArtifactDocument, ArtifactMeta } from "../types";
  * `artifact_*` bridge commands over the core `ArtifactWorkspace`.
  */
 export default function DocumentsPanel({ root }: { root: string | null }) {
+  const { t } = useLocale();
   const [documents, setDocuments] = useState<ArtifactMeta[]>([]);
   const [active, setActive] = useState<ArtifactDocument | null>(null);
   const [draft, setDraft] = useState("");
@@ -100,25 +102,25 @@ export default function DocumentsPanel({ root }: { root: string | null }) {
   };
 
   if (!root) {
-    return <div className="documents-empty"><FileText size={22} /><span>Откройте проект, чтобы работать с документами</span></div>;
+    return <div className="documents-empty"><FileText size={22} /><span>{t("ui.documents.open_project")}</span></div>;
   }
 
   return (
     <div className="documents">
       <div className="documents-head">
-        <span className="documents-title">Документы</span>
+        <span className="documents-title">{t("ui.documents.title")}</span>
         <div className="documents-actions">
-          <button className="btn ghost" onClick={() => { setActive(null); setDraft(""); dirtyRef.current = false; }} title="Новый документ">
-            <Plus size={13} />Новый
+          <button className="btn ghost" onClick={() => { setActive(null); setDraft(""); dirtyRef.current = false; }} title={t("ui.documents.new_doc")}>
+            <Plus size={13} />{t("ui.common.new")}
           </button>
-          <button className="btn ghost" onClick={() => void load()} title="Обновить">Обновить</button>
+          <button className="btn ghost" onClick={() => void load()} title={t("ui.common.refresh")}>{t("ui.common.refresh")}</button>
         </div>
       </div>
 
       {error && <div className="documents-error">{error}</div>}
 
       {documents.length === 0 && !active && !loading ? (
-        <div className="documents-empty"><FileText size={22} /><span>Пока нет документов — создайте первый</span></div>
+        <div className="documents-empty"><FileText size={22} /><span>{t("ui.documents.none")}</span></div>
       ) : (
         <div className="documents-list">
           {documents.map((doc) => (
@@ -137,32 +139,32 @@ export default function DocumentsPanel({ root }: { root: string | null }) {
 
       <div className="documents-editor">
         <div className="documents-editor-bar">
-          <span className="documents-editor-title">{active ? active.title : "Новый документ"}</span>
+          <span className="documents-editor-title">{active ? active.title : t("ui.documents.new_doc")}</span>
           <div className="documents-editor-actions">
             <button className={"btn ghost" + (preview ? " active" : "")} onClick={() => setPreview((p) => !p)}>
-              Предпросмотр
+              {t("ui.documents.preview")}
             </button>
-            <button className="btn ghost" disabled={!active} onClick={download} title="Скачать .md">
-              <Download size={13} />Экспорт
+            <button className="btn ghost" disabled={!active} onClick={download} title={t("ui.documents.download_md")}>
+              <Download size={13} />{t("ui.common.export")}
             </button>
-            <button className="btn ghost danger" disabled={!active} onClick={() => void remove()} title="Удалить">
+            <button className="btn ghost danger" disabled={!active} onClick={() => void remove()} title={t("ui.common.delete")}>
               <Trash2 size={13} />
             </button>
-            <button className="btn primary" disabled={saving || !dirtyRef.current} onClick={() => void save()} title="Сохранить">
-              <Save size={13} />{saving ? "Сохранение…" : "Сохранить"}
+            <button className="btn primary" disabled={saving || !dirtyRef.current} onClick={() => void save()} title={t("ui.common.save")}>
+              <Save size={13} />{saving ? t("ui.documents.saving") : t("ui.common.save")}
             </button>
           </div>
         </div>
         {preview ? (
           <div className="documents-preview markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{draft || "*Пусто*"}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{draft || t("ui.documents.empty")}</ReactMarkdown>
           </div>
         ) : (
           <textarea
             className="documents-textarea"
             value={draft}
             spellCheck={false}
-            placeholder={"# Заголовок\n\nПишите Markdown…"}
+            placeholder={t("ui.documents.placeholder")}
             onChange={(e) => { setDraft(e.target.value); dirtyRef.current = true; }}
           />
         )}

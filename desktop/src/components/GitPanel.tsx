@@ -12,6 +12,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type { ProjectInfo } from "../types";
+import { useLocale } from "../lib/locale";
 
 interface GitState {
   ok: boolean;
@@ -53,18 +54,19 @@ function parseChanges(raw: string | null | undefined): GitChange[] {
   return out;
 }
 
-const LETTER_TITLE: Record<string, string> = {
-  M: "изменён",
-  A: "новый (в индексе)",
-  "?": "не отслеживается",
-  D: "удалён",
-  R: "переименован",
-  C: "скопирован",
-  U: "конфликт слияния",
+const LETTER_KEY: Record<string, string> = {
+  M: "ui.git.letter.M",
+  A: "ui.git.letter.A",
+  "?": "ui.git.letter.untracked",
+  D: "ui.git.letter.D",
+  R: "ui.git.letter.R",
+  C: "ui.git.letter.C",
+  U: "ui.git.letter.U",
 };
 
 /** Letter badge of one change — colour by real Git semantics. */
 function ChangeBadge({ letter }: { letter: string }) {
+  const { t } = useLocale();
   const cls =
     letter === "?"
       ? "untracked"
@@ -74,7 +76,7 @@ function ChangeBadge({ letter }: { letter: string }) {
           ? "modified"
           : "added";
   return (
-    <span className={"gp-badge " + cls} title={LETTER_TITLE[letter] ?? letter}>
+    <span className={"gp-badge " + cls} title={t(LETTER_KEY[letter] ?? "") || letter}>
       {letter}
     </span>
   );
@@ -123,6 +125,7 @@ function EmptyState({ title, note }: { title: string; note: string }) {
 /** Git panel: branch / status / log (§17). Read-only facts from the backend. */
 export default function GitPanel(props: Props) {
   const { project, status, log, onRefresh, onCheckpoint, onRollback } = props;
+  const { t } = useLocale();
   const changes = useMemo(() => parseChanges(status?.ok ? status.content : null), [status]);
   const [confirmRollback, setConfirmRollback] = useState(false);
 
@@ -132,8 +135,8 @@ export default function GitPanel(props: Props) {
     return (
       <section className="gitpanel">
         <EmptyState
-          title="Git недоступен"
-          note="Git-панель появится, когда будет выбрана папка проекта."
+          title={t("ui.git.unavailable")}
+          note={t("ui.git.unavailable_note")}
         />
       </section>
     );
@@ -142,8 +145,8 @@ export default function GitPanel(props: Props) {
     return (
       <section className="gitpanel">
         <EmptyState
-          title="Папка не является git-репозиторием"
-          note="Axiom показывает ветку, изменения и историю только для проектов под git."
+          title={t("ui.git.not_repo")}
+          note={t("ui.git.not_repo_note")}
         />
       </section>
     );
@@ -161,22 +164,22 @@ export default function GitPanel(props: Props) {
         <GitBranch size={13} strokeWidth={1.8} />
         <span className="ex-title">{project.branch ?? "git"}</span>
         <span className="gp-count">
-          {changes.length > 0 ? `${changes.length} изм.` : "чисто"}
+          {changes.length > 0 ? t("ui.git.changes", { n: String(changes.length) }) : t("ui.git.clean")}
         </span>
-        <button className="icon-btn tiny" title="Обновить" onClick={onRefresh}>
+        <button className="icon-btn tiny" title={t("ui.common.refresh")} onClick={onRefresh}>
           <RefreshCw size={12} strokeWidth={1.8} />
         </button>
-        <button className="icon-btn tiny" title="Создать снимок" onClick={onCheckpoint}>
+        <button className="icon-btn tiny" title={t("ui.git.snapshot")} onClick={onCheckpoint}>
           <Camera size={12} strokeWidth={1.8} />
         </button>
-        <button className="icon-btn tiny" title="Откат к снимку" onClick={() => setConfirmRollback(true)}>
+        <button className="icon-btn tiny" title={t("ui.git.rollback")} onClick={() => setConfirmRollback(true)}>
           <RotateCcw size={12} strokeWidth={1.8} />
         </button>
       </div>
 
       {confirmRollback && (
         <div className="gp-rollback-confirm">
-          <span>Откатить рабочее дерево к последнему снимку? Несохранённые изменения будут потеряны.</span>
+          <span>{t("ui.git.rollback_confirm")}</span>
           <button
             className="mini-btn danger"
             onClick={() => {
@@ -184,10 +187,10 @@ export default function GitPanel(props: Props) {
               onRollback();
             }}
           >
-            Откатить
+            {t("ui.git.rollback_action")}
           </button>
           <button className="mini-btn" onClick={() => setConfirmRollback(false)}>
-            Отмена
+            {t("ui.common.cancel")}
           </button>
         </div>
       )}
@@ -195,21 +198,21 @@ export default function GitPanel(props: Props) {
       {changes.length === 0 && (
         <div className="gp-clean">
           <CircleCheck size={20} strokeWidth={1.6} />
-          <span>Рабочее дерево чистое</span>
+          <span>{t("ui.git.working_clean")}</span>
         </div>
       )}
 
-      <ChangeGroup icon={<FilePen size={12} strokeWidth={1.8} />} title="Изменённые" changes={modified} />
-      <ChangeGroup icon={<FilePlus2 size={12} strokeWidth={1.8} />} title="Новые" changes={added} />
-      <ChangeGroup icon={<CircleHelp size={12} strokeWidth={1.8} />} title="Не отслеживаются" changes={untracked} />
-      <ChangeGroup icon={<FileMinus size={12} strokeWidth={1.8} />} title="Удалённые" changes={deleted} />
-      <ChangeGroup icon={<GitBranch size={12} strokeWidth={1.8} />} title="Другие" changes={other} />
+      <ChangeGroup icon={<FilePen size={12} strokeWidth={1.8} />} title={t("ui.git.modified")} changes={modified} />
+      <ChangeGroup icon={<FilePlus2 size={12} strokeWidth={1.8} />} title={t("ui.git.added")} changes={added} />
+      <ChangeGroup icon={<CircleHelp size={12} strokeWidth={1.8} />} title={t("ui.git.untracked")} changes={untracked} />
+      <ChangeGroup icon={<FileMinus size={12} strokeWidth={1.8} />} title={t("ui.git.deleted")} changes={deleted} />
+      <ChangeGroup icon={<GitBranch size={12} strokeWidth={1.8} />} title={t("ui.git.other")} changes={other} />
 
       {log?.ok && log.content && (
         <div className="gp-log">
           <div className="gp-group-title">
             <GitBranch size={12} strokeWidth={1.8} />
-            <span>История</span>
+            <span>{t("ui.git.history")}</span>
           </div>
           <pre className="git-log">{log.content}</pre>
         </div>

@@ -1,6 +1,6 @@
 # AXIOM Product and Engineering Roadmap
 
-_Last synchronized: 2026-10-01. This document defines product intent and delivery order; it is not evidence that a feature is complete._
+_Last synchronized: 2026-10-02. This document defines product intent and delivery order; it is not evidence that a feature is complete._
 
 ## Status legend
 
@@ -26,8 +26,9 @@ A feature is complete only after implementation, real tests, and updated documen
 |---|---|---|
 | W1 — Experience foundations | Honest status, coherent theming, live activity, plugin groundwork | 5 done |
 | W2 — Product foundations | Memory, knowledge, orchestration UX, prompts, history, security | 9 done, 0 partial, 0 TODO |
-| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 10 done, 5 partial, 3 TODO |
+| W3 — Extensible platform | Sandboxed plugins, connectors, multitasking, automation, integrations | 11 done, 4 partial, 3 TODO |
 | W4 — Agentic coding environment | Reliable task runtime, planning, context, tools, verification, recovery | 15 done, 0 partial, 0 TODO |
+| W5 — Product maturity | Onboarding, strict agent loop, repo-scale context, IDE workflow, attachments, ecosystem proof, distribution, trust, monetization | 0 done, 0 partial, 9 TODO |
 
 ---
 
@@ -207,7 +208,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.3 Multitasking: Tabs, Background Work, Notifications
 
-**Status:** PARTIAL — concurrent background tasks, per-task cancellation, an honest active-task registry and completion toasts exist; chat tabs, background indexing and the tray are not yet wired · **Priority:** P1
+**Status:** DONE — concurrent detached background tasks with per-task cancellation, an honest active-task registry, project/model/context-isolated chat tabs (core `TabManager` + `ChatSession.tab_*` + Desktop `ChatTabs` strip, persisted across restarts), background knowledge indexing (`knowledge_add/reindex` with `background: true`, `knowledge.event` phases, cancel command), completion toasts and a tray (Open/Quit menu, close-to-tray, live running-task tooltip) · **Priority:** P1
 
 **Outcome:** Independent chats and long jobs remain usable while the user navigates elsewhere.
 
@@ -216,6 +217,8 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 **DoD:** Orchestration survives tab switching, cancellation affects only the selected task, and notifications reflect real terminal state.
 
 **Implemented (core slice):** `ChatSession` now tracks detached/background task runs in a per-task registry (`_task_runs`) with one `CancelToken` per run and a worker→runner map, instead of a single `_task`/`active_task`/`active_task_runner` slot. `task_start`/`task_resume` accept `detached=True` runs concurrently (the foreground path still waits for the in-line generation slot); `task_cancel(task_id)` stops exactly the selected task and never the chat generation or another task; `running_task_ids()` exposes the live active-task set; `busy` reflects any in-flight generation. The step executor resolves its runner from the current worker task, so concurrent tasks observe their own cancellation token. The desktop bridge relaxes the `busy` guard for `task_launch`/`task_continue`, adds a `running_tasks` command, and the UI raises a real completion toast for a background task that finishes while the user is elsewhere (state taken from the task event, never fabricated). Verified by `tests/core/test_multitasking.py` plus the existing task/chat suites.
+
+**Implemented (tabs + background indexing + tray slice):** chat tabs — `core/tabs.py` (`TabManager`, `ChatTab`, persisted `<axiom_home>/tabs.json`, MAX_TABS=24) and `ChatSession.tab_rows/tab_open/tab_activate/tab_close` reusing the existing `set_workspace`/`load_conversation`/`new_conversation` paths (a tab is only a descriptor; the session stays the single runtime core; background tasks keep running across switches). The bridge returns tabs + messages + conversation + workspace in one `tab_open/tab_activate/tab_close` reply so the GUI switches with one round trip; `tests/core/test_tabs_w33.py` and a bridge round-trip cover two-project isolation, close-follows-neighbour and blank-conversation semantics. Background knowledge indexing — `knowledge_add_collection`/`knowledge_reindex` take `detached=True` (bridge arg `background`), run the incremental store pass in a background asyncio task (single-flight per collection), emit `knowledge.event` started/completed/failed/cancelled phases over the bridge-wide subscription, and expose `knowledge_indexing`/`knowledge_cancel_index`; the reply honestly reports `pending` and stats arrive only from the real terminal event. Desktop — `ChatTabs` strip (active tab, Ctrl+T, Ctrl+Tab cycling, per-tab close, running-task badge, Global Chat globe), `addKnowledgeCollection`/`reindexKnowledge` now background with completion toasts from events, live `running_tasks` count refreshed on every task event, and a tray (Rust `tray-icon` feature: Open/Quit menu, left-click show, `tray_set_state` tooltip mirroring the real running-task count, close-to-tray keeps background work alive). Verified by the suites above (`59 passed` for tabs/multitasking/i18n/bridge), `tsc --noEmit`, `cargo check` and Ruff.
 
 ## W3.4 Answer Artifacts
 
@@ -229,7 +232,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.5 Full MCP UX and Skills Manager
 
-**Status:** PARTIAL — contracts exist · **Priority:** P2
+**Status:** DONE — `MCPManager` gains `describe()`/`probe()`/`test()`/`restart()` over the stdio JSON-RPC client (honest `last_error`/`last_log`), bridge commands `mcp_servers`/`mcp_add`/`mcp_remove`/`mcp_restart`/`mcp_test` persist to `Config.mcp_servers`; skills expose `skills_list`/`skills_pin`/`skills_unpin`/`skills_suggest` with manual pins persisted to `Config.pinned_skills` (re-applied on boot). Desktop adds `MCP` and `Навыки` settings panels: add/remove/restart/test servers (a real tool call runs from the GUI, clicking a tool chip), honest status/log, skill content inspection, enable (pin) and task-based suggestion via `resolve_for_task` with global/project/plugin sources · **Priority:** P2
 
 **Outcome:** Users can manage MCP servers and project-relevant skills without editing config files.
 
@@ -259,7 +262,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.8 Language, Command Palette, and Updates
 
-**Status:** PARTIAL — `core/i18n.py` (RU/EN catalog + `translate()`/`locales()` + `Config.locale`), portable mode (`AXIOM_PORTABLE`/`.axiom-portable` in `axiom_home`) and settings backup/restore (`core/settings_backup.py`, safe zip) exist; component-text replacement and signed update channels remain · **Priority:** P2
+**Status:** PARTIAL — `core/i18n.py` (RU/EN catalog + `translate()`/`locales()` + `Config.locale`, now incl. 12 `ui.*` navigation keys), portable mode (`AXIOM_PORTABLE`/`.axiom-portable` in `axiom_home`), settings backup/restore (`core/settings_backup.py`, safe zip) and navigation i18n (Desktop side-tabs + topbar via the `i18n` bridge command + `lib/i18n.ts` projection, snapshot drift-tested) exist; command palette and signed update channels remain · **Priority:** P2
 
 **Outcome:** RU/EN users get consistent navigation, recoverable settings, and secure updates.
 
@@ -269,7 +272,7 @@ W3 turns AXIOM into a user-extensible environment while keeping local use the de
 
 ## W3.9 Chat 2.0: Branches, Pins, Bookmarks, Search, Export
 
-**Status:** PARTIAL — alternates, copy, regenerate, continue, real Markdown/JSON export (`core/chat_export.py` + `chat_export` bridge) and persisted bookmarks (`Conversation.bookmarks` + `HistoryStore.set_bookmark`) exist; branch promotion, in-conversation `Ctrl+F`, quote-to-prompt, attachments and PDF remain · **Priority:** P2 · **Stage:** 7
+**Status:** PARTIAL — alternates, copy, regenerate, continue, branch promotion (`Message.alternates` + `regenerate` preserves + `list_branches`/`promote_branch` + `branch_list`/`branch_promote` bridge, swap without loss, persisted per-chat), real Markdown/JSON export (`core/chat_export.py` + `chat_export` bridge), persisted bookmarks (`Conversation.bookmarks` + `HistoryStore.set_bookmark`), in-conversation `Ctrl+F` (Desktop transcript find bar over mounted content + thinking, `Enter`/`Shift+Enter` navigation, honest `n/m` counter; TUI keeps its transcript bar) and quote-to-prompt (Desktop `Цитировать` on each message quotes the current selection — or the whole message — into the composer as a `> ` blockquote) exist; attachments and PDF remain · **Priority:** P2 · **Stage:** 7
 
 **Outcome:** Conversations support controlled experimentation and long-term navigation.
 
@@ -557,6 +560,102 @@ inactive tasks that returns to the chat. The same view renders per-file diffs fr
 **DoD:** The scenario passes repeatedly without network, starts from a clean workspace, proves real files/checks, recovers one failure, resumes after interruption, and detects a deliberately broken regression.
 ---
 
+# W5 — Product maturity
+
+W5 turns AXIOM from a working harness into the product it is meant to be: a local-first desktop AI coding environment that a new user can open, understand, and trust within minutes. W5 adds no second core, no second runtime, and no parallel permission system — it makes the existing W1–W4 stack strict-by-default, measurable, distributable, and monetizable.
+
+## W5.1 First-Run Onboarding and Golden Paths
+
+**Status:** TODO · **Priority:** P0
+
+**Outcome:** A new user goes from install to a first completed task in under 2 minutes without knowing about Ollama, `workspace_root`, or permission modes.
+
+**Delivery:** Add a first-run wizard (workspace folder pick → Ollama reachability check → model pull offer → permission-mode explanation → first task suggestion); three golden-path scenarios (fix a bug, explore an unfamiliar repo, build a tested feature) reachable from the welcome screen; empty states in every panel that link to the next action instead of showing blank space.
+
+**DoD:** A clean install reaches a completed scripted task without opening docs, every empty state has an action, and the wizard never claims success for a step that did not really complete.
+
+## W5.2 Strict-by-Default Task Loop
+
+**Status:** TODO · **Priority:** P0
+
+**Outcome:** Every code task follows explore → plan → execute → verify → review, with tests/linter/diff-review on by default instead of opt-in.
+
+**Delivery:** Make the W4.8 verification loop mandatory for code tasks (bounded repair, explicit surfacing on failure); require plan + diff review before completion; make dangerous-action blocking (W4.9 policy) non-bypassable from the task path; allow explicit opt-out per task with the opt-out recorded in trajectory.
+
+**DoD:** A code task cannot complete without real checks and a real diff, skipped verification is explicit in Task State, and the opt-out path is covered by tests.
+
+## W5.3 Repo-Scale Context and Agent Evals
+
+**Status:** TODO · **Priority:** P0
+
+**Outcome:** The agent honestly sees large repositories (symbol graph + incremental index), and every agent improvement is measured instead of felt.
+
+**Delivery:** Extend `project_index`/`knowledge` with an incremental symbol index (mtime/hash invalidation, heavy-dir pruning, never whole-project in prompt); add `axiom eval` over 20–30 fixed coding tasks (plan quality, file selection precision, check pass rate, repair success) with JSON reports comparable across runs; wire evals into CI as a non-live deterministic suite.
+
+**DoD:** A 10k-file repo indexes incrementally without loading the whole project into context, eval scores reproduce across runs, and a regression in evals blocks the claim of agent improvement.
+
+## W5.4 IDE Workflow: Command Palette Everywhere, Central Task View
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** AXIOM feels like an IDE with an agent, not a chat with panels: `Ctrl+K` drives everything, the task — not the transcript — is the center.
+
+**Delivery:** Global `Ctrl+K`/`Ctrl+Shift+P` palette over files, chats, tasks, commands, settings, and plugin actions (extends W3.8/W3.10 registries); code view with breadcrumbs/minimap/go-to-definition hooks into the W5.3 index; parallel-task queue with visible isolation (extends W3.3 tabs + W4.6 subagents); full keyboard navigation of task/diff/review flows (shared with W3.18).
+
+**DoD:** All primary flows are reachable and completable from the palette, the central task view matches bridge events, and no new parallel task system is introduced.
+
+## W5.5 Attachments in the Loop: Screenshots, Logs, PDF
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** Dropping a screenshot, log file, or PDF into a task actually feeds the task — completing W3.7/W3.9 PARTIAL scope.
+
+**Delivery:** Drag-and-drop + clipboard-paste attachments (images, logs, PDF) that land in task context with honest availability reporting (OCR via compatible local model, explicit failure when the model cannot read the modality); PDF export of real conversations; attachment references survive restart via Task State.
+
+**DoD:** An attached screenshot/log/PDF reaches the model or fails with an explicit reason before use, exports contain real messages/metrics, and unavailable capabilities are reported — never silently ignored.
+
+## W5.6 Ecosystem Proof: Marketplace and External Adapters
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** The plugin/MCP/headless platform is proven by outsiders: one-click install and real VS Code/browser/CI usage without core-team help.
+
+**Delivery:** One-click plugin marketplace (install/update/disable with sandbox + scope display, extends W3.1); 5 reference plugins maintained as the conformance suite; one external contributor completing the plugin path using only docs; live MCP ecosystem verification (real servers, tracked separately from the W3.5 UX); W3.6 WebSocket transport + W3.16 VS Code adapter + browser context-capture completed against the canonical Task Runtime.
+
+**DoD:** A sample plugin installs and runs with one click under declared scopes, the same Task Runtime executes VS Code-submitted tasks with matching events, and no adapter duplicates agent logic.
+
+## W5.7 Distribution: Installer, Portable, Signed Updates
+
+**Status:** TODO · **Priority:** P1
+
+**Outcome:** Users install once and stay current: bundled installer, portable mode, and signed auto-updates with a real release cycle.
+
+**Delivery:** One-click installer that checks/installs Ollama and offers a starter model; finished portable mode (extends W3.8); signed Tauri update channel + `Check for updates`; formal versioning — `CHANGELOG.md Unreleased` rotates into versioned sections on release, roadmap wave counts move only on verified completion.
+
+**DoD:** A clean machine installs and runs offline with a local model, portable settings survive restart, an update verifies its signature before applying, and every release has a versioned changelog entry.
+
+## W5.8 Trust: Audit Log, Sandbox-by-Default, Crash Recovery UX
+
+**Status:** TODO · **Priority:** P0
+
+**Outcome:** Users can answer "what did the agent touch and why" — every mutation is auditable, risky work is sandboxed, recovery is visible.
+
+**Delivery:** Append-only audit log (tool, args hash, risk tier, approval decision, timestamp) queryable from UI/TUI; sandbox-by-default for risky commands with dry-run preview (extends W4.7/W4.9); user-visible crash-recovery story ("restored N tasks, M files changed, K approvals pending") built on the existing atomic Task State; explicit offline-capability map (what works with no network).
+
+**DoD:** Every workspace mutation is traceable to a task/step/approval, risky commands run contained or with explicit approval, a killed process restarts with an accurate recovery summary, and no audit entry contains key material.
+
+## W5.9 Monetization Clarity and Opt-In Telemetry
+
+**Status:** TODO · **Priority:** P2
+
+**Outcome:** The answer to "why pay when Ollama is free" is obvious: local is always free, payment buys hosted smarts, sync, and team features — and product decisions use real opt-in data.
+
+**Delivery:** Explicit free/pro boundary (local Ollama + all W1–W4 free forever; PRO = hosted smart models + sync + team memory + priority queue) surfaced in AccountView; opt-in telemetry (TTFT, eval tok/s, task success/failure classes, no prompts/keys) feeding W5.3 eval priorities; pricing/docs updated alongside (`docs/payments-yoomoney.md`, README).
+
+**DoD:** A free user loses nothing that works today, PRO features are gated by entitlement — not by hiding local capability — and telemetry off is the default with zero network calls.
+
+---
+
 # Cross-cutting acceptance
 
 The agent is accepted only when it can:
@@ -601,6 +700,7 @@ Network tests use explicit live markers. A skipped live test is not reported as 
 
 | Date | Change |
 |---|---|
+| 2026-10-02 | Added W5 Product Maturity wave (9 TODO items W5.1–W5.9: onboarding, strict task loop, repo context+evals, IDE palette, attachments, ecosystem proof, distribution, trust/audit, monetization/telemetry). |
 | 2026-10-01 | Completed W3.12/W3.13/W3.14: Explorer per-file `M/A/U` markers (extracted `parseGitStatus` + node tests), terminal rerun button + per-workspace history, and Git panel `git_checkpoint`/`git_rollback` (snapshot + confirmed rollback). W3 wave now `6 done, 6 partial, 6 TODO`. |
 | 2026-10-01 | Completed W3.4: `ToolResultEvent.data` + `Message.artifacts` now persist validated artifacts (survive history reload), and the desktop renders tables/comparisons/checklists/Mermaid/charts inline (`ArtifactView` + `lib/artifacts.ts`) with MD/CSV/SVG/PNG export buttons (client-side SVG→canvas PNG rasterization). W3 wave now `3 done, 9 partial, 6 TODO`. |
 | 2026-10-01 | Completed W4.15: the scripted model now makes a deliberately wrong edit so the real pytest fails once, then repairs and passes (fail→repair + broken-regression detection through the real pipeline); `tests/core/test_e2e_scripted.py` verifies it via the real bridge `_handle`. W4 wave now `15 done, 0 partial, 0 TODO` — fully closed. |

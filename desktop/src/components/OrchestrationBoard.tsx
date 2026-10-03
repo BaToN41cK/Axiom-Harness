@@ -29,15 +29,17 @@ import type {
   OrchestrationStepKind,
 } from "../types";
 import { toolLabel } from "../hooks/useAxiom";
+import { useLocale } from "../lib/locale";
+import { plural } from "../lib/i18n";
 import { formatRunTime } from "../lib/orchestration";
 
 /** Real phase order of a run (`orchestrator.run`). */
 const PHASES: { id: string; label: string }[] = [
-  { id: "planning", label: "План" },
-  { id: "working", label: "Работа" },
-  { id: "review", label: "Review" },
-  { id: "verification", label: "Проверка" },
-  { id: "done", label: "Итог" },
+  { id: "planning", label: "ui.orch.phase.planning" },
+  { id: "working", label: "ui.orch.phase.working" },
+  { id: "review", label: "ui.orch.phase.review" },
+  { id: "verification", label: "ui.orch.phase.verification" },
+  { id: "done", label: "ui.orch.phase.done" },
 ];
 
 function phaseIndex(phase: string): number {
@@ -84,19 +86,20 @@ function AgentStatusIcon({ status }: { status: OrchestrationAgent["status"] }) {
 }
 
 const AGENT_STATUS_LABEL: Record<OrchestrationAgent["status"], string> = {
-  pending: "в очереди",
-  running: "работает",
-  done: "готов",
-  failed: "ошибка",
-  cancelled: "остановлен",
+  pending: "ui.orch.status.pending",
+  running: "ui.orch.status.running",
+  done: "ui.orch.status.done",
+  failed: "ui.orch.status.failed",
+  cancelled: "ui.orch.status.cancelled",
 };
 
 /** One worker card: model, live action, tool counters and its own last thought. */
 function AgentCard({ agent, live }: { agent: OrchestrationAgent; live: boolean }) {
+  const { t, locale, strings } = useLocale();
   const [open, setOpen] = useState(false);
   const identity = agent.model
     ? `${agent.provider ?? "?"} / ${agent.model}`
-    : agent.provider ?? "модель не объявлена";
+    : agent.provider ?? t("ui.orch.no_model");
   const trace = [agent.thought, agent.answer].filter(Boolean).join("\n\n");
 
   return (
@@ -106,7 +109,7 @@ function AgentCard({ agent, live }: { agent: OrchestrationAgent; live: boolean }
           <AgentStatusIcon status={agent.status} />
         </span>
         <span className="orch-agent-name">{agent.label}</span>
-        <span className="orch-agent-state">{AGENT_STATUS_LABEL[agent.status]}</span>
+        <span className="orch-agent-state">{t(AGENT_STATUS_LABEL[agent.status])}</span>
       </div>
       <div className="orch-agent-model" title={identity}>
         <Cpu size={11} strokeWidth={1.8} />
@@ -114,7 +117,7 @@ function AgentCard({ agent, live }: { agent: OrchestrationAgent; live: boolean }
       </div>
       {agent.lastTool && (
         <div className="orch-agent-action" title={agent.lastTarget ?? ""}>
-          <span>{toolLabel(agent.lastTool)}</span>
+          <span>{toolLabel(agent.lastTool, locale, strings)}</span>
           {agent.lastTarget && <code>{agent.lastTarget}</code>}
         </div>
       )}
@@ -139,7 +142,7 @@ function AgentCard({ agent, live }: { agent: OrchestrationAgent; live: boolean }
         {trace && (
           <button className="orch-trace-toggle" onClick={() => setOpen((v) => !v)}>
             <ChevronDown size={11} strokeWidth={1.9} className={"chevron" + (open ? " open" : "")} />
-            <span>{live && agent.status === "running" ? "ход мыслей" : "детали"}</span>
+            <span>{live && agent.status === "running" ? t("ui.orch.trace_thought") : t("ui.orch.trace_details")}</span>
           </button>
         )}
       </div>
@@ -157,13 +160,14 @@ function AgentCard({ agent, live }: { agent: OrchestrationAgent; live: boolean }
 
 /** One tool row of the timeline: agent, action, target, state, duration. */
 function ActivityRow({ step }: { step: OrchestrationStep }) {
+  const { locale, strings } = useLocale();
   return (
     <li className={"orch-step " + step.state}>
       <span className="orch-step-icon">
         <StepIcon kind={step.kind} />
       </span>
       <span className="orch-step-actor">{step.actor}</span>
-      <span className="orch-step-tool">{toolLabel(step.tool)}</span>
+      <span className="orch-step-tool">{toolLabel(step.tool, locale, strings)}</span>
       {step.target && (
         <code className="orch-step-target" title={step.target}>
           {step.target}
@@ -186,16 +190,17 @@ function ActivityRow({ step }: { step: OrchestrationStep }) {
 /** Collapsible timeline of every real tool call of the run. */
 function ActivityLog({ steps, live }: { steps: OrchestrationStep[]; live: boolean }) {
   const [open, setOpen] = useState(live);
+  const { t, locale, strings } = useLocale();
   if (steps.length === 0) return null;
   const failed = steps.filter((step) => step.state === "failed").length;
   return (
     <div className="orch-activity">
       <button className="orch-activity-head" onClick={() => setOpen((v) => !v)}>
         <Workflow size={13} strokeWidth={1.8} />
-        <span>Ход выполнения</span>
+        <span>{t("ui.orch.activity")}</span>
         <span className="orch-activity-meta">
-          {steps.length} шаг(ов)
-          {failed > 0 && <span className="orch-badge bad">{failed} ошибок</span>}
+          {plural("ui.orch.step", steps.length, locale, strings)}
+          {failed > 0 && <span className="orch-badge bad">{t("ui.orch.errors", { n: String(failed) })}</span>}
         </span>
         <ChevronDown size={13} strokeWidth={1.8} className={"chevron" + (open ? " open" : "")} />
       </button>
@@ -261,6 +266,7 @@ export default function OrchestrationBoard({
   const duration = state.finishedAt
     ? state.durationMs ?? state.finishedAt - state.startedAt
     : elapsedMs;
+  const { t } = useLocale();
   const tone = PHASE_TONE[state.phase] ?? "";
   const current = phaseIndex(state.phase);
   const running = state.agents.filter((agent) => agent.status === "running").length;
@@ -277,8 +283,8 @@ export default function OrchestrationBoard({
       ? "PASSED"
       : state.verification.ok === false
         ? "FAILED"
-        : "без вердикта"
-    : "не запускалась";
+        : t("ui.orch.no_verdict")
+    : t("ui.orch.not_run");
 
   return (
     <div className={"orch-board" + (live ? " live" : "") + (tone ? " " + tone : "")}>
@@ -287,16 +293,16 @@ export default function OrchestrationBoard({
           <Workflow size={15} strokeWidth={1.7} />
         </span>
         <div className="orch-board-title">
-          <strong>Оркестрация</strong>
+          <strong>{t("ui.orch.title")}</strong>
           <span className="orch-board-task" title={state.task}>
-            {state.task || "задача не передана"}
+            {state.task || t("ui.orch.no_task")}
           </span>
         </div>
         <div className="orch-board-meta">
           {running > 0 && (
             <span className="orch-live-pill">
               <span className="live-dot" />
-              {running} активн.
+              {t("ui.orch.active", { n: String(running) })}
             </span>
           )}
           <span className="orch-time">{formatRunTime(duration)}</span>
@@ -315,7 +321,7 @@ export default function OrchestrationBoard({
             }
           >
             <span className="orch-phase-dot" />
-            <span className="orch-phase-label">{phase.label}</span>
+            <span className="orch-phase-label">{t(phase.label)}</span>
           </li>
         ))}
       </ol>
@@ -348,7 +354,7 @@ export default function OrchestrationBoard({
             </span>
           }
         >
-          <p className="orch-review-text">{state.review.text || "ответ не получен"}</p>
+          <p className="orch-review-text">{state.review.text || t("ui.orch.no_review")}</p>
           {state.review.issues.length > 0 && (
             <ul className="orch-list bad">
               {state.review.issues.map((issue, index) => (
@@ -369,7 +375,7 @@ export default function OrchestrationBoard({
       {reports && (
         <Section
           icon={<ListChecks size={13} strokeWidth={1.8} />}
-          title="Отчёты агентов"
+          title={t("ui.orch.reports_title")}
           tone={failedReports.length > 0 ? "warn" : "ok"}
           badge={<span className="orch-badge">{reports.length}</span>}
         >
@@ -380,19 +386,19 @@ export default function OrchestrationBoard({
                 className={"orch-report" + (report.error ? " failed" : "")}
               >
                 <header>
-                  <strong>{report.agent ?? "агент"}</strong>
+                  <strong>{report.agent ?? t("ui.orch.agent")}</strong>
                   <span className="orch-report-model">
                     {report.provider_id ?? "?"}
                     {report.model ? ` / ${report.model}` : ""}
                   </span>
                 </header>
-                <p>{report.content ?? report.error ?? "нет отчёта"}</p>
+                <p>{report.content ?? report.error ?? t("ui.orch.no_report")}</p>
                 {report.tools_used != null && (
                   <footer className="orch-report-foot">
-                    <span>инструментов: {report.tools_used}</span>
-                    {report.tools_ok != null && <span className="ok">ok {report.tools_ok}</span>}
+                    <span>{t("ui.orch.tools_used", { n: String(report.tools_used) })}</span>
+                    {report.tools_ok != null && <span className="ok">{t("ui.orch.tools_ok", { n: String(report.tools_ok) })}</span>}
                     {report.tools_failed ? (
-                      <span className="bad">ошибок {report.tools_failed}</span>
+                      <span className="bad">{t("ui.orch.tools_failed", { n: String(report.tools_failed) })}</span>
                     ) : null}
                   </footer>
                 )}
@@ -411,7 +417,7 @@ export default function OrchestrationBoard({
             <span className={"orch-badge " + (verificationTone ?? "")}>{verificationLabel}</span>
           }
         >
-          <p>{state.verification.summary ?? state.verification.error ?? "сводка не получена"}</p>
+          <p>{state.verification.summary ?? state.verification.error ?? t("ui.orch.no_summary")}</p>
         </Section>
       )}
 
@@ -430,12 +436,12 @@ export default function OrchestrationBoard({
           {state.completed ? (
             <>
               <Check size={13} strokeWidth={2.3} />
-              <span>Готово — проверка пройдена</span>
+              <span>{t("ui.orch.verdict.ok")}</span>
             </>
           ) : (
             <>
               <TriangleAlert size={13} strokeWidth={1.9} />
-              <span>Есть замечания reviewer или проверка не прошла</span>
+              <span>{t("ui.orch.verdict.bad")}</span>
             </>
           )}
         </div>

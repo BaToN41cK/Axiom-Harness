@@ -8,6 +8,9 @@
  */
 
 import type { LiveMessage, ModelInfo } from "../types";
+import { t as tr, tVar } from "../lib/i18n";
+
+type Strings = Record<string, string> | null | undefined;
 
 /** Monotonic id for live (in-flight) assistant/user messages. */
 let liveId = 0;
@@ -77,20 +80,28 @@ export function resolveModel(models: ModelInfo[], needle: string): ModelInfo | n
   );
 }
 
-/** Human label of a tool as shown in the UI. */
-export function toolLabel(name: string): string {
-  if (name === "web_search") return "Веб-поиск";
-  if (name === "fetch_url") return "Чтение страницы";
-  if (name === "list_files") return "Просмотр папки";
-  if (name === "read_file") return "Чтение файла";
-  if (name === "write_file") return "Запись файла";
-  if (name === "edit_file") return "Редактирование";
-  if (name === "search_text") return "Поиск по коду";
-  if (name === "search_files") return "Поиск файлов";
-  if (name === "run_command") return "Терминал";
-  if (name === "inspect_project") return "Осмотр проекта";
-  if (name.startsWith("git_")) return "Git";
-  return name;
+/** Human label of a tool as shown in the UI (W3.8: via the RU/EN catalog). */
+export function toolLabel(name: string, locale: unknown = "ru", strings?: Strings): string {
+  const key =
+    name === "web_search" ? "ui.tool.web_search"
+    : name === "fetch_url" ? "ui.tool.fetch_url"
+    : name === "list_files" ? "ui.tool.list_files"
+    : name === "read_file" ? "ui.tool.read_file"
+    : name === "write_file" ? "ui.tool.write_file"
+    : name === "edit_file" ? "ui.tool.edit_file"
+    : name === "search_text" ? "ui.tool.search_text"
+    : name === "search_files" ? "ui.tool.search_files"
+    : name === "run_command" ? "ui.tool.run_command"
+    : name === "inspect_project" ? "ui.tool.inspect_project"
+    : name === "run_tests" ? "ui.tool.run_tests"
+    : name === "run_linter" ? "ui.tool.run_linter"
+    : name === "build_project" ? "ui.tool.build_project"
+    : name === "verify_changes" ? "ui.tool.verify_changes"
+    : name.startsWith("git_") ? "ui.tool.git"
+    : null;
+  if (key === null) return name;
+  const hit = tr(key, locale, strings);
+  return hit === key ? name : hit;
 }
 
 /** What a tool is actually working on (query, URL, ...). */
@@ -109,18 +120,30 @@ export function toolTarget(_name: string, args: Record<string, unknown>): string
   return pick("command", "path", "pattern", "glob", "source", "destination");
 }
 
-export function toolStatusText(name: string, args: Record<string, unknown>): string {
+export function toolStatusText(
+  name: string,
+  args: Record<string, unknown>,
+  locale: unknown = "ru",
+  strings?: Strings,
+): string {
   const target = toolTarget(name, args);
-  if (name === "web_search") return target ? `Ищет: «${target}»` : "Ищет в интернете…";
-  if (name === "fetch_url") return target ? `Читает: ${target}` : "Читает страницу…";
-  if (name === "list_files") return target ? `Смотрит папку: ${target}` : "Смотрит файлы…";
-  if (name === "read_file") return target ? `Читает: ${target}` : "Читает файл…";
-  if (name === "write_file") return target ? `Пишет: ${target}` : "Пишет файл…";
-  if (name === "edit_file") return target ? `Правит: ${target}` : "Редактирует…";
-  if (name === "search_text" || name === "search_files") return target ? `Ищет: «${target}»` : "Ищет по проекту…";
-  if (name === "run_command") return target ? `Выполняет: ${target}` : "Выполняет команду…";
-  if (name.startsWith("git_")) return "Git…";
-  return toolLabel(name);
+  const pick = (withTarget: string, plain: string): string => {
+    if (target) return tVar(withTarget, locale, strings ?? null, { target });
+    return tr(plain, locale, strings);
+  };
+  if (name === "web_search") return pick("ui.toolstatus.searching", "ui.toolstatus.searching_plain");
+  if (name === "fetch_url") return pick("ui.toolstatus.reading_page", "ui.toolstatus.reading_page_plain");
+  if (name === "list_files") return pick("ui.toolstatus.browsing", "ui.toolstatus.browsing_plain");
+  if (name === "read_file") return pick("ui.toolstatus.reading_file", "ui.toolstatus.reading_file_plain");
+  if (name === "write_file") return pick("ui.toolstatus.writing_file", "ui.toolstatus.writing_file_plain");
+  if (name === "edit_file") return pick("ui.toolstatus.editing", "ui.toolstatus.editing_plain");
+  if (name === "search_text" || name === "search_files") return pick("ui.toolstatus.searching_project", "ui.toolstatus.searching_project_plain");
+  if (name === "run_command") return pick("ui.toolstatus.running", "ui.toolstatus.running_plain");
+  if (name === "run_tests" || name === "run_linter" || name === "build_project" || name === "verify_changes") {
+    return tr("ui.toolstatus.checks", locale, strings);
+  }
+  if (name.startsWith("git_")) return tr("ui.toolstatus.git", locale, strings);
+  return toolLabel(name, locale, strings);
 }
 
 /**
@@ -128,41 +151,46 @@ export function toolStatusText(name: string, args: Record<string, unknown>): str
  * the text of the status pill. The structured board renders every step, so only
  * the one-line status is derived here. Returns null for kinds without a status.
  */
-export function orchestrationProgress(event: {
-  kind: string;
-  actor: string;
-  summary: string;
-}): string | null {
+export function orchestrationProgress(
+  event: {
+    kind: string;
+    actor: string;
+    summary: string;
+  },
+  locale: unknown = "ru",
+  strings?: Strings,
+): string | null {
   const actor = event.actor || "orchestrator";
+  const vars = { actor, summary: event.summary };
   switch (event.kind) {
     case "orchestration.command":
     case "orchestrator.plan":
-      return "Оркестрация: план…";
+      return tr("ui.orch.plan", locale, strings);
     case "agent.start":
-      return `Оркестрация: ${actor} выполняет задачу…`;
+      return tVar("ui.orch.agent_run", locale, strings ?? null, vars);
     case "agent.done":
-      return `Оркестрация: ${actor} готов`;
+      return tVar("ui.orch.agent_done", locale, strings ?? null, vars);
     case "agent.failed":
-      return `Оркестрация: ${actor} — ошибка`;
+      return tVar("ui.orch.agent_failed", locale, strings ?? null, vars);
     case "subagent.model":
-      return `Оркестрация: ${actor} → ${event.summary}`;
+      return tVar("ui.orch.model", locale, strings ?? null, vars);
     case "subagent.reasoning":
-      return `Оркестрация: ${actor} — думает…`;
+      return tVar("ui.orch.reasoning", locale, strings ?? null, vars);
     case "subagent.answer":
-      return `Оркестрация: ${actor} — пишет…`;
+      return tVar("ui.orch.answer", locale, strings ?? null, vars);
     case "subagent.tool.call":
     case "subagent.tool.result":
-      return `Оркестрация: ${actor} — ${event.summary}`;
+      return tVar("ui.orch.tool", locale, strings ?? null, vars);
     case "orchestrator.review":
-      return "Оркестрация: review…";
+      return tr("ui.orch.review", locale, strings);
     case "verification.completed":
-      return "Оркестрация: verification…";
+      return tr("ui.orch.verification", locale, strings);
     case "orchestrator.done":
-      return "Оркестрация: завершена";
+      return tr("ui.orch.done", locale, strings);
     case "orchestration.cancelled":
-      return "Оркестрация остановлена";
+      return tr("ui.orch.cancelled", locale, strings);
     case "orchestration.failed":
-      return "Оркестрация: сбой";
+      return tr("ui.orch.failed", locale, strings);
     default:
       return null;
   }

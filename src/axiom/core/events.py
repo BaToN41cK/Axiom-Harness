@@ -33,6 +33,11 @@ class Message(BaseModel):
     #: Validated structured artifacts attached to this message (W3.4). Stored as
     #: raw dicts so history persistence stays decoupled from artifact validation.
     artifacts: list[dict] = Field(default_factory=list)
+    #: W3.9 branch promotion: previous regenerated versions of this assistant
+    #: answer (oldest first). ``content`` always holds the ACTIVE branch, so
+    #: promoting ``alternates[i]`` swaps it with ``content`` — no data is lost
+    #: and the choice persists via the regular history save.
+    alternates: list[str] = Field(default_factory=list)
 
 
 class ReasoningChunk(BaseModel):

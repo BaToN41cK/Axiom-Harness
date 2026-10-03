@@ -284,8 +284,18 @@ class ChatSession:
         #: Interactive shell session owned by the GUI terminal panel
         #: (managed entirely by the desktop bridge; None in TUI/CLI).
         self.gui_shell: ShellSession | None = None
+        #: W3.3 — in-flight detached knowledge indexing runs, keyed by
+        #: collection name. One background indexing pass per collection; a
+        #: second request while one runs reports ``pending``.
+        self._knowledge_runs: dict[str, asyncio.Task] = {}
         #: Profile manager — system prompt profiles
         self.profiles = ProfileManager()
+        #: W3.3 — open chat tabs (project/model/context-isolated). The manager
+        #: is pure state + persistence; ChatSession drives the real workspace/
+        #: model/conversation switches when a tab is activated.
+        from axiom.core.tabs import TabManager
+
+        self.tabs = TabManager()
         # --- Harness (п.1-5): провайдеры, каталог моделей, агенты ---
         from axiom.core.agents import AgentRegistry
         from axiom.core.providers.catalog import ModelCatalog
@@ -366,6 +376,9 @@ class ChatSession:
             # W4.5: load global/project disk skills for the boot workspace.
             self.skills.load_workspace_skills(
                 _Path(root).expanduser() if root else None)
+            # W3.5: re-apply the user's manually pinned skills across restarts.
+            for _skill_id in getattr(self.config, "pinned_skills", []) or []:
+                self.skills.pin(str(_skill_id), source="manual")
         except Exception:
             self._project_memory = None
         self.agent.attach_harness(bus=self.bus, trajectory=self.trajectory,
@@ -451,6 +464,32 @@ class ChatSession:
         return await self.mcp.register_all(self.tools)
 
     # ------------------------------------------------------ harness (п.20-22)
+
+    def skills_rows(self) -> list[dict]:
+        """Skills as GUI rows (W3.5): label, source, content, triggers, tools, pin."""
+        pinned = set(self.skills.pinned())
+        rows: list[dict] = []
+        for skill in self.skills.all():
+            rows.append({
+                "id": skill.id,
+                "label": skill.label or skill.id,
+                "source": skill.source,
+                "instructions": skill.instructions,
+                "tools": list(skill.tools),
+                "triggers": list(skill.triggers),
+                "pinned": skill.id in pinned,
+            })
+        # Built-ins first (stable), then disk skills (global before project).
+        order = {"builtin": 0, "global": 1, "project": 2, "plugin": 3}
+        rows.sort(key=lambda r: (order.get(r["source"], 9), r["id"]))
+        return rows
+
+    def _save_pinned_skills(self) -> None:
+        """Persist the manually pinned skills into ``Config.pinned_skills``."""
+        manual = self.skills.pinned_by("manual")
+        if getattr(self.config, "pinned_skills", None) != manual:
+            self.config.pinned_skills = manual
+            self.config.save()
 
     def memory_rows(self) -> list[dict]:
         """Memory items as UI rows (project store first, then global).
@@ -597,23 +636,91 @@ class ChatSession:
             rows.append(store.status())
         return rows
 
-    async def knowledge_add_collection(self, name: str, path: str) -> dict:
-        """Register a collection and index it (real, incremental)."""
+    async def knowledge_add_collection(self, name: str, path: str, *,
+                                       detached: bool = False) -> dict:
+        """Register a collection and index it (real, incremental).
+
+        W3.3: with ``detached=True`` the indexing itself runs in the background
+        (the registry entry is written synchronously so the collection is
+        immediately visible) and the reply reports ``pending`` instead of the
+        final stats. Progress and the terminal result arrive as
+        ``knowledge.event`` bus events, so the UI stays responsive while a
+        large folder is indexed.
+        """
         error = self.knowledge.add(name, path)
         if error is not None:
             return {"ok": False, "error": error}
-        return await self.knowledge_reindex(name)
+        return await self.knowledge_reindex(name, detached=detached)
 
-    async def knowledge_reindex(self, name: str) -> dict:
+    async def knowledge_reindex(self, name: str, *, detached: bool = False) -> dict:
         store = self.knowledge.get(name)
         if store is None:
             return {"ok": False, "error": f"Unknown collection: {name}"}
+        if detached:
+            return self._knowledge_reindex_detached(name)
         self.knowledge.configure_embedder(self.config.ollama_url, self.knowledge.embed_model)
         stats = await asyncio.to_thread(store.index, self.knowledge.embedder)
         status = store.status()
         return {"ok": True, "stats": stats.to_dict(), "collection": status}
 
+    #: W3.3 — in-flight detached knowledge indexing runs, keyed by collection.
+    def _emit_knowledge_event(self, name: str, phase: str, payload: dict) -> None:
+        data = {"type": "knowledge", "collection": name, "phase": phase, **payload}
+        self.bus.emit("knowledge.event", data)
+
+    def _knowledge_reindex_detached(self, name: str) -> dict:
+        """W3.3: start one background indexing run for a collection.
+
+        A collection never has two concurrent indexing runs: a second request
+        while one is in flight reports ``pending`` (the running pass already
+        covers the new files — indexing is incremental and idempotent).
+        """
+        current = self._knowledge_runs.get(name)
+        if current is not None and not current.done():
+            return {"ok": True, "pending": True, "collection": name}
+        store = self.knowledge.get(name)
+        if store is None:  # removed between validation and the run start
+            return {"ok": False, "error": f"Unknown collection: {name}"}
+
+        async def _run() -> None:
+            self._emit_knowledge_event(name, "started", {})
+            try:
+                self.knowledge.configure_embedder(
+                    self.config.ollama_url, self.knowledge.embed_model)
+                live = self.knowledge.get(name)
+                if live is None:  # the collection was removed meanwhile
+                    self._emit_knowledge_event(name, "failed", {"error": "collection removed"})
+                    return
+                stats = await asyncio.to_thread(live.index, self.knowledge.embedder)
+                self._emit_knowledge_event(name, "completed", {
+                    "stats": stats.to_dict(), "collection": live.status()})
+            except asyncio.CancelledError:
+                self._emit_knowledge_event(name, "cancelled", {})
+            except Exception as exc:  # indexing failure is reported, never swallowed
+                _LOG.warning("Knowledge indexing failed for %s: %s", name, exc)
+                self._emit_knowledge_event(name, "failed", {"error": str(exc)})
+
+        self._knowledge_runs[name] = asyncio.get_running_loop().create_task(_run())
+        return {"ok": True, "pending": True, "collection": name}
+
+    def knowledge_cancel_index(self, name: str) -> bool:
+        """W3.3: cancel one collection's background indexing, if it runs."""
+        run = self._knowledge_runs.get(name)
+        if run is None or run.done():
+            return False
+        run.cancel()
+        return True
+
+    def knowledge_indexing(self) -> list[str]:
+        """Names of collections being indexed right now (W3.3)."""
+        return sorted(
+            name for name, run in self._knowledge_runs.items() if not run.done()
+        )
+
     def knowledge_remove_collection(self, name: str) -> bool:
+        run = self._knowledge_runs.get(name)
+        if run is not None and not run.done():
+            run.cancel()
         return self.knowledge.remove(name)
 
     async def knowledge_search_rows(self, query: str, *, limit: int = 5) -> list[dict]:
@@ -2027,6 +2134,122 @@ class ChatSession:
             self.conversation.title = " ".join(title.split())[:80]
         return renamed
 
+    # --------------------------------------------------------------- chat tabs
+
+    def _current_workspace_str(self) -> str | None:
+        root = self.workspace_root
+        return str(root) if root is not None else None
+
+    def _sync_active_tab(self) -> None:
+        """Mirror the live conversation/workspace/model onto the active tab.
+
+        W3.3: a tab is only a descriptor; the ChatSession stays the single
+        source of truth. This keeps the active tab's descriptor honest after a
+        send, model switch, or workspace change without duplicating state.
+        """
+        tab = self.tabs.active()
+        if tab is None:
+            return
+        title = self.conversation.title if self.conversation.messages else tab.title
+        self.tabs.update(
+            tab.id,
+            title=title,
+            conversation_id=self.conversation.id if self.conversation.messages else None,
+            workspace=self._current_workspace_str(),
+            model=self.active_model.name if self.active_model else None,
+        )
+
+    def tab_rows(self) -> list[dict]:
+        """UI projection of the open tabs with the live active one synced."""
+        self._ensure_default_tab()
+        self._sync_active_tab()
+        return self.tabs.rows()
+
+    def _ensure_default_tab(self) -> None:
+        """Guarantee one active tab bound to the current conversation (W3.3).
+
+        The first ``tab_rows`` call (or one after every tab was closed)
+        adopts the live conversation/workspace/model so the strip is never
+        empty and never fabricates a chat the session is not actually on.
+        """
+        if self.tabs.active() is not None:
+            return
+        self.tabs.open(
+            title=self.conversation.title if self.conversation.messages else "New chat",
+            workspace=self._current_workspace_str(),
+            model=self.active_model.name if self.active_model else None,
+            conversation_id=self.conversation.id if self.conversation.messages else None,
+        )
+
+    def tab_open(self, *, workspace_set: bool = False, workspace: str | None = None) -> dict:
+        """Open a new chat tab and activate it.
+
+        By default the new tab inherits the current project; pass
+        ``workspace_set=True`` with an explicit ``workspace`` (or ``None`` for
+        Global Chat) to isolate it from the current project. The real switch is
+        performed by :meth:`tab_activate` right after.
+        """
+        self._sync_active_tab()
+        target_ws = workspace if workspace_set else self._current_workspace_str()
+        tab = self.tabs.open(
+            workspace=target_ws,
+            model=self.active_model.name if self.active_model else None,
+            activate=False,
+        )
+        self.tab_activate(tab.id)
+        return self.tabs.rows()
+
+    def tab_activate(self, tab_id: str, *, sync_outgoing: bool = True) -> dict:
+        """Switch the session to a tab's project, model and conversation.
+
+        Reuses the existing ``set_workspace``/``clear_workspace``,
+        ``load_conversation``/``new_conversation`` and ``switch_model`` paths —
+        no parallel runtime. Background tasks keep running in the task registry
+        regardless of which tab is in front. ``sync_outgoing`` is False only
+        when the previously active tab was just closed (nothing to persist).
+        """
+        if self.busy and self._task is not None and not self._task.done():
+            raise ValueError("Stop the active generation before switching tabs")
+        # Persist the outgoing tab's live state before leaving it.
+        if sync_outgoing:
+            self._sync_active_tab()
+        tab = self.tabs.get(tab_id)
+        if tab is None:
+            raise ValueError("Unknown tab")
+        # 1. Project isolation: move to the tab's workspace (or Global Chat).
+        current_ws = self._current_workspace_str()
+        if tab.workspace != current_ws:
+            if tab.workspace:
+                self.set_workspace(tab.workspace)
+            else:
+                self.clear_workspace()
+        # 2. Context isolation: open the tab's own conversation (or a blank one).
+        if tab.conversation_id and tab.conversation_id != self.conversation.id:
+            loaded = self.load_conversation(tab.conversation_id)
+            if loaded is None:
+                # The stored chat is gone (deleted/pruned): start a clean one
+                # and forget the dangling id instead of failing the switch.
+                self.new_conversation()
+                self.tabs.update(tab.id, conversation_id=None)
+        elif not tab.conversation_id and self.conversation.messages:
+            self.new_conversation()
+        self.tabs.activate(tab.id)
+        return self.tabs.rows()
+
+    def tab_close(self, tab_id: str) -> dict:
+        """Close a tab and activate its neighbour (reusing tab_activate)."""
+        was_active = self.tabs.active_id == tab_id
+        nxt = self.tabs.close(tab_id)
+        if was_active and nxt is not None:
+            # Re-run the activation path so the project/context follow. The
+            # outgoing tab is already gone, so do not sync live state onto the
+            # neighbour (that would overwrite its stored project/conversation).
+            try:
+                self.tab_activate(nxt.id, sync_outgoing=False)
+            except ValueError:
+                pass
+        return self.tabs.rows()
+
     # -------------------------------------------------------------- workspace
 
     @property
@@ -2376,11 +2599,11 @@ class ChatSession:
             yield event
 
     async def regenerate(self, *, force_search: bool = False) -> AsyncIterator[ChatEvent]:
-        """Re-run the last turn: the stored assistant answer is dropped first.
+        """Re-run the last turn: the stored assistant answer becomes a branch.
 
-        The backend really rewrites history here (no client-side illusion):
-        the previous assistant message is removed from the conversation before
-        the agent runs again on the same context.
+        W3.9 branch promotion: the previous assistant message is not dropped —
+        its content is preserved as an alternate branch on the NEW answer, so
+        the user can later promote any alternate back to active without loss.
         """
         if self.busy:
             yield ErrorEvent(
@@ -2401,8 +2624,20 @@ class ChatSession:
             )
             yield Done(state=GenerationState.ERROR)
             return
+        preserved_alternates: list[str] = []
+        preserved_message: Message | None = None
         if self.conversation.messages and self.conversation.messages[-1].role == "assistant":
-            self.conversation.messages.pop()
+            old = self.conversation.messages.pop()
+            preserved_message = old
+            preserved_alternates = list(old.alternates)
+            if old.content:
+                preserved_alternates.append(old.content)
+            # Bound the branch list so history cannot grow unbounded.
+            preserved_alternates = preserved_alternates[-20:]
+        else:
+            # No assistant answer yet: nothing to preserve, just generate.
+            preserved_alternates = []
+        messages_before = len(self.conversation.messages)
         self._save_conversation()
         async for event in self._run_turn(
             last_user,
@@ -2410,8 +2645,14 @@ class ChatSession:
             search_query=None,
             images=[],
             record_user=False,
+            branch_alternates=preserved_alternates,
         ):
             yield event
+        # If generation produced no new assistant message (empty/error), the
+        # popped branch would be lost — restore it honestly instead.
+        if preserved_message is not None and len(self.conversation.messages) == messages_before:
+            self.conversation.messages.append(preserved_message)
+            self._save_conversation()
 
     async def edit_last_user(self, text: str, *, force_search: bool = False) -> AsyncIterator[ChatEvent]:
         """Replace the last user turn and everything after it, then re-run.
@@ -2502,6 +2743,7 @@ class ChatSession:
         search_query: str | None,
         images: list[str],
         record_user: bool,
+        branch_alternates: list[str] | None = None,
     ) -> AsyncIterator[ChatEvent]:
         """Shared body of ``send`` / ``regenerate`` — one real generation cycle."""
         if self.busy:
@@ -2579,7 +2821,8 @@ class ChatSession:
 
         queue: asyncio.Queue[ChatEvent | None] = asyncio.Queue()
         self._task = asyncio.create_task(
-            self._produce(text, queue, force_search=force_search, search_query=search_query)
+            self._produce(text, queue, force_search=force_search, search_query=search_query,
+                          branch_alternates=branch_alternates)
         )
         while True:
             event = await queue.get()
@@ -2716,7 +2959,8 @@ class ChatSession:
         )
 
     def _record_turn(self, user_text: str, content: str, thinking: str,
-                     artifacts: list[dict] | None = None) -> None:
+                     artifacts: list[dict] | None = None,
+                     alternates: list[str] | None = None) -> None:
         """Store the assistant turn (partial output is kept on cancellation)."""
         if content or thinking or artifacts:
             self.conversation.messages.append(
@@ -2726,9 +2970,80 @@ class ChatSession:
                     thinking=thinking or None,
                     created_at=time.time(),
                     artifacts=list(artifacts or []),
+                    alternates=list(alternates or []),
                 )
             )
         self._save_conversation()
+
+    def list_branches(self, message_index: int,
+                      conversation_id: str | None = None) -> dict | None:
+        """Return the active content plus alternates for one assistant message.
+
+        W3.9: read-only inspection, no history rewrite. Returns None when the
+        conversation/message does not exist or is not an assistant turn.
+        """
+        conv = self.conversation
+        if conversation_id is not None and conversation_id != self.conversation.id:
+            loaded = self.history_store.load(conversation_id)
+            if loaded is None:
+                return None
+            conv = loaded
+        if not 0 <= message_index < len(conv.messages):
+            return None
+        msg = conv.messages[message_index]
+        if msg.role != "assistant":
+            return None
+        return {
+            "message_index": message_index,
+            "content": msg.content,
+            "alternates": list(msg.alternates),
+        }
+
+    def promote_branch(self, message_index: int, branch_index: int,
+                       conversation_id: str | None = None) -> bool:
+        """Make ``alternates[branch_index]`` the active answer (W3.9).
+
+        The swap preserves every version: the previously active ``content``
+        moves into ``alternates[branch_index]``. The choice is persisted via
+        the regular history save, survives restart, and touches only the one
+        conversation. New turns use the promoted content because the model
+        context is built from the active ``content``.
+        Returns False on unknown chat, bad indices, non-assistant message
+        or while a generation is running.
+        """
+        if self.busy:
+            return False
+        if conversation_id is not None and conversation_id != self.conversation.id:
+            conv = self.history_store.load(conversation_id)
+            if conv is None:
+                return False
+            if not 0 <= message_index < len(conv.messages):
+                return False
+            msg = conv.messages[message_index]
+            if msg.role != "assistant":
+                return False
+            if not 0 <= branch_index < len(msg.alternates):
+                return False
+            msg.alternates[branch_index], msg.content = msg.content, msg.alternates[branch_index]
+            # A promoted branch shows its own text; stale reasoning from the
+            # previous active answer must not be mixed into it.
+            msg.thinking = None
+            try:
+                self.history_store.save(conv)
+            except OSError:
+                return False
+            return True
+        if not 0 <= message_index < len(self.conversation.messages):
+            return False
+        msg = self.conversation.messages[message_index]
+        if msg.role != "assistant":
+            return False
+        if not 0 <= branch_index < len(msg.alternates):
+            return False
+        msg.alternates[branch_index], msg.content = msg.content, msg.alternates[branch_index]
+        msg.thinking = None
+        self._save_conversation()
+        return True
 
     async def _auto_verify(self) -> None:
         """Авто-verify (п.12): после файловых правок BUILD/TEST/LINT via run_command."""
@@ -2807,6 +3122,7 @@ class ChatSession:
         *,
         force_search: bool,
         search_query: str | None,
+        branch_alternates: list[str] | None = None,
     ) -> None:
         """Run the agent loop and push every real event into the queue."""
         content_parts: list[str] = []
@@ -2837,7 +3153,7 @@ class ChatSession:
             if not content:
                 queue.put_nowait(self._empty_answer_event(thinking))
                 self._final_status_to(queue, GenerationState.ERROR)
-                self._record_turn(text, "", thinking)
+                self._record_turn(text, "", thinking, alternates=branch_alternates)
                 return
             status = self._final_status(GenerationState.COMPLETED)
             if status:
@@ -2853,7 +3169,8 @@ class ChatSession:
                     load_ms=metrics.get("load_ms"),
                 )
             )
-            self._record_turn(text, content, thinking, artifacts=artifacts)
+            self._record_turn(text, content, thinking, artifacts=artifacts,
+                             alternates=branch_alternates)
             try:
                 await self._auto_verify()
             except Exception:
@@ -2866,14 +3183,15 @@ class ChatSession:
         except asyncio.CancelledError:
             self._final_status_to(queue, GenerationState.CANCELLED)
             self._record_turn(text, "".join(content_parts).strip(), "".join(thinking_parts).strip(),
-                              artifacts=artifacts)
+                              artifacts=artifacts, alternates=branch_alternates)
             raise
         except AxiomError as exc:
             # Provider fallback (п.17): пока контент не стримился — пробуем цепочку.
             if not content_parts and self.router.should_fallback(exc) and self.router.config.chain():
                 handled = False
                 try:
-                    handled = await self._fallback_produce(text, queue, content_parts, thinking_parts)
+                    handled = await self._fallback_produce(text, queue, content_parts, thinking_parts,
+                                                           branch_alternates)
                 except Exception:
                     handled = False
                 if handled:
@@ -2898,6 +3216,7 @@ class ChatSession:
         queue: asyncio.Queue[ChatEvent | None],
         content_parts: list[str],
         thinking_parts: list[str],
+        branch_alternates: list[str] | None = None,
     ) -> bool:
         """Цепочка fallback-провайдеров (п.17): 429/timeout/unavailable → следующий target.
 
@@ -2951,7 +3270,8 @@ class ChatSession:
                 if status:
                     queue.put_nowait(status)
                 queue.put_nowait(Done(state=GenerationState.COMPLETED, duration_ms=duration_ms))
-                self._record_turn(text, content, "".join(thinking_parts).strip())
+                self._record_turn(text, content, "".join(thinking_parts).strip(),
+                                  alternates=branch_alternates)
                 self.trajectory.append(
                     "router.fallback.ok", f"{target.provider_id}/{target.model}",
                     actor="router", data={"duration_ms": duration_ms},

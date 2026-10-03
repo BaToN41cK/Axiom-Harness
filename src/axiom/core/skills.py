@@ -248,3 +248,8 @@ class SkillRegistry:
 
     def pinned(self) -> list[str]:
         return sorted(self._pin_sources)
+
+    def pinned_by(self, source: str) -> list[str]:
+        """Ids pinned by a specific source (e.g. ``"manual"`` for the Skills GUI)."""
+        return sorted(skill_id for skill_id, sources in self._pin_sources.items()
+                      if source in sources)

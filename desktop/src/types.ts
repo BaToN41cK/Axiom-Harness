@@ -125,6 +125,27 @@ export interface ChatHit {
   updated_at: number;
 }
 
+/** W3.3: one open chat tab (project/model/context-isolated conversation slot). */
+export interface ChatTab {
+  id: string;
+  title: string;
+  conversation_id: string | null;
+  /** Absolute workspace path, or null for Global Chat (no project tools). */
+  workspace: string | null;
+  model: string | null;
+  created_at: number;
+  updated_at: number;
+  active: boolean;
+}
+
+/** W3.3: reply of tab_open / tab_activate / tab_close. */
+export interface TabSwitchResult {
+  tabs: ChatTab[];
+  messages: StoredMessage[];
+  conversation: Conversation | null;
+  workspace: { current: ProjectInfo | null };
+}
+
 export interface StoredMessage {
   role: Role;
   content: string;
@@ -189,6 +210,7 @@ export interface AxiomConfig {
   router_budget: "performance" | "balanced" | "economy";
   router_primary: { provider_id: string; model: string } | null;
   router_fallbacks: { provider_id: string; model: string }[];
+  locale: "en" | "ru";
 }
 
 export interface SourceItem {
@@ -232,9 +254,11 @@ export interface KnowledgeHit {
   text: string;
 }
 
-/** W2.2: result of an index/reindex run. */
+/** W3.2: result of an index/reindex run. */
 export interface KnowledgeIndexResult {
   ok: boolean;
+  /** W3.3: true when the indexing runs in the background. */
+  pending?: boolean;
   stats?: {
     files_seen: number;
     indexed: number;
@@ -243,7 +267,7 @@ export interface KnowledgeIndexResult {
     skipped: number;
     errors: string[];
   };
-  collection?: KnowledgeRow;
+  collection?: KnowledgeRow | string;
   error?: string;
 }
 
@@ -274,7 +298,14 @@ export type CoreEvent =
   | { type: "task"; kind: string; task_id: string; timestamp: number; task: Task }
   | ({ type: "permission_request" } & PermissionRequest)
   | { type: "error"; message: string; kind: string; hint: string | null }
-  | ({ type: "done" } & DoneMetrics);
+  | ({ type: "done" } & DoneMetrics)
+  | {
+      type: "knowledge";
+      collection: string;
+      phase: "started" | "completed" | "failed" | "cancelled";
+      stats?: { indexed: number; unchanged: number };
+      error?: string;
+    };
 
 export type TaskState =
   | "pending" | "analyzing" | "planning" | "executing" | "verifying"
@@ -602,6 +633,34 @@ export interface PluginInstallResult {
   name: string;
   status: "installed" | "updated";
   manifest: PluginRow;
+}
+
+/** W3.5 — one external MCP server with last probe status (bridge projection). */
+export interface McpServerRow {
+  name: string;
+  command: string[];
+  tools: string[];
+  ok: boolean;
+  error: string | null;
+  log: string;
+}
+
+/** W3.5 — one skill (builtin/global/project/plugin) with pin state. */
+export interface SkillRow {
+  id: string;
+  label: string;
+  source: string;
+  instructions: string;
+  tools: string[];
+  triggers: string[];
+  pinned: boolean;
+}
+
+/** W4.5 — one discovered rule source for the composer context chips. */
+export interface RuleRow {
+  scope: "global" | "project" | "directory" | string;
+  path: string;
+  chars: number;
 }
 
 /** W2.1 Curated Memory — one persisted memory item (projection of MemoryItem). */

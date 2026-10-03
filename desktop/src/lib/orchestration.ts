@@ -411,35 +411,38 @@ export function formatRunTime(ms: number): string {
  * summary instead of the board. It is generated from the same real state, never
  * invented, and the structured board stays the primary rendering.
  */
-export function orchestrationMarkdown(state: OrchestrationState): string {
+export function orchestrationMarkdown(
+  state: OrchestrationState,
+  t: (key: string, vars?: Record<string, string>) => string,
+): string {
   const lines: string[] = [];
   const title =
     state.phase === "cancelled"
-      ? "Оркестрация остановлена"
+      ? t("ui.orch.stopped_short")
       : state.completed === false
-        ? "Оркестрация завершена с замечаниями"
-        : "Оркестрация завершена";
+        ? t("ui.orch.done_remarks")
+        : t("ui.orch.done_plain");
   lines.push(`## ${title}`);
   if (state.mode) {
     const agents = state.agents.map((agent) => agent.label).join(", ") || "—";
-    lines.push(`Режим: \`${state.mode}\` · агенты: ${agents}`);
+    lines.push(t("ui.orch.export.mode", { mode: state.mode, agents }));
   }
-  if (state.error) lines.push(`Ошибка: ${state.error}`);
+  if (state.error) lines.push(t("ui.orch.export.error", { error: state.error }));
 
   if (state.reports.length > 0) {
-    lines.push("", "## Отчёты агентов");
+    lines.push("", `## ${t("ui.orch.export.reports")}`);
     for (const report of state.reports) {
       const identity = `${report.provider_id ?? "?"}${report.model ? `/${report.model}` : ""}`;
-      const body = report.content ?? report.error ?? "нет отчёта";
+      const body = report.content ?? report.error ?? t("ui.orch.export.no_report");
       lines.push(`- **${agentLabel(report.agent ?? "agent")}** (\`${identity}\`): ${body}`);
     }
   } else if (state.agents.length > 0) {
-    lines.push("", "## Агенты");
+    lines.push("", `## ${t("ui.orch.export.agents")}`);
     for (const agent of state.agents) {
       const identity = `${agent.provider ?? "?"}${agent.model ? `/${agent.model}` : ""}`;
       lines.push(
         `- **${agent.label}** (\`${identity}\`): ${agent.status}` +
-          `, инструментов ok ${agent.toolsOk}, ошибок ${agent.toolsFailed}` +
+          t("ui.orch.export.tools_ok", { ok: String(agent.toolsOk), failed: String(agent.toolsFailed) }) +
           (agent.error ? ` — ${agent.error}` : ""),
       );
     }
@@ -447,7 +450,7 @@ export function orchestrationMarkdown(state: OrchestrationState): string {
 
   if (state.review) {
     const verdict = state.review.verdict === "rework" ? "REWORK" : "APPROVED";
-    lines.push("", `## Reviewer (${verdict})`, state.review.text || "ответ не получен");
+    lines.push("", `## ${t("ui.orch.export.reviewer", { verdict })}`, state.review.text || t("ui.orch.export.no_review"));
     if (state.review.issues.length) lines.push(`Issues: ${state.review.issues.join("; ")}`);
     if (state.review.requiredChanges.length) {
       lines.push(`Required: ${state.review.requiredChanges.join("; ")}`);
@@ -460,7 +463,7 @@ export function orchestrationMarkdown(state: OrchestrationState): string {
     lines.push(
       "",
       `## Verification (${verdict})`,
-      state.verification.summary ?? state.verification.error ?? "не запускалась",
+      state.verification.summary ?? state.verification.error ?? t("ui.orch.export.not_run"),
     );
   }
 
@@ -471,7 +474,7 @@ export function orchestrationMarkdown(state: OrchestrationState): string {
 
   if (state.finishedAt) {
     const duration = state.durationMs ?? state.finishedAt - state.startedAt;
-    lines.push("", `Время выполнения: ${formatRunTime(duration)}`);
+    lines.push("", t("ui.orch.export.duration", { duration: formatRunTime(duration) }));
   }
   return lines.join("\n");
 }
