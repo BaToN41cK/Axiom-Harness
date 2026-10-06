@@ -1,7 +1,7 @@
 // Release-security audit (P0). Chat markdown is sanitized first
 // (react-markdown + rehype-sanitize); this page CSP is the second boundary.
 // Remote allowlist mirrors real resources only: payment API (connect),
-// favicon service (img), Vite dev server (dev only). Plugin panels (srcdoc
+// favicon service (img). Plugin panels (srcdoc
 // iframe + inline script, e.g. bundled hello-panel) inherit this policy and
 // degrade to static cards — documented tradeoff, see docs/plugins.md §11.6.
 // The shell plugin is not initialized in src-tauri/src/lib.rs, so its

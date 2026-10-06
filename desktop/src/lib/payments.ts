@@ -47,21 +47,43 @@ export const paymentToken = {
 
 async function api<T>(path: string, options: { token?: string | null; body?: unknown } = {}): Promise<T> {
   if (!API_BASE) throw new Error("Платёжный сервер не указан в этой сборке AXIOM.");
-  const response = await fetch(`${API_BASE}${path}`, {
-    signal: AbortSignal.timeout(20_000),
-    method: options.body === undefined ? "GET" : "POST",
-    headers: {
-      ...(options.body === undefined ? {} : { "content-type": "application/json" }),
-      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
-  const value = await response.json().catch(() => ({})) as { detail?: unknown } & T;
-  if (!response.ok) {
+  // A VPN exit-country switch drops in-flight connections. Transient network
+  // failures get a short backoff retry before surfacing an error — the same
+  // idea as the Python core's retry_async.
+  const delays = [0, 1000, 3000];
+  const retryable = (status: number) => status >= 500 || status === 429 || status === 408;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt]) await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}${path}`, {
+        signal: AbortSignal.timeout(20_000),
+        method: options.body === undefined ? "GET" : "POST",
+        headers: {
+          ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+          ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+    } catch (error) {
+      // Transport failure: dropped connection, timeout, DNS — retry.
+      lastError = error;
+      continue;
+    }
+    const value = await response.json().catch(() => ({})) as { detail?: unknown } & T;
+    if (response.ok) return value;
     const detail = typeof value.detail === "string" ? value.detail : "Не удалось связаться с платёжным сервером.";
+    if (retryable(response.status)) {
+      // Server error / rate limit may pass on its own — retry.
+      lastError = new Error(detail);
+      continue;
+    }
+    // A 4xx business rejection (bad credentials, expired token) will not fix
+    // itself by retrying: surface it immediately.
     throw new Error(detail);
   }
-  return value;
+  throw lastError instanceof Error ? lastError : new Error("Не удалось связаться с платёжным сервером.");
 }
 
 export const payments = {

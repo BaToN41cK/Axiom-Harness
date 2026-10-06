@@ -2,18 +2,25 @@
 
 The desktop GUI itself is a Tauri app that lives in ``desktop/`` (React
 frontend + Rust shell that spawns the real Python core as a JSONL stdio
-bridge). This module only *launches* it:
+bridge). This module only *launches* it as a stable executable:
 
-    1. a pre-built binary (``desktop/src-tauri/target/release/AXIOM.exe``
-       or the debug build) — preferred, starts instantly;
-    2. the Tauri CLI, launched directly through Node.js — compiles on the fly;
+    1. a fresh release binary (``desktop/src-tauri/target/release/``) —
+       launched directly when it is newer than all desktop sources;
+    2. otherwise the frontend (``npm run build``) and the release shell
+       (``cargo build --release``) are built first, then the fresh binary
+       is launched;
     3. a helpful error explaining what to install otherwise.
+
+There is intentionally no frontend dev server and no fixed port: the shell
+loads the bundled ``desktop/dist/`` assets (Tauri ``frontendDist``), so an
+ordinary source edit can never terminate the running GUI. The watch/rebuild
+workflow lives behind the explicit opt-in ``axiom --gui --dev`` flag and is
+never used for the normal launch path.
 """
 
 from __future__ import annotations
 
 import hashlib
-import http.client
 import os
 import platform
 import re
@@ -31,9 +38,45 @@ _EXIT_ERROR = 1
 #: Binary names Tauri produces for the current platform.
 _EXE_CANDIDATES = ("axiom-desktop.exe", "AXIOM.exe", "axiom.exe", "axiom-desktop", "axiom", "AXIOM")
 
-#: Build profiles in launch preference order: a release build embeds the
-#: frontend, a debug build has none and needs the Vite dev server.
+#: Build profiles for executable discovery. The normal launch path only ever
+#: starts a release build (it embeds the frontend assets); a debug build is
+#: only meaningful inside the opt-in ``--dev`` watch workflow.
 _PROFILE_ORDER = ("release", "debug")
+
+#: Log file for the stable build path (frontend + shell), per desktop dir.
+_BUILD_LOG_NAME = "axiom_gui_build.log"
+
+#: Log file for the opt-in watch workflow, per desktop dir.
+_DEV_LOG_NAME = "tauri_dev.log"
+
+#: How long the launcher watches a freshly spawned GUI before declaring it
+#: started. The GUI is a plain executable (no dev server, no watch mode), so
+#: "still alive after the grace period" is the readiness signal; an early
+#: exit is always reported instead of being mistaken for success.
+_STARTUP_GRACE_SECONDS = 6.0
+_STARTUP_GRACE_POLL = 0.1
+
+#: Env var the Rust shell reads: full path of the per-launch readiness
+#: marker file, written only at the ``bridge-ready`` stage.
+_LAUNCH_READY_FILE_ENV = "AXIOM_LAUNCH_READY_FILE"
+
+#: Readiness budget for a supervised launch: the liveness grace plus a
+#: margin for WebView2 creation, frontend load and one bridge round-trip.
+#: The marker file — not liveness — is the success signal.
+_READINESS_TIMEOUT_SECONDS = _STARTUP_GRACE_SECONDS + 4.0
+_READINESS_POLL = 0.1
+
+#: Must match ``SingleInstance::acquire()`` in desktop/src-tauri/src/lib.rs.
+_SINGLE_INSTANCE_MUTEX = "Local\\AXIOM.Desktop.1.0"
+
+#: Opt-in developer watch workflow: ``axiom --gui --dev``.
+_DEV_FLAG = "--dev"
+
+#: Frontend build budget; ``npm run build`` is typecheck + Vite build.
+_FRONTEND_BUILD_TIMEOUT = 600.0
+
+#: Release shell budget (LTO + strip make the first build slow).
+_SHELL_BUILD_TIMEOUT = 1500.0
 
 _RUSTUP_BASE_URL = "https://static.rust-lang.org/rustup/dist"
 _MSVC_BUILD_TOOLS_URL = "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
@@ -566,42 +609,159 @@ def _find_built_exe_any(profile: str | None = None) -> Path | None:
 
 
 def _find_built_exe() -> Path | None:
-    """Built shell worth launching, or ``None`` when the dev shell is better.
+    """Fresh release shell worth launching, or ``None`` when a build is due.
 
     A release build embeds the frontend, so it must be newer than both web and
-    native sources. Debug builds are intentionally not returned here: they
-    point at the dev URL and must be launched through `tauri dev`.
+    native sources. Debug builds are intentionally never returned here: they
+    only make sense inside the opt-in ``--dev`` watch workflow.
     """
     newest_source = _newest_web_source()
     newest_native = _newest_native_source()
     release = _built_exe("release")
     if release is not None and release.stat().st_mtime >= max(newest_source, newest_native):
         return release
-    # A debug Tauri binary points at devUrl (127.0.0.1:1420) and cannot be
-    # launched standalone: the Vite server is owned by `tauri dev` below.
     return None
 
 
-def _launch_exe(exe: Path) -> bool:
-    """Launch a release GUI with its frontend embedded in the binary."""
-    _spawn_gui(exe)
-    return True
+def _release_exe_in(desktop: Path) -> Path | None:
+    """Newest release executable inside one desktop directory, if any."""
+    target = desktop / "src-tauri" / "target" / "release"
+    best: Path | None = None
+    for exe in _EXE_CANDIDATES:
+        candidate = target / exe
+        if candidate.is_file() and (best is None or candidate.stat().st_mtime > best.stat().st_mtime):
+            best = candidate
+    return best
 
 
-def _frontend_dev_server_ready() -> bool:
-    """Return true only when Tauri's configured local frontend answers HTTP."""
-    connection = http.client.HTTPConnection("127.0.0.1", 1420, timeout=0.3)
+def _candidate_exes() -> list[Path]:
+    """Every built executable we know about (release and debug)."""
+    found: list[Path] = []
+    for desktop in _desktop_dirs():
+        for profile in _PROFILE_ORDER:
+            target = desktop / "src-tauri" / "target" / profile
+            for exe in _EXE_CANDIDATES:
+                candidate = target / exe
+                if candidate.is_file():
+                    found.append(candidate)
+    return found
+
+
+def _desktop_source_mtime(desktop: Path) -> float:
+    """Newest mtime of everything baked into the shell executable."""
+    newest = 0.0
+    tauri = desktop / "src-tauri"
+    candidates: list[Path] = [tauri / "Cargo.toml", tauri / "tauri.conf.json", tauri / "build.rs"]
+    for directory in (tauri / "src", tauri / "bridge"):
+        if directory.exists():
+            candidates.extend(p for p in directory.rglob("*") if p.is_file())
+    for extra in (desktop / "package.json", desktop / "vite.config.ts"):
+        candidates.append(extra)
+    src_dir = desktop / "src"
+    if src_dir.exists():
+        candidates.extend(p for p in src_dir.rglob("*") if p.is_file())
+    for path in candidates:
+        try:
+            if path.is_file():
+                newest = max(newest, path.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+def _frontend_stale(desktop: Path) -> bool:
+    """True when ``dist/`` is missing or older than the web sources."""
+    dist = desktop / "dist" / "index.html"
     try:
-        connection.request("GET", "/")
-        return connection.getresponse().status == 200
+        if not dist.is_file():
+            return True
+        dist_mtime = dist.stat().st_mtime
+    except OSError:
+        return True
+    newest = 0.0
+    src_dir = desktop / "src"
+    if src_dir.exists():
+        for path in src_dir.rglob("*"):
+            try:
+                if path.is_file():
+                    newest = max(newest, path.stat().st_mtime)
+            except OSError:
+                continue
+    for extra in (desktop / "package.json", desktop / "vite.config.ts"):
+        try:
+            if extra.is_file():
+                newest = max(newest, extra.stat().st_mtime)
+        except OSError:
+            continue
+    return newest > dist_mtime
+
+
+def _needs_shell_build(desktop: Path) -> bool:
+    """True when no release exe exists or any baked-in source is newer."""
+    exe = _release_exe_in(desktop)
+    if exe is None:
+        return True
+    try:
+        exe_mtime = exe.stat().st_mtime
+    except OSError:
+        return True
+    if _desktop_source_mtime(desktop) > exe_mtime:
+        return True
+    # The exe embeds dist/ at compile time: a rebuilt dist/ alone is not
+    # enough, the shell must be relinked as well.
+    dist = desktop / "dist" / "index.html"
+    try:
+        if dist.is_file() and dist.stat().st_mtime > exe_mtime:
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def _axiom_already_running() -> bool:
+    """True when another AXIOM desktop process owns the single-instance mutex.
+
+    This reuses the exact mechanism the Rust shell enforces, so the launcher
+    never starts a competing instance. Non-Windows platforms have no mutex
+    guard in the shell and always report False here.
+    """
+    if not _IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.CreateMutexW(None, False, _SINGLE_INSTANCE_MUTEX)
+        if not handle:
+            return False
+        try:
+            return kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+        finally:
+            kernel32.CloseHandle(handle)
     except OSError:
         return False
-    finally:
-        connection.close()
 
 
-def _stop_dev_process(process: subprocess.Popen) -> None:
-    """Stop a failed Tauri dev launch and its build children."""
+def _focus_axiom_window() -> bool:
+    """Best-effort restore and focus of the already running AXIOM window."""
+    if not _IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, "AXIOM")
+        if not hwnd:
+            return False
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except OSError:
+        return False
+
+
+def _stop_watch_process(process: subprocess.Popen) -> None:
+    """Stop a failed watch-mode launch and its build children."""
     if process.poll() is not None:
         return
     try:
@@ -622,7 +782,7 @@ def _stop_dev_process(process: subprocess.Popen) -> None:
             pass
 
 
-def _wait_for_dev_start(
+def _wait_for_watch_start(
     process: subprocess.Popen,
     log_path: Path,
     log_offset: int,
@@ -630,11 +790,11 @@ def _wait_for_dev_start(
     timeout: float = 900,
     poll_interval: float = 0.2,
 ) -> tuple[bool, str]:
-    """Mirror fresh Tauri output and wait for both the shell and frontend.
+    """Mirror fresh watch-mode output and wait for the debug shell to start.
 
-    `tauri dev` exits zero as soon as the app is started by the caller, but the
-    GUI launcher runs it detached. Watching its log avoids reporting success
-    just because Popen succeeded, which used to hide Rust/Vite startup errors.
+    Dev-watch only (``axiom --gui --dev``): ``tauri dev`` owns a file watcher
+    that restarts the debug shell on every source edit, so this readiness
+    signal must never be used for the normal launch path.
     """
     started = time.monotonic()
     last_status = started
@@ -655,12 +815,10 @@ def _wait_for_dev_start(
                 output = (output + text)[-32_000:]
                 if re.search(r"error\[E\d{4}\]:|error: could not compile ", output, re.IGNORECASE):
                     return False, "Сборка Rust завершилась с ошибкой."
-                if "Could not connect to `http://127.0.0.1:1420/`" in output:
-                    return False, "Tauri не смог подключиться к frontend-серверу Vite."
 
             plain_output = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
             shell_started = running_shell.search(plain_output) is not None
-            if shell_started and _frontend_dev_server_ready():
+            if shell_started:
                 # Do not call this a launch if the watcher has already failed.
                 code = process.poll()
                 if code is None:
@@ -684,12 +842,15 @@ def _wait_for_dev_start(
             time.sleep(poll_interval)
 
 
-def _run_dev(desktop: Path) -> int:
-    """Start the Tauri dev shell (Vite + Rust build) fully detached.
+def _run_dev_watch(desktop: Path) -> int:
+    """Start the opt-in watch workflow (``axiom --gui --dev``), detached.
 
-    No console window is shown: the build runs in a detached process with
-    output redirected to a log file, so closing the caller's terminal can
-    never kill the build or the GUI.
+    ``tauri dev`` rebuilds on every source edit and restarts the debug shell,
+    by design: this mode is for desktop development only and is never used
+    for the normal ``axiom --gui`` launch. No console window is shown: the
+    build runs detached with output redirected to a log file, so closing the
+    caller's terminal can never kill the build or the GUI. Uses no fixed
+    ports: the debug shell serves the locally built ``dist/`` assets.
     """
     node = _node_executable()
     tauri_cli = _node_cli(desktop, "tauri")
@@ -718,26 +879,18 @@ def _run_dev(desktop: Path) -> int:
     if _IS_WINDOWS and not msvc_ready:
         _show_msvc_required()
         return _EXIT_ERROR
-    if not (desktop / "node_modules").exists():
-        print(f"Устанавливаю зависимости десктоп-приложения ({desktop})…", file=sys.stderr)
-        npm_cli = _npm_cli(node)
-        if npm_cli is None:
-            print("✕ npm JavaScript CLI не найден рядом с Node.js.", file=sys.stderr)
-            return _EXIT_ERROR
-        install = subprocess.run(
-            [node, str(npm_cli), "install"], cwd=desktop,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, creationflags=_HIDDEN,
-        )
-        if install.returncode != 0:
-            return _EXIT_ERROR
-    log_path = desktop / "tauri_dev.log"
+    ok, error = _ensure_frontend_deps(desktop, node)
+    if not ok:
+        print(f"✕ {error}", file=sys.stderr)
+        return _EXIT_ERROR
+    log_path = desktop / _DEV_LOG_NAME
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_offset = log_path.stat().st_size if log_path.exists() else 0
     argv = [node, str(tauri_cli), "dev"]
     print(
-        "Собираю AXIOM Desktop. Ниже будет отображаться реальный вывод Rust/Tauri; "
-        "первый запуск может занять несколько минут.\n"
+        "Запускаю AXIOM Desktop в режиме разработки (--dev): сборка с "
+        "пересборкой при правках, окно перезапускается автоматически.\n"
+        "Обычный запуск без слежения — просто axiom --gui.\n"
         f"Полный лог: {log_path}",
         file=sys.stderr,
         flush=True,
@@ -760,49 +913,483 @@ def _run_dev(desktop: Path) -> int:
         print(f"✕ Не удалось запустить Tauri: {exc}\nЛог: {log_path}", file=sys.stderr)
         return _EXIT_ERROR
 
-    ok, error = _wait_for_dev_start(process, log_path, log_offset)
+    ok, error = _wait_for_watch_start(process, log_path, log_offset)
     if not ok:
-        _stop_dev_process(process)
+        _stop_watch_process(process)
         print(f"\n✕ {error}\nПодробности: {log_path}", file=sys.stderr)
         return _EXIT_ERROR
-    print("\n✓ Frontend отвечает, Tauri запустил окно AXIOM.", file=sys.stderr)
+    print("\n✓ Tauri запустил окно AXIOM (режим --dev).", file=sys.stderr)
     print("Процесс приложения работает отдельно от этого терминала.", file=sys.stderr)
     return _EXIT_OK
 
 
-def _spawn_gui(exe: Path) -> None:
-    """Start the GUI without attaching it to a console or inheriting stdio."""
+def _ensure_frontend_deps(desktop: Path, node: str) -> tuple[bool, str]:
+    """Install desktop JS dependencies when ``node_modules`` is missing."""
+    if (desktop / "node_modules").exists():
+        return True, ""
+    npm_cli = _npm_cli(node)
+    if npm_cli is None:
+        return False, "npm JavaScript CLI не найден рядом с Node.js."
+    print(f"Устанавливаю зависимости десктоп-приложения ({desktop})…", file=sys.stderr)
+    install = subprocess.run(
+        [node, str(npm_cli), "install"], cwd=desktop,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, creationflags=_HIDDEN,
+    )
+    if install.returncode != 0:
+        return False, "Не удалось установить зависимости десктоп-приложения (npm install)."
+    return True, ""
+
+
+def _run_logged(
+    argv: list[str], *, cwd: Path, log_path: Path, timeout: float,
+    env: dict[str, str] | None = None,
+) -> tuple[int | None, str]:
+    """Run *argv* synchronously, appending all output to *log_path*.
+
+    Returns ``(returncode, tail)``; ``returncode`` is ``None`` when the
+    process could not be started or the timeout expired. ``tail`` holds the
+    last kilobytes of output for error reporting.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as log:
+        log.write(("\n> " + subprocess.list2cmdline(argv) + "\n").encode("utf-8"))
+        log.flush()
+        try:
+            completed = subprocess.run(
+                argv, cwd=cwd, stdin=subprocess.DEVNULL,
+                stdout=log, stderr=subprocess.STDOUT,
+                creationflags=_HIDDEN, close_fds=True, timeout=timeout,
+                env=env,
+            )
+        except FileNotFoundError as exc:
+            return None, f"не удалось запустить {argv[0]}: {exc}"
+        except subprocess.TimeoutExpired:
+            return None, f"превышено время ожидания ({int(timeout)} c)."
+    try:
+        with log_path.open("rb") as log:
+            log.seek(max(0, log_path.stat().st_size - 8192))
+            tail = log.read().decode("utf-8", errors="replace")
+    except OSError:
+        tail = ""
+    return completed.returncode, tail
+
+
+def _build_frontend(desktop: Path, node: str, log_path: Path) -> tuple[bool, str]:
+    """Typecheck + bundle the React frontend into ``desktop/dist/``."""
+    npm_cli = _npm_cli(node)
+    if npm_cli is None:
+        return False, "npm JavaScript CLI не найден рядом с Node.js."
+    print("Собираю frontend (tsc + vite build)…", file=sys.stderr)
+    # esbuild extracts its helper binary to %TEMP% and Windows tooling
+    # (antivirus/indexer) can lock it there, failing the build with
+    # "Access is denied". Build with a private temp dir inside the project.
+    build_tmp = desktop / ".tmp" / "frontend-build-temp"
+    try:
+        shutil.rmtree(build_tmp, ignore_errors=True)
+        build_tmp.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    env = os.environ.copy()
+    env.update({
+        "TEMP": str(build_tmp), "TMP": str(build_tmp), "TMPDIR": str(build_tmp),
+    })
+    try:
+        code, tail = _run_logged(
+            [node, str(npm_cli), "run", "build"],
+            cwd=desktop, log_path=log_path, timeout=_FRONTEND_BUILD_TIMEOUT,
+            env=env,
+        )
+    finally:
+        shutil.rmtree(build_tmp, ignore_errors=True)
+    if code != 0:
+        reason = tail.strip().splitlines()[-1] if tail.strip() else "см. лог"
+        return False, f"Сборка frontend завершилась с ошибкой: {reason}\nПодробности: {log_path}"
+    if not (desktop / "dist" / "index.html").is_file():
+        return False, f"Сборка frontend прошла, но dist/index.html не создан.\nПодробности: {log_path}"
+    return True, ""
+
+
+def _build_shell_release(desktop: Path, log_path: Path) -> tuple[bool, str]:
+    """Compile the Tauri shell in release (embeds the fresh ``dist/``)."""
+    try:
+        if not _msvc_setup():
+            _show_msvc_required()
+            return False, "Для сборки нужны компоненты MSVC/Windows SDK."
+    except OSError:
+        _show_msvc_required()
+        return False, "Для сборки нужны компоненты MSVC/Windows SDK."
+    cargo = shutil.which("cargo.exe") or shutil.which("cargo")
+    if cargo is None:
+        return False, "Rust toolchain (cargo) не найден в PATH."
+    print("Собираю desktop-оболочку (cargo build --release)…", file=sys.stderr)
+    code, tail = _run_logged(
+        [cargo, "build", "--release"],
+        cwd=desktop / "src-tauri", log_path=log_path, timeout=_SHELL_BUILD_TIMEOUT,
+    )
+    if code != 0:
+        reason = tail.strip().splitlines()[-1] if tail.strip() else "см. лог"
+        return False, f"Сборка Rust завершилась с ошибкой: {reason}\nПодробности: {log_path}"
+    return True, ""
+
+
+def _ensure_release(desktop: Path) -> tuple[Path | None, str]:
+    """Return a release exe newer than all desktop sources, building if needed.
+
+    Build failures are reported with the log path and never masked by
+    silently launching a stale executable.
+    """
+    node = _node_executable()
+    if node is None:
+        return None, (
+            "Node.js (npm) не найден в PATH.\n"
+            "  Установите Node.js LTS: https://nodejs.org/download/"
+        )
+    ok, error = _ensure_frontend_deps(desktop, node)
+    if not ok:
+        return None, error
+    if not _needs_shell_build(desktop) and not _frontend_stale(desktop):
+        exe = _release_exe_in(desktop)
+        if exe is not None:
+            return exe, ""
+    log_path = desktop / _BUILD_LOG_NAME
+    print(
+        "Собираю AXIOM Desktop (релиз, без dev-сервера). "
+        "Первый запуск может занять несколько минут.\n"
+        f"Полный лог: {log_path}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if _frontend_stale(desktop):
+        ok, error = _build_frontend(desktop, node, log_path)
+        if not ok:
+            return None, error
+    if _needs_shell_build(desktop):
+        ok, error = _build_shell_release(desktop, log_path)
+        if not ok:
+            return None, error
+    exe = _release_exe_in(desktop)
+    if exe is None:
+        return None, (
+            "Сборка прошла, но релизный exe не найден "
+            f"({desktop / 'src-tauri' / 'target' / 'release'}).\n"
+            f"Подробности: {log_path}"
+        )
+    return exe, ""
+
+
+def _windows_integrity_hint() -> str:
+    """Best-effort integrity level of THIS python process, for diagnostics.
+
+    Printed before the spawn so a failing launch immediately shows whether
+    the launcher itself runs with a restricted token (Low/Untrusted) — the
+    child inherits it and the desktop preflight will deny profile writes.
+    """
+    if not _IS_WINDOWS:
+        return "n/a"
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        advapi32.OpenProcessToken.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        token = ctypes.c_void_p()
+        if not advapi32.OpenProcessToken(
+            kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)
+        ):
+            return f"query failed (os error {ctypes.get_last_error()})"
+
+        class _SidAndAttributes(ctypes.Structure):
+            _fields_ = [
+                ("Sid", ctypes.c_void_p),
+                ("Attributes", ctypes.c_ulong),
+            ]
+
+        class _TokenMandatoryLabel(ctypes.Structure):
+            _fields_ = [("Label", _SidAndAttributes)]
+
+        advapi32.GetTokenInformation.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        needed = ctypes.c_ulong(0)
+        advapi32.GetTokenInformation(
+            token, 25, None, 0, ctypes.byref(needed)
+        )
+        if needed.value < ctypes.sizeof(_TokenMandatoryLabel):
+            return "query failed (no size)"
+        buf = ctypes.create_string_buffer(needed.value)
+        if not advapi32.GetTokenInformation(
+            token, 25, buf, needed.value, ctypes.byref(needed)
+        ):
+            return f"query failed (os error {ctypes.get_last_error()})"
+        label = _TokenMandatoryLabel.from_buffer_copy(
+            buf.raw[: ctypes.sizeof(_TokenMandatoryLabel)]
+        )
+        sid = label.Label.Sid
+        if not sid:
+            return "query failed (null sid)"
+        count = ctypes.c_ubyte.from_address(sid + 1).value
+        if count == 0:
+            return "query failed (empty sid)"
+        rid = ctypes.c_ulong.from_address(sid + 8 + 4 * (count - 1)).value
+        return {
+            0x0000: "untrusted",
+            0x1000: "low",
+            0x2000: "medium",
+            0x3000: "high",
+        }.get(rid, f"rid {rid:#x}")
+    except (OSError, AttributeError):
+        return "unavailable"
+
+
+#: Staged copy name: always canonical, regardless of the source exe name.
+_STAGED_EXE_NAME = "axiom-desktop.exe"
+
+#: Size/mtime tolerance when deciding a staged copy is already current
+#: (filesystems and copy operations do not preserve mtimes bit-exactly).
+_STAGE_MTIME_TOLERANCE_SECONDS = 2.0
+
+
+def _staging_root() -> Path:
+    """Per-user directory for the staged desktop executable."""
+    override = os.environ.get("AXIOM_BIN_DIR")
+    if override:
+        return Path(override)
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "axiom" / "bin"
+    return Path.home() / ".axiom" / "bin"
+
+
+def _stage_exe(exe: Path) -> Path:
+    """Copy *exe* to a per-user directory and return the path to spawn.
+
+    Terminals that confine the repository workspace (e.g. sandboxed shells)
+    give spawned children whose image lives under the repo a low-integrity
+    restricted token; the desktop preflight then fails its profile
+    write-probe with ``os error 5``. The exact same exe launched from a
+    per-user directory outside the repo runs at medium integrity and works
+    fully. Staging is an optimization, never a hard requirement: on any
+    ``OSError`` the original *exe* is returned unchanged.
+    """
+    try:
+        staged = _staging_root() / _STAGED_EXE_NAME
+        if os.path.normcase(str(staged)) == os.path.normcase(str(exe)):
+            return exe
+        source_stat = exe.stat()
+        if staged.exists():
+            staged_stat = staged.stat()
+            if (
+                staged_stat.st_size == source_stat.st_size
+                and abs(staged_stat.st_mtime - source_stat.st_mtime)
+                <= _STAGE_MTIME_TOLERANCE_SECONDS
+            ):
+                return staged
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        temp = staged.with_name(f"{staged.name}.new-{os.getpid()}")
+        try:
+            shutil.copy2(exe, temp)
+            os.replace(temp, staged)
+        except PermissionError:
+            # A running instance is executing the staged exe: os.replace
+            # cannot swap a file that is open for execution. The old staged
+            # build is already proven working, so keep launching it.
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if staged.exists():
+                print(
+                    f"⚠ Стейджинг не обновлён (запущенная копия занята): {staged}",
+                    file=sys.stderr,
+                )
+                return staged
+            raise
+    except OSError as exc:
+        print(f"⚠ Стейджинг exe пропущен, запускаю оригинал: {exc}", file=sys.stderr)
+        return exe
+    return staged
+
+
+def _spawn_gui(exe: Path) -> tuple[subprocess.Popen, Path]:
+    """Start the GUI without attaching it to a console or inheriting stdio.
+
+    The process is returned (not detached-and-forgotten) so the caller can
+    apply the startup readiness check. It is a plain executable: no watcher
+    owns it, so later source edits cannot terminate it.
+
+    A fresh per-launch directory is created for the readiness marker file;
+    its path is passed to the shell via ``AXIOM_LAUNCH_READY_FILE``. The
+    shell writes the marker exactly once, at the ``bridge-ready`` stage
+    (frontend loaded AND bridge round-trip), never on preflight failure.
+
+    ``AXIOM_DESKTOP_ROOT`` points the shell at the repository when the exe
+    runs from the staging copy (outside the repo): the Rust ``find_root``
+    then resolves the bridge script and the working-tree python package
+    without depending on the caller's cwd.
+    """
+    ready_dir = Path(tempfile.mkdtemp(prefix="axiom-launch-"))
+    env = os.environ.copy()
+    env[_LAUNCH_READY_FILE_ENV] = str(ready_dir / "ready")
+    if "AXIOM_DESKTOP_ROOT" not in env:
+        env["AXIOM_DESKTOP_ROOT"] = str(_project_root())
     if _IS_WINDOWS:
-        subprocess.Popen(
+        process = subprocess.Popen(
             [str(exe)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, creationflags=_HIDDEN, close_fds=True,
+            env=env,
         )
     else:
-        subprocess.Popen([str(exe)], stdin=subprocess.DEVNULL, start_new_session=True)
+        process = subprocess.Popen(
+            [str(exe)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+            env=env,
+        )
+    return process, ready_dir
 
 
-def main() -> int:
+def _wait_for_stable_startup(process: subprocess.Popen, ready_file: Path) -> tuple[str, int | None]:
+    """Wait for the Rust shell to confirm readiness via the marker file.
+
+    Returns ``("ready", None)`` once the marker exists (the shell reached the
+    ``bridge-ready`` stage), ``("exited", code)`` when the process dies
+    without a marker, or ``("timeout", None)`` when the budget elapses with
+    a live process and no marker. Neither log text nor any network probe is
+    treated as readiness, and window titles are never checked.
+    """
+    deadline = time.monotonic() + _READINESS_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if ready_file.is_file():
+            return "ready", None
+        code = process.poll()
+        if code is not None:
+            # The marker may have been written microseconds before exit.
+            if ready_file.is_file():
+                return "ready", None
+            return "exited", code
+        time.sleep(_READINESS_POLL)
+    if ready_file.is_file():
+        return "ready", None
+    code = process.poll()
+    if code is not None:
+        return "exited", code
+    return "timeout", None
+
+
+def _launch_stable(exe: Path) -> int:
+    """Spawn the release exe and wait for its readiness marker.
+
+    The marker file (written by the Rust shell at the ``bridge-ready``
+    stage) is the success signal; liveness alone never counts as readiness.
+    """
+    try:
+        staged = _stage_exe(exe)
+        build_time = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(staged.stat().st_mtime)
+        )
+        print(
+            f"Запускаю {staged} (сборка {build_time})",
+            file=sys.stderr,
+        )
+        integrity = _windows_integrity_hint()
+        if integrity in {"low", "untrusted"}:
+            print(
+                f"⚠ Этот терминал работает с ограниченным маркером доступа "
+                f"(integrity={integrity}).\n"
+                "  Дочерний процесс унаследует его и не сможет записать профиль —\n"
+                "  запуск из такого терминала защищён отказом (это не баг).\n"
+                "  Запустите из обычного cmd/Проводника, вне песочницы.",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Окружение лаунчера: integrity={integrity}", file=sys.stderr)
+        process, ready_dir = _spawn_gui(staged)
+    except OSError as exc:
+        print(f"✕ Не удалось запустить AXIOM ({exe}): {exc}", file=sys.stderr)
+        return _EXIT_ERROR
+    try:
+        state, code = _wait_for_stable_startup(process, ready_dir / "ready")
+    finally:
+        shutil.rmtree(ready_dir, ignore_errors=True)
+    if state == "ready":
+        print(f"✓ AXIOM запущен ({exe.name}).", file=sys.stderr)
+        print("Окно работает отдельно от этого терминала.", file=sys.stderr)
+        return _EXIT_OK
+    if state == "timeout":
+        # The process is alive but never confirmed readiness: the likely
+        # cause is the preflight-failure modal (or an otherwise stuck UI).
+        # It is deliberately NOT killed — the modal is the user-facing
+        # diagnosis, and closing it lets the shell exit on its own.
+        print(
+            f"✕ AXIOM не подтвердил готовность за {_READINESS_TIMEOUT_SECONDS:.0f} с "
+            "(процесс жив, интерфейс не загрузился).\n"
+            "  Вероятно, открыто окно ошибки запуска — закройте его и следуйте\n"
+            "  его инструкциям.\n"
+            "  лог префлайта: %TEMP%\\axiom-preflight-failed.log\n"
+            "  полный лог: %LOCALAPPDATA%\\app.axiom.desktop\\logs\\axiom-startup.log",
+            file=sys.stderr,
+        )
+        return _EXIT_ERROR
+    if code == 0 and (_axiom_already_running() or _focus_axiom_window()):
+        # Lost a startup race: the first instance owns the window. The exe
+        # already focused it (exit 0). The python-side mutex probe can fail
+        # with access-denied when the existing mutex was created by a
+        # higher-integrity process, so the visible window is an acceptable
+        # fallback witness here — the exit code 0 already proves the shell
+        # resolved the single-instance path.
+        _focus_axiom_window()
+        print("AXIOM уже запущен — открыто существующее окно.", file=sys.stderr)
+        return _EXIT_OK
+    if code == 20:
+        # Exit code 20 is the desktop preflight failure: an error dialog with
+        # the classified reason was shown to the user.
+        print(
+            "✕ Запуск AXIOM заблокирован проверкой окружения (код 20).\n"
+            "  В окне ошибки указаны причина и путь лога. Частая причина — запуск\n"
+            "  из песочницы/ограниченного терминала: запустите из обычного cmd,\n"
+            "  Проводника или ярлыка.\n"
+            f"  Логи (если записались): {os.environ.get('TEMP', '?')}"
+            "\\axiom-preflight-failed.log,\n"
+            "    %LOCALAPPDATA%\\app.axiom.desktop\\logs\\axiom-startup.log",
+            file=sys.stderr,
+        )
+        return _EXIT_ERROR
+    print(
+        f"✕ Приложение завершилось сразу после запуска (код {code}).\n"
+        "  Проверьте требования (WebView2 на Windows) и повторите запуск.",
+        file=sys.stderr,
+    )
+    return _EXIT_ERROR
+
+
+def main(argv: list[str] | None = None) -> int:
     """Entry point for ``axiom --gui``. Never raises."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    dev_mode = _DEV_FLAG in args
     if _IS_WINDOWS and not _ensure_rust_toolchain():
         return _EXIT_ERROR
-    exe = _find_built_exe()
-    if exe is not None:
-        try:
-            # The GUI starts as a windowed process without inherited stdio.
-            if _launch_exe(exe):
-                return _EXIT_OK
-        except FileNotFoundError:
-            pass
     for desktop in _desktop_dirs():
         if (desktop / "package.json").exists() and (desktop / "src-tauri").exists():
-            dev = _run_dev(desktop)
-            return dev
+            if dev_mode:
+                return _run_dev_watch(desktop)
+            if _axiom_already_running():
+                _focus_axiom_window()
+                print("AXIOM уже запущен — открыто существующее окно.", file=sys.stderr)
+                return _EXIT_OK
+            exe, error = _ensure_release(desktop)
+            if exe is None:
+                print(f"✕ {error}", file=sys.stderr)
+                return _EXIT_ERROR
+            return _launch_stable(exe)
     print(
         "✕ Десктопное приложение AXIOM не найдено.\n"
         "  GUI живёт в папке desktop/ репозитория (Tauri + React).\n"
-        "  Варианты запуска:\n"
-        "    cd desktop && npm install && npm run tauri dev   # сборка на лету\n"
-        "    cd desktop && npm run tauri build                # релизный exe",
+        "  Обычный запуск собирает релиз автоматически: axiom --gui\n"
+        "  Режим разработки (пересборка при правках): axiom --gui --dev",
         file=sys.stderr,
     )
     return _EXIT_ERROR

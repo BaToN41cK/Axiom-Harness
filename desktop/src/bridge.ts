@@ -67,7 +67,15 @@ export async function request<T = unknown>(
   const req = Date.now() * 1000 + Math.floor(Math.random() * 1000);
   return await new Promise<T>((resolve, reject) => {
     pending.set(req, {
-      resolve: resolve as (v: unknown) => void,
+      resolve: (value: unknown) => {
+        // The first successful reply proves the Python core is really
+        // reachable, which is the last startup stage (`bridge-ready`).
+        if (!coreReadyReported) {
+          coreReadyReported = true;
+          void invoke("frontend_ready", { core: true }).catch(() => {});
+        }
+        resolve(value as T);
+      },
       reject,
     });
     void invoke("bridge_request", { payload: { req, cmd, args } }).catch((err) => {
@@ -76,6 +84,9 @@ export async function request<T = unknown>(
     });
   });
 }
+
+/** Guards the one-shot bridge readiness acknowledgement. */
+let coreReadyReported = false;
 
 /** Restart the Python core subprocess (used after Ollama restarts). */
 export async function restartCore(): Promise<void> {
@@ -90,6 +101,18 @@ export async function openExternal(url: string): Promise<void> {
 /** Close AXIOM (used by `/exit`). */
 export async function quitApp(): Promise<void> {
   await invoke("quit_app");
+}
+
+/**
+ * Startup readiness acknowledgement.
+ *
+ * The Rust side deliberately does not treat a live process, `windows=["main"]`
+ * or a valid HWND as readiness — it waits for this signal so a failed launch
+ * surfaces an actionable error instead of an invisible instance. `core` is set
+ * once a real round-trip to the Python core has succeeded.
+ */
+export async function reportFrontendReady(core = false): Promise<void> {
+  await invoke("frontend_ready", { core });
 }
 
 /** Subscribe to async core events (streaming, status, done...). */

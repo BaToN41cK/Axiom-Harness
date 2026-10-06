@@ -89,6 +89,7 @@ import type {
   AgentRow,
   TabSwitchResult,
   TrajectoryViewer,
+  TaskFeedItem,
   TreeNode,
   WorkspaceState,
   SearchProviderChoice,
@@ -181,6 +182,12 @@ export function useAxiom() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const latestTaskEventRef = useRef<Task | null>(null);
+  /** Draft of the left-panel task editor — survives tab/panel switches until saved. */
+  const [taskDraft, setTaskDraft] = useState({ title: "", description: "" });
+  /** Chronological feed of real ``task.*`` events, keyed by task id (§2 center
+   *  panel). Only events the core actually emitted are recorded — never guessed. */
+  const [taskFeed, setTaskFeed] = useState<Record<string, TaskFeedItem[]>>({});
+  const taskFeedSeqRef = useRef(0);
   // W2.4: an ASK tool call that is really blocked until the user answers.
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [liveState, setLiveState] = useState("idle");
@@ -285,9 +292,9 @@ export function useAxiom() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
-  /** Right workbench panel tab (Files/Terminal/Git/Tasks/Documents). Store-held
-   * so the left rail can open a specific panel (e.g. the Taskbook) directly. */
-  const [rightPanelTab, setRightPanelTab] = useState<"files" | "terminal" | "git" | "tasks" | "documents">("files");
+  /** Right workbench panel tab (Files/Terminal/Git/Documents). Store-held
+   * so the left rail can open a specific panel directly. */
+  const [rightPanelTab, setRightPanelTab] = useState<"files" | "terminal" | "git" | "documents">("files");
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [tools, setTools] = useState<ToolInfo[] | null>(null);
@@ -991,6 +998,20 @@ export function useAxiom() {
           const last = latestTaskEventRef.current;
           if (last?.id === event.task.id && last.revision > event.task.revision) break;
           latestTaskEventRef.current = event.task;
+          // §2 center panel: append the real event to the task's chronological
+          // feed so the execution view renders live progress in arrival order.
+          const feedItem: TaskFeedItem = {
+            seq: ++taskFeedSeqRef.current,
+            kind: event.kind,
+            timestamp: event.timestamp,
+            state: event.task.state,
+            detail: event.task.detail,
+            goal: event.task.goal,
+          };
+          setTaskFeed((map) => {
+            const list = map[event.task.id] ?? [];
+            return { ...map, [event.task.id]: [...list.slice(-199), feedItem] };
+          });
           const wasActive = taskActiveRef.current;
           // W3.8: live task states come from the core RU/EN catalog (hoisted:
           // the completion toast below shares the same label lookup).
@@ -1861,6 +1882,11 @@ export function useAxiom() {
     taskActiveRef.current = true;
     latestTaskEventRef.current = null;
     setFocusedTaskId(typeof args.id === "string" ? args.id : null);
+    // A fresh run starts a clean chronological feed for the task so an earlier
+    // run's events are not mistaken for the current one.
+    if (typeof args.id === "string") {
+      setTaskFeed((map) => ({ ...map, [args.id as string]: [] }));
+    }
     const scopeSeq = workspaceSeqRef.current;
     setTaskRequestPending(true);
     beginGeneration();
@@ -1920,9 +1946,13 @@ export function useAxiom() {
     }
   }
 
-  async function createTask(goal: string, plan?: TaskPlan): Promise<Task | null> {
+  async function createTask(
+    goal: string,
+    description?: string,
+    plan?: TaskPlan,
+  ): Promise<Task | null> {
     try {
-      const task = await request<Task>("task_create", { goal, plan });
+      const task = await request<Task>("task_create", { goal, description, plan });
       setTasks((list) => [task, ...list.filter((item) => item.id !== task.id)]);
       return task;
     } catch (err) {
@@ -1933,7 +1963,7 @@ export function useAxiom() {
 
   async function saveTask(
     id: string,
-    updates: { goal?: string; plan?: TaskPlan; state?: string },
+    updates: { goal?: string; plan?: TaskPlan; state?: string; description?: string },
   ): Promise<Task | null> {
     try {
       const task = await request<Task>("task_save", { id, ...updates });
@@ -2039,8 +2069,8 @@ export function useAxiom() {
     });
   }
 
-  /** Opens the right workbench panel on a given tab (Tasks from the left rail). */
-  function openRightPanel(tab: "files" | "terminal" | "git" | "tasks" | "documents") {
+  /** Opens the right workbench panel on a given tab. */
+  function openRightPanel(tab: "files" | "terminal" | "git" | "documents") {
     setRightPanelTab(tab);
     setRightPanelOpen(true);
     try {
@@ -2631,6 +2661,7 @@ export function useAxiom() {
     setFocusedTaskId(null);
     latestTaskEventRef.current = null;
     setTasks([]);
+    setTaskFeed({});
     if (phase === "ready") void refreshTasks();
   }, [workspace?.current?.path, phase]);
 
@@ -3083,6 +3114,9 @@ export function useAxiom() {
   return {
     // boot
     tasks,
+    taskFeed,
+    taskDraft,
+    setTaskDraft,
     taskRequestPending,
     activeTaskId,
     focusedTaskId,

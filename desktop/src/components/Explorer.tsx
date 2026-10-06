@@ -108,8 +108,9 @@ export default function Explorer(props: Props) {
   );
   return (
     <aside className="explorer">
-      <div className="ex-head">
-        <span className="ex-title">Explorer</span>
+      <div className="panel-head">
+        <Folder size={13} strokeWidth={1.8} className="panel-head-icon" />
+        <span className="panel-head-title">{t("ui.tabs.files")}</span>
         <button className="icon-btn tiny" title={t("ui.common.refresh")} onClick={onRefresh}>
           <RefreshCw size={12} strokeWidth={1.8} />
         </button>

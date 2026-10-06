@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { reportFrontendReady } from "./bridge";
 // Local-first fonts and the design-token layer come first: everything below
 // resolves its colours, spacing and typography from these two files.
 import "./styles/fonts.css";
@@ -20,3 +21,10 @@ createRoot(document.getElementById("root")!).render(
     <App />
   </StrictMode>,
 );
+
+// Startup readiness: the UI is mounted, so acknowledge it to the Rust side.
+// A live window/HWND alone is not treated as ready; without this signal the
+// shell reports an actionable startup error instead of staying invisible.
+void reportFrontendReady(false).catch(() => {
+  // Outside a Tauri shell (browser preview / e2e harness) there is no command.
+});

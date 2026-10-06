@@ -18,6 +18,7 @@ _HELP = f"""AXIOM {__version__} — Open Local AI Coding Workspace & Agent Harne
 Usage:
   axiom                     Start the TUI workspace
   axiom --gui               Start the desktop GUI (Tauri app in desktop/)
+  axiom --gui --dev         Dev watch mode: rebuild the GUI on source edits
   axiom run "prompt" --json Run one prompt headlessly, print JSON
   axiom serve [--token T]   Start the localhost API with token auth
   axiom --help              Show this help

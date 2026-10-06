@@ -160,8 +160,6 @@ class Settings:
                 "tauri://localhost",
                 "https://tauri.localhost",
                 "http://tauri.localhost",
-                "http://localhost:1420",
-                "http://127.0.0.1:1420",
             )
         return cls(
             database_path=os.getenv("PAYMENT_DATABASE_PATH", "./data/axiom-payments.sqlite3"),

@@ -4233,3 +4233,205 @@ button.ws-nav-item:disabled { opacity: 0.45; cursor: default; background: none; 
 }
 .artifact-chart svg { max-width: 100%; height: auto; display: block; }
 
+/* ------------------------------------------------------ shared panel head
+   Files / Terminal / Git share one heading pattern: icon + title + actions. */
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.panel-head-icon { color: var(--text-faint); flex: none; }
+.panel-head-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------ left-panel task workspace */
+.task-workspace { display: flex; flex-direction: column; gap: 2px; }
+.task-workspace-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 6px;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+.task-workspace-editor:focus-within { border-color: var(--accent-border); }
+.task-workspace-title,
+.task-workspace-desc {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+.task-workspace-desc {
+  min-height: 52px;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.task-workspace-title:focus,
+.task-workspace-desc:focus {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+.task-workspace-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.task-workspace-actions .mini-btn { display: inline-flex; align-items: center; gap: 4px; }
+
+.ws-task-item { cursor: pointer; }
+.ws-task-state.draft { background: var(--text-faint); }
+.ws-task-state.running { background: var(--info); }
+.ws-task-state.completed { background: var(--ok); }
+.ws-task-state.failed { background: var(--bad); }
+.ws-task-state.cancelled { background: var(--text-muted); }
+.ws-task-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--motion-fast) ease;
+  flex: none;
+}
+.ws-task-item:hover .ws-task-actions,
+.ws-task-item:focus-within .ws-task-actions { opacity: 1; }
+.ws-task-mini {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  transition: background var(--motion-fast) ease, color var(--motion-fast) ease;
+}
+.ws-task-mini:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.ws-task-mini.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  color: var(--bad);
+}
+.ws-task-mini:disabled { opacity: 0.4; cursor: default; }
+
+/* -------------------------------------------- task execution monitoring feed */
+.task-jump-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 500;
+}
+.task-jump-latest:hover { background: var(--accent-soft); }
+.task-execution-invite {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+.task-execution-invite svg { color: var(--text-faint); }
+.task-execution-invite strong { color: var(--text-secondary); font-size: 14px; }
+.task-execution-invite p { margin: 0; max-width: 40ch; font-size: 12.5px; line-height: 1.5; }
+.task-execution-description {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  user-select: text;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.task-execution-notstarted {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.task-execution-notstarted > svg { color: var(--text-faint); flex: none; margin-top: 1px; }
+.task-execution-notstarted > div { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.task-execution-notstarted b { color: var(--text-primary); font-weight: 600; }
+.task-execution-notstarted .task-btn { flex: none; align-self: center; }
+
+.task-feed { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.task-feed-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.task-feed-item:hover { background: var(--bg-hover); }
+.task-feed-icon { flex: none; }
+.task-feed-icon.info { color: var(--info); }
+.task-feed-icon.success { color: var(--ok); }
+.task-feed-icon.warning { color: var(--warn); }
+.task-feed-icon.error { color: var(--bad); }
+.task-feed-icon.muted,
+.task-feed-icon.neutral { color: var(--text-muted); }
+.task-feed-label { flex: none; font-weight: 500; color: var(--text-primary); }
+.task-feed-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.task-feed-time {
+  flex: none;
+  font: 10.5px var(--mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.task-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.task-summary-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) 1fr;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+.task-summary-row:last-child { border-bottom: 0; }
+.task-summary-key { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+.task-summary-value { color: var(--text-secondary); overflow-wrap: anywhere; }
+

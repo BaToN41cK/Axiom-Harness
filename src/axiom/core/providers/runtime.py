@@ -54,12 +54,56 @@ class ProviderChatClient:
             route["role"] = role
         self.last_route = route
 
+    def _continuation_request(
+        self, messages: list[dict[str, Any]], partial: list[str],
+    ) -> list[ChatMessage]:
+        """Request for the current pass: plain, or a resume after a dropped stream.
+
+        A VPN exit-country switch kills in-flight SSE connections. When part of
+        the answer already streamed out, a retry must not start from scratch:
+        the partial assistant text is kept in context and the model is nudged
+        to pick up where the stream died — the same shape continue_last uses.
+        """
+        plain = [
+            ChatMessage(
+                role=str(m.get("role") or "user"),
+                content=str(m.get("content") or ""),
+            )
+            for m in messages
+        ]
+        text = "".join(partial).strip()
+        if not text:
+            return plain
+        resume = list(plain)
+        resume.append(
+            ChatMessage(
+                role="assistant",
+                content=text,
+            )
+        )
+        resume.append(
+            ChatMessage(
+                role="user",
+                content=(
+                    "Продолжи свой предыдущий ответ ровно с того места, где он "
+                    "оборвался. Не повторяй уже написанное, без вступлений — "
+                    "только продолжение."
+                ),
+            )
+        )
+        return resume
+
     async def chat(self, model: str, messages: list[dict[str, Any]], *, think=None,
                   tools: list[dict[str, Any]] | None = None, options=None,
                   keep_alive: str | None = None,
                   role: str | None = None) -> AsyncIterator[StreamChunk]:
         user_text = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         target = self._target(str(user_text), model, role)
+        # Text that already streamed out during THIS answer. A same-target
+        # resume keeps it (the retry continues from where the stream died);
+        # a provider fallback resets it (another model writes a fresh answer).
+        partial: list[str] = []
+        saw_output = False
         while True:
             if target.provider_id == "ollama" and self.ollama_client is not None:
                 name = target.model or self.default_model or ""
@@ -71,22 +115,17 @@ class ProviderChatClient:
                     yield chunk
                 return
             provider: Provider = self.manager.get_provider(target.provider_id)
-            saw_output = False
             try:
                 self._remember(target.provider_id, target.model, role)
                 async for chunk in provider.stream(
                     target.model,
-                    [
-                        ChatMessage(
-                            role=str(m.get("role") or "user"),
-                            content=str(m.get("content") or ""),
-                        )
-                        for m in messages
-                    ],
+                    self._continuation_request(messages, partial),
                     tools=tools, think=think, options=options,
                 ):
                     if chunk.content or chunk.thinking or chunk.tool_calls:
                         saw_output = True
+                    if chunk.content:
+                        partial.append(chunk.content)
                     yield StreamChunk(
                         thinking=chunk.thinking, content=chunk.content, done=chunk.done,
                         tool_calls=[
@@ -97,20 +136,30 @@ class ProviderChatClient:
                     )
                 return
             except Exception as exc:
-                if saw_output or not self.router.should_fallback(exc):
+                retryable = self.router.should_fallback(exc)
+                # A dropped stream after partial output gets exactly one
+                # same-target resume (VPN switch, flaky exit node); a second
+                # drop escalates to the user instead of looping forever.
+                if not retryable or (saw_output and not partial):
                     raise
                 key = f"{target.provider_id}/{target.model}"
-                if self.router.should_fallback(exc) and self._retry_counts.get(key, 0) < 1:
+                if self._retry_counts.get(key, 0) < 1:
                     self._retry_counts[key] = self._retry_counts.get(key, 0) + 1
                     await asyncio.sleep(0.25)
                     # Same target, one retry: refresh the reported route so the
                     # UI never shows a stale model after the retry succeeds.
                     self._remember(target.provider_id, target.model, role)
                     continue
+                if saw_output:
+                    # Partial text already reached the UI; switching models
+                    # mid-answer would garble the message. Surface the error.
+                    raise
                 next_target = self.router.next_fallback(target)
                 if next_target is None:
                     raise
                 # A fallback stays inside the role's intent: the role rule only
                 # picked the first target, the existing chain decides the next.
+                # The next provider starts a fresh answer: nothing was shown
+                # from it (saw_output is only true with no retry left).
                 self._remember(next_target.provider_id, next_target.model, role)
                 target = next_target

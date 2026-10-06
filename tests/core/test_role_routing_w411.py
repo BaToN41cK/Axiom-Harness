@@ -13,7 +13,8 @@ from axiom.core.config import Config
 from axiom.core.history import HistoryStore
 from axiom.core.models import ModelInfo
 from axiom.core.ollama import StreamChunk
-from axiom.core.providers.base import ModelProfile, StreamChunk as ProviderChunk
+from axiom.core.providers.base import ModelProfile
+from axiom.core.providers.base import StreamChunk as ProviderChunk
 from axiom.core.providers.catalog import ModelCatalog
 from axiom.core.router import (
     MODEL_ROLES,
@@ -232,7 +233,7 @@ class _FakeProvider:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def stream(self, model, messages, **kwargs):  # noqa: ANN001
+    async def stream(self, model, messages, **kwargs):
         self.calls.append(model)
         yield ProviderChunk(content="ok", done=True)
 
@@ -277,7 +278,7 @@ async def test_provider_client_falls_back_from_a_role_target() -> None:
     class _RateLimitedProvider(_FakeProvider):
         """Only the role's own model is saturated, the chain is healthy."""
 
-        async def stream(self, model, messages, **kwargs):  # noqa: ANN001
+        async def stream(self, model, messages, **kwargs):
             self.calls.append(model)
             if model == "worker-m":
                 raise OllamaUnavailableError("429 rate limit")
@@ -304,7 +305,7 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def chat(self, model, messages, **kwargs):  # noqa: ANN001
+    async def chat(self, model, messages, **kwargs):
         self.calls.append({"model": model, **kwargs})
         yield StreamChunk(content="ok")
         yield StreamChunk(done=True)
@@ -405,3 +406,129 @@ async def test_a_search_pass_stops_being_search_when_it_answers_again() -> None:
     agent._pass_role = "search"  # left over from a previous search pass
     await _run_agent(agent)
     assert client.calls[-1]["role"] == "subagent"
+
+
+# ------------------------------------------------- VPN / network resilience
+
+async def test_mid_stream_drop_gets_one_same_target_resume() -> None:
+    """A dropped stream after partial output is resumed, not thrown away.
+
+    A VPN exit-country switch kills the SSE connection mid-answer. The retry
+    keeps the partial text in context and asks the model to continue from
+    where the stream died — the same shape continue_last uses.
+    """
+    from axiom.core.errors import OllamaUnavailableError
+    from axiom.core.providers.runtime import ProviderChatClient
+
+    class _DroppingProvider(_FakeProvider):
+        """First stream dies mid-output; the retry completes the answer."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.requests: list[list] = []
+
+        async def stream(self, model, messages, **kwargs):
+            self.calls.append(model)
+            self.requests.append(list(messages))
+            if len(self.calls) == 1:
+                yield ProviderChunk(content="partial answer ")
+                raise OllamaUnavailableError("connection reset")
+                yield  # pragma: no cover - unreachable after the raise
+            yield ProviderChunk(content="resumed tail", done=True)
+
+    provider = _DroppingProvider()
+    router = _router(fallbacks=[RouteTarget("other", "backup-m", "fallback")])
+    client = ProviderChatClient(_FakeManager(provider), router,
+                                default_provider="acme", default_model="big-reasoner")
+    text: list[str] = []
+    async for chunk in client.chat("big-reasoner", [{"role": "user", "content": "hi"}]):
+        text.append(chunk.content or "")
+    joined = "".join(text)
+    assert "partial answer " in joined
+    assert "resumed tail" in joined
+    # The second request carried the partial text and the resume nudge.
+    second = provider.requests[1]
+    assert any(getattr(m, "role", "") == "assistant" and "partial answer" in m.content
+               for m in second)
+    resume = [m for m in second if getattr(m, "role", "") == "user" and "Продолжи" in m.content]
+    assert resume
+    # The fallback provider was never asked: the resume stayed on target.
+    assert provider.calls == ["big-reasoner", "big-reasoner"]
+    assert client.last_route["model"] == "big-reasoner"
+
+
+async def test_second_drop_after_partial_output_escalates() -> None:
+    """A second drop mid-answer must surface the error, not loop forever."""
+    from axiom.core.errors import OllamaUnavailableError
+    from axiom.core.providers.runtime import ProviderChatClient
+
+    class _AlwaysDroppingProvider(_FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        async def stream(self, model, messages, **kwargs):
+            self.attempts += 1
+            self.calls.append(model)
+            yield ProviderChunk(content="partial ")
+            raise OllamaUnavailableError("connection reset")
+            yield  # pragma: no cover - unreachable after the raise
+
+    provider = _AlwaysDroppingProvider()
+    router = _router(fallbacks=[RouteTarget("other", "backup-m", "fallback")])
+    client = ProviderChatClient(_FakeManager(provider), router,
+                                default_provider="acme", default_model="big-reasoner")
+    chunks: list = []
+    raised = False
+    try:
+        async for chunk in client.chat("big-reasoner", [{"role": "user", "content": "hi"}]):
+            chunks.append(chunk)
+    except OllamaUnavailableError:
+        raised = True
+    assert raised
+    # Two attempts: the initial pass and exactly one resume.
+    assert provider.attempts == 2
+    # Partial output still reached the consumer before the escalation.
+    assert any(c.content for c in chunks)
+
+
+async def test_geo_block_is_fallback_eligible() -> None:
+    """A 403/451 from the new VPN exit country reroutes the chain."""
+    from axiom.core.providers.runtime import ProviderChatClient
+
+    class _GeoBlockedProvider(_FakeProvider):
+        async def stream(self, model, messages, **kwargs):
+            self.calls.append(model)
+            if model == "big-reasoner":
+                # Provider rejects the new exit IP outright, no output at all.
+                raise RuntimeError("HTTP 403: request blocked by geographic restriction")
+                yield  # pragma: no cover - keeps this an async generator
+            yield ProviderChunk(content="ok from other region", done=True)
+
+    provider = _GeoBlockedProvider()
+    router = _router(fallbacks=[RouteTarget("other", "backup-m", "fallback")])
+    client = ProviderChatClient(_FakeManager(provider), router,
+                                default_provider="acme", default_model="big-reasoner")
+    text: list[str] = []
+    async for chunk in client.chat("big-reasoner", [{"role": "user", "content": "hi"}]):
+        text.append(chunk.content or "")
+    assert "ok from other region" in "".join(text)
+    assert provider.calls == ["big-reasoner", "big-reasoner", "backup-m"]
+    assert client.last_route["model"] == "backup-m"
+
+
+def test_should_fallback_covers_geo_blocks() -> None:
+    """403/451 (geo-block after a VPN country switch) reroute like a timeout."""
+    router = _router()
+
+    class _GeoError(Exception):
+        status_code = 403
+
+    assert router.should_fallback(_GeoError("blocked")) is True
+
+    class _Blocked451(Exception):
+        status_code = 451
+
+    assert router.should_fallback(_Blocked451("unavailable for legal reasons")) is True
+    assert router.should_fallback(RuntimeError("HTTP 451: blocked region")) is True
+    assert router.should_fallback(RuntimeError("all good")) is False

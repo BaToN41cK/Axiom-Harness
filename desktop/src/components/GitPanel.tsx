@@ -160,9 +160,9 @@ export default function GitPanel(props: Props) {
 
   return (
     <section className="gitpanel">
-      <div className="ex-head">
-        <GitBranch size={13} strokeWidth={1.8} />
-        <span className="ex-title">{project.branch ?? "git"}</span>
+      <div className="panel-head">
+        <GitBranch size={13} strokeWidth={1.8} className="panel-head-icon" />
+        <span className="panel-head-title">{project.branch ?? "git"}</span>
         <span className="gp-count">
           {changes.length > 0 ? t("ui.git.changes", { n: String(changes.length) }) : t("ui.git.clean")}
         </span>

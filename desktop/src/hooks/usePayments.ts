@@ -123,26 +123,40 @@ export function usePayments() {
       stage("browser", start.authorization_url);
       await openExternal(start.authorization_url);
       stage("waiting");
+      // A VPN exit-country switch can drop individual polls. A transport
+      // failure is counted separately: it neither fails the flow nor resets
+      // it — the loop simply keeps polling until the overall deadline.
+      let transientPollErrors = 0;
       while (Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
         if (cancelled()) return;
-        const status = await payments.oauthStatus(start.poll_token);
-        if (cancelled()) return;
-        if (status.status === "error") throw new Error(t("ui.pay.oauth_failed"));
-        if (status.status !== "success" || !status.code) continue;
-        stage("redeeming");
-        const result = await payments.oauthRedeem(status.code);
-        if (cancelled()) {
-          void payments.logout(result.access_token).catch(() => undefined);
+        let serverRejected = false;
+        try {
+          const status = await payments.oauthStatus(start.poll_token);
+          if (cancelled()) return;
+          if (status.status === "error") {
+            serverRejected = true;
+            throw new Error(t("ui.pay.oauth_failed"));
+          }
+          if (status.status !== "success" || !status.code) continue;
+          stage("redeeming");
+          const result = await payments.oauthRedeem(status.code);
+          if (cancelled()) {
+            void payments.logout(result.access_token).catch(() => undefined);
+            return;
+          }
+          paymentToken.set(result.access_token);
+          stage("done");
+          if (mounted.current) {
+            setAccount(result.account);
+            setPayment(result.account.latest_payment);
+          }
           return;
+        } catch (e) {
+          if (cancelled()) return;
+          if (serverRejected) throw e;
+          if (++transientPollErrors > 10) throw e;
         }
-        paymentToken.set(result.access_token);
-        stage("done");
-        if (mounted.current) {
-          setAccount(result.account);
-          setPayment(result.account.latest_payment);
-        }
-        return;
       }
       throw new Error(t("ui.pay.oauth_timeout"));
     } catch (e) {

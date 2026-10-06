@@ -68,14 +68,14 @@ Set these in the hosting platform's secret/environment settings. The backend rea
 | `GITHUB_REDIRECT_URI` / `GOOGLE_REDIRECT_URI` | Exact HTTPS callback URL registered at the provider; backend only |
 | `OAUTH_REDIRECT_BASE` | Optional public HTTPS base used for OAuth callbacks; defaults to `PAYMENT_BACKEND_URL` |
 
-The YooMoney notification secret and OAuth client secrets are backend-only; the wallet ID and backend URL are public configuration. Both `axiom --gui` (Vite dev) and production desktop builds default to the public backend at `https://axiom-harness.onrender.com` via `DEFAULT_BACKEND_URL` in `desktop/src/lib/payments.ts`. A custom URL still wins when set at startup or build time:
+The YooMoney notification secret and OAuth client secrets are backend-only; the wallet ID and backend URL are public configuration. Both `axiom --gui` and production desktop builds load the same bundled frontend and default to the public backend at `https://axiom-harness.onrender.com` via `DEFAULT_BACKEND_URL` in `desktop/src/lib/payments.ts` (there is no frontend dev server). A custom URL still wins when set at startup or build time:
 
 ```powershell
 $env:VITE_PAYMENT_BACKEND_URL = "https://axiom-harness.onrender.com"
 npm --prefix desktop run build
 ```
 
-For local dev (`vite dev`), the same default applies. Set `VITE_PAYMENT_BACKEND_URL` explicitly only to use another backend.
+For local development, the same default applies. Set `VITE_PAYMENT_BACKEND_URL` explicitly only to use another backend.
 
 That URL is public configuration, not a secret. No YooMoney credentials, OAuth client secrets, provider tokens, or notification secret go into the frontend or desktop binary.
 

@@ -31,9 +31,9 @@ export default function TerminalPanel(props: Props) {
   };
   return (
     <section className="terminal">
-      <div className="term-head">
-        <Terminal size={13} strokeWidth={1.8} />
-        <span className="term-cwd" title={cwd ?? ""}>{cwd ?? "—"}</span>
+      <div className="panel-head">
+        <Terminal size={13} strokeWidth={1.8} className="panel-head-icon" />
+        <span className="panel-head-title" title={cwd ?? ""}>{cwd ?? "—"}</span>
         {!enabled && <span className="term-off">{t("ui.terminal.off")}</span>}
       </div>
       <div className="term-body" ref={bodyRef}>

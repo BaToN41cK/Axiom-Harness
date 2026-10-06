@@ -355,6 +355,9 @@ export interface Task {
   review_recovery_detail?: string | null;
   review_recovery_paths?: string[];
   detail: string;
+  /** User-authored task description (persisted with the draft; distinct from the
+   *  transient ``detail`` status text written by the runner during execution). */
+  description?: string;
   created_at: number;
   updated_at: number;
   revision: number;
@@ -369,6 +372,20 @@ export interface Task {
 }
 
 export type ToolState = "running" | "ok" | "failed" | "cancelled";
+
+/** One chronological execution event of a task, reduced from the live ``task.*``
+ *  bus events the core streams during a run. Only real events are stored; the
+ *  center panel renders them in arrival order. */
+export interface TaskFeedItem {
+  /** Monotonic arrival order (frontend-assigned). */
+  seq: number;
+  /** Raw core event kind, e.g. ``task.started`` / ``task.step`` / ``task.tool``. */
+  kind: string;
+  timestamp: number;
+  state: TaskState;
+  detail: string;
+  goal: string;
+}
 
 export interface ToolActivity {
   name: string;

@@ -547,6 +547,7 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
         task = session.task_create(
             str(args.get("goal") or ""),
             plan=args.get("plan"),
+            description=args.get("description"),
         )
         return task.model_dump(mode="json")
     if cmd == "task_save":
@@ -555,6 +556,7 @@ async def _handle(session: ChatSession, cmd: str, args: dict) -> object:
             goal=args.get("goal"),
             plan=args.get("plan"),
             state=args.get("state"),
+            description=args.get("description"),
         )
         return task.model_dump(mode="json") if task is not None else None
     if cmd == "task_delete":

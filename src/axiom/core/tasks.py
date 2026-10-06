@@ -82,6 +82,10 @@ class Task(BaseModel):
     diffs: dict[str, str] = Field(default_factory=dict)
     review_status: Literal["pending", "accepted", "rejected"] = "pending"
     detail: str = ""
+    #: User-authored description of the task, persisted alongside the goal so a
+    #: draft keeps its wording across restarts. Distinct from ``detail``, which
+    #: the runner overwrites with transient status text during execution.
+    description: str = ""
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     revision: int = 0

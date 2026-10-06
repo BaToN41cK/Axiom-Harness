@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { CSSProperties } from "react";
-import { Folder, FileText, GitBranch, ListChecks, Moon, PanelLeft, PanelRight, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { Folder, FileText, GitBranch, Moon, PanelLeft, PanelRight, Sun, Terminal as TerminalIcon } from "lucide-react";
 import BootScreen from "./components/BootScreen";
 import OverlayPanel from "./components/OverlayPanel";
 import SettingsModal from "./components/SettingsModal";
@@ -21,7 +21,6 @@ import Balance from "./components/Balance";
 import Explorer from "./components/Explorer";
 import GitPanel from "./components/GitPanel";
 import TerminalPanel from "./components/TerminalPanel";
-import TaskPanel from "./components/TaskPanel";
 import ConfirmDialog from "./components/ConfirmDialog";
 import DocumentsPanel from "./components/DocumentsPanel";
 import type { AxiomStore } from "./hooks/useAxiom";
@@ -102,30 +101,10 @@ function WorkbenchSide({ store: s }: { store: AxiomStore }) {
           <GitBranch size={13} strokeWidth={1.8} />
           <span>{t("ui.tabs.git")}</span>
         </button>
-        <button className={tab === "tasks" ? "active" : ""} onClick={() => pickTab("tasks")}>
-          <ListChecks size={13} strokeWidth={1.8} /><span>{t("ui.tabs.tasks")}</span>
-        </button>
         <button className={tab === "documents" ? "active" : ""} onClick={() => pickTab("documents")}>
           <FileText size={13} strokeWidth={1.8} /><span>{t("ui.tabs.documents")}</span>
         </button>
       </div>
-      {tab === "tasks" && (
-        <TaskPanel
-          tasks={s.tasks}
-          busy={s.generating || s.taskRequestPending}
-          onStart={s.startTask}
-          onResume={s.resumeTask}
-          onCancel={s.cancelTask}
-          onRefresh={s.refreshTasks}
-          onPlan={s.planTask}
-          onCreate={s.createTask}
-          onSave={s.saveTask}
-          onDelete={s.deleteTask}
-          onReview={s.reviewTask}
-          onRecover={s.recoverReview}
-          onInspect={s.setFocusedTaskId}
-        />
-      )}
       {tab === "files" && (
         <Explorer
           root={s.workspace?.current?.path ?? null}
@@ -335,7 +314,13 @@ function Shell({ s }: { s: AxiomStore }) {
         tasks={s.tasks}
         focusedTaskId={s.focusedTaskId}
         onInspectTask={s.setFocusedTaskId}
-        onOpenTaskPanel={() => s.openRightPanel("tasks")}
+        busy={s.generating || s.taskRequestPending}
+        taskDraft={s.taskDraft}
+        onTaskDraftChange={s.setTaskDraft}
+        onCreateTask={s.createTask}
+        onSaveTask={s.saveTask}
+        onDeleteTask={s.deleteTask}
+        onRunTask={(id) => s.resumeTask(id, false)}
       />
 
       <div className="main">

@@ -193,6 +193,35 @@ async def test_task_plan_create_save_and_custom_start(tmp_path, monkeypatch):
     assert await mod._handle(session, "task_state", {"id": created["id"]}) is None
 
 
+async def test_task_create_and_save_persist_description(tmp_path, monkeypatch):
+    """A draft keeps its user-authored description across create/save/list."""
+    session = _session(tmp_path, monkeypatch, tmp_path)
+    mod = _bridge_module()
+    monkeypatch.setattr(mod, "_write_line", lambda line: None)
+
+    created = await mod._handle(session, "task_create", {
+        "goal": "Add a login form",
+        "description": "Build a form with email and password validation.",
+    })
+    assert created["state"] == "pending"
+    assert created["description"] == "Build a form with email and password validation."
+
+    saved = await mod._handle(session, "task_save", {
+        "id": created["id"],
+        "description": "Updated description",
+    })
+    assert saved["description"] == "Updated description"
+    assert saved["goal"] == "Add a login form"
+
+    listed = await mod._handle(session, "tasks", {})
+    match = next(t for t in listed if t["id"] == created["id"])
+    assert match["description"] == "Updated description"
+
+    # Reloading the store keeps the description (persisted JSON round-trip).
+    reloaded = session.task_store.load(created["id"])
+    assert reloaded.description == "Updated description"
+
+
 async def test_planned_task_runs_edited_plan_and_checks_every_step(tmp_path, monkeypatch):
     """User writes a goal -> AI plans -> user edits the plan -> run ticks every step off."""
     ws = tmp_path / "ws2"

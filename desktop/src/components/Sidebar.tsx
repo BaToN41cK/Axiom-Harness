@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Check, Clock, Cpu, FolderOpen, ListChecks, Loader2, MessageSquarePlus, Pencil, Search, Settings2, Trash2, X } from "lucide-react";
+import { Check, Clock, Cpu, FolderOpen, ListChecks, MessageSquarePlus, Pencil, Search, Settings2, Trash2, X } from "lucide-react";
 import type { Conversation, ModelInfo, ProjectInfo, Task } from "../types";
 import { useLocale } from "../lib/locale";
 import { plural } from "../lib/i18n";
 import { playUiSound } from "../lib/sound";
-import { STATE_CONFIG } from "./TaskCard";
+import TaskWorkspace from "./TaskWorkspace";
 
 interface Props {
   open: boolean;
@@ -35,7 +35,14 @@ interface Props {
   tasks: Task[];
   focusedTaskId: string | null;
   onInspectTask: (id: string) => void;
-  onOpenTaskPanel: () => void;
+  /** Task workspace (left panel) actions + live draft. */
+  busy: boolean;
+  taskDraft: { title: string; description: string };
+  onTaskDraftChange: (draft: { title: string; description: string }) => void;
+  onCreateTask: (goal: string, description: string) => Promise<Task | null>;
+  onSaveTask: (id: string, updates: { goal?: string; description?: string }) => Promise<Task | null>;
+  onDeleteTask: (id: string) => Promise<boolean>;
+  onRunTask: (id: string) => Promise<Task | null>;
 }
 
 interface Group {
@@ -92,7 +99,13 @@ export default function Sidebar(props: Props) {
     tasks,
     focusedTaskId,
     onInspectTask,
-    onOpenTaskPanel,
+    busy,
+    taskDraft,
+    onTaskDraftChange,
+    onCreateTask,
+    onSaveTask,
+    onDeleteTask,
+    onRunTask,
   } = props;
   const { t, locale, strings } = useLocale();
 
@@ -229,36 +242,18 @@ export default function Sidebar(props: Props) {
                 </button>
               )}
 
-              <div className="side-subhead">
-                <ListChecks size={12} strokeWidth={1.8} />
-                <span>{t("ui.tabs.tasks")}</span>
-                {tasks.length > 0 && <span className="ws-nav-count">{tasks.length}</span>}
-                <button
-                  className="icon-btn tiny"
-                  title={t("ui.task.panel")}
-                  aria-label={t("ui.task.panel")}
-                  onClick={onOpenTaskPanel}
-                >
-                  <Pencil size={11} strokeWidth={2} />
-                </button>
-              </div>
-              <div className="ws-task-list">
-                {tasks.length === 0 && <div className="chat-list-empty">{t("ui.task.none")}</div>}
-                {tasks.map((task) => (
-                  <button
-                    key={task.id}
-                    className={"ws-task-item" + (task.id === focusedTaskId ? " active" : "")}
-                    onClick={() => onInspectTask(task.id)}
-                    title={task.goal}
-                  >
-                    <span className={"ws-task-state " + (task.review_recovery ? "warning" : STATE_CONFIG[task.state].tone)} />
-                    <span className="ws-task-goal">{task.goal}</span>
-                    {["analyzing", "planning", "executing", "verifying", "waiting_for_permission"].includes(task.state) && (
-                      <Loader2 size={10} className="spin" />
-                    )}
-                  </button>
-                ))}
-              </div>
+              <TaskWorkspace
+                tasks={tasks}
+                focusedTaskId={focusedTaskId}
+                busy={busy}
+                draft={taskDraft}
+                onDraftChange={onTaskDraftChange}
+                onCreate={onCreateTask}
+                onSave={onSaveTask}
+                onDelete={onDeleteTask}
+                onRun={onRunTask}
+                onSelect={onInspectTask}
+              />
             </nav>
           ) : (
           <button className="new-chat" onClick={onNewChat} title={t("ui.sidebar.new_chat_title")}>

@@ -215,7 +215,15 @@ class ModelRouter:
             text = f"{type(error).__name__}: {error} {getattr(error, 'kind', '')}".lower()
         markers = ("429", "rate limit", "timeout", "timed out", "unavailable",
                    "connection", "context", "overloaded", "503", "502", "500")
-        return any(m in text for m in markers)
+        if any(m in text for m in markers):
+            return True
+        # A VPN exit-country switch can make a provider reject the new IP:
+        # geo-blocks (403/451) are transient for the routing chain, the same
+        # as a timeout — another provider may serve from another region.
+        status = getattr(error, "status_code", None)
+        if isinstance(status, int) and status in (403, 451):
+            return True
+        return "403" in text or "451" in text or "geo" in text
 
     def next_fallback(self, failed: RouteTarget) -> RouteTarget | None:
         chain = self.config.chain()

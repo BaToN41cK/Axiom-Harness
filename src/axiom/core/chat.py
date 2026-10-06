@@ -1393,7 +1393,8 @@ class ChatSession:
         # hide the failure and can silently use the wrong natural language.
         return await planner.create(clean_goal, tools)
 
-    def task_create(self, goal: str, *, plan: dict | object | None = None) -> Task:
+    def task_create(self, goal: str, *, plan: dict | object | None = None,
+                    description: str | None = None) -> Task:
         from axiom.core.planner import TaskPlan
         plan_obj: TaskPlan | None = None
         if isinstance(plan, dict):
@@ -1405,7 +1406,7 @@ class ChatSession:
             scope=str(self.workspace_root) if self.workspace_root else None,
             plan=plan_obj,
             state=TaskState.PENDING,
-            detail="План действий сформирован. Готов к выполнению.",
+            description=(description or "").strip(),
         )
         if plan_obj is not None:
             task.plan_history.append(plan_obj.model_copy(deep=True))
@@ -1419,6 +1420,7 @@ class ChatSession:
         goal: str | None = None,
         plan: dict | object | None = None,
         state: str | None = None,
+        description: str | None = None,
     ) -> Task | None:
         import time
 
@@ -1428,6 +1430,8 @@ class ChatSession:
             return None
         if goal is not None and goal.strip():
             task.goal = goal.strip()
+        if description is not None:
+            task.description = description.strip()
         if plan is not None:
             if isinstance(plan, dict):
                 task.plan = TaskPlan.model_validate(plan)

@@ -1,10 +1,29 @@
-import { ArrowLeft, Check, Circle, FileCode2, Loader2, TriangleAlert, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  Ban,
+  Check,
+  CheckCircle2,
+  Circle,
+  FileCode2,
+  Info,
+  ListChecks,
+  Loader2,
+  Play,
+  RotateCcw,
+  Terminal,
+  TriangleAlert,
+  Wrench,
+  X,
+  Zap,
+} from "lucide-react";
 import { TaskCard } from "./TaskCard";
 import TaskDelete from "./TaskDelete";
 import TaskResume from "./TaskResume";
 import DiffReview from "./DiffReview";
 import TaskReviewActions from "./TaskReviewActions";
-import type { Task } from "../types";
+import type { Task, TaskFeedItem } from "../types";
 import type { AxiomStore } from "../hooks/useAxiom";
 import { useLocale } from "../lib/locale";
 
@@ -26,9 +45,58 @@ const BUDGET_LABELS: Record<string, string> = {
   tool_results: "ui.taskexec.budget.tool_results", conversation: "ui.taskexec.budget.conversation",
 };
 
+/** Kind → (icon, tone, label key) for the chronological execution feed. */
+function feedMeta(kind: string): { tone: string; label: string } {
+  switch (kind) {
+    case "task.started": return { tone: "info", label: "ui.taskexec.event.started" };
+    case "task.resumed": return { tone: "info", label: "ui.taskexec.event.resumed" };
+    case "task.planned": return { tone: "info", label: "ui.taskexec.event.planned" };
+    case "task.replanned": return { tone: "warning", label: "ui.taskexec.event.replanned" };
+    case "task.step": return { tone: "neutral", label: "ui.taskexec.event.step" };
+    case "task.tool": return { tone: "neutral", label: "ui.taskexec.event.tool" };
+    case "task.permission": return { tone: "warning", label: "ui.taskexec.event.permission" };
+    case "task.process": return { tone: "neutral", label: "ui.taskexec.event.process" };
+    case "task.review": return { tone: "neutral", label: "ui.taskexec.event.review" };
+    case "task.hooks": return { tone: "neutral", label: "ui.taskexec.event.hooks" };
+    case "task.completed": return { tone: "success", label: "ui.taskexec.event.completed" };
+    case "task.failed": return { tone: "error", label: "ui.taskexec.event.failed" };
+    case "task.cancelled": return { tone: "muted", label: "ui.taskexec.event.cancelled" };
+    case "task.state": return { tone: "neutral", label: "ui.taskexec.event.state" };
+    default: return { tone: "neutral", label: "ui.taskexec.event.state" };
+  }
+}
+
+function FeedIcon({ kind, tone }: { kind: string; tone: string }) {
+  const cls = "task-feed-icon " + tone;
+  switch (kind) {
+    case "task.started": return <Play size={12} strokeWidth={2} className={cls} />;
+    case "task.resumed": return <RotateCcw size={12} strokeWidth={2} className={cls} />;
+    case "task.planned":
+    case "task.replanned": return <ListChecks size={12} strokeWidth={2} className={cls} />;
+    case "task.step": return <Circle size={9} strokeWidth={2} className={cls} />;
+    case "task.tool": return <Wrench size={12} strokeWidth={2} className={cls} />;
+    case "task.permission": return <TriangleAlert size={12} strokeWidth={2} className={cls} />;
+    case "task.process": return <Terminal size={12} strokeWidth={2} className={cls} />;
+    case "task.review": return <CheckCircle2 size={12} strokeWidth={2} className={cls} />;
+    case "task.hooks": return <Zap size={12} strokeWidth={2} className={cls} />;
+    case "task.completed": return <Check size={12} strokeWidth={2.2} className={cls} />;
+    case "task.failed": return <X size={12} strokeWidth={2.2} className={cls} />;
+    case "task.cancelled": return <Ban size={12} strokeWidth={2} className={cls} />;
+    default: return <Info size={12} strokeWidth={2} className={cls} />;
+  }
+}
+
+function formatTime(ts: number): string {
+  const date = new Date(ts * 1000);
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
 
 export default function TaskExecution({ task, store, onBack }: Props) {
   const { t } = useLocale();
+  const feedRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [atBottom, setAtBottom] = useState(true);
+
   const steps = task?.plan?.steps ?? [];
   const completed = steps.filter((step) => step.state === "completed").length;
   const progress = steps.length ? Math.round(completed / steps.length * 100) : 0;
@@ -38,25 +106,153 @@ export default function TaskExecution({ task, store, onBack }: Props) {
   const diffEntries = Object.entries(task?.diffs ?? {});
   const report = task?.context_report ?? null;
   const budgetRows = Object.entries(report?.categories ?? {}).filter(([cat, used]) => used > 0 || (report?.budgets?.[cat] ?? 0) > 0);
+  const isDraft = task?.state === "pending";
+
+  const feed: TaskFeedItem[] = useMemo(
+    () => (task ? store.taskFeed[task.id] ?? [] : []),
+    [store.taskFeed, task?.id],
+  );
+
+  const onScroll = () => {
+    const el = feedRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    atBottomRef.current = nearBottom;
+    setAtBottom(nearBottom);
+  };
+
+  // Follow new events only while the user is already at the bottom; reviewing
+  // earlier events must never yank the view down.
+  useEffect(() => {
+    if (atBottomRef.current && feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
+  }, [feed.length]);
+
+  const jumpToLatest = () => {
+    const el = feedRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    atBottomRef.current = true;
+    setAtBottom(true);
+  };
+
   return (
     <section className="task-execution" aria-label={t("ui.taskexec.aria")}>
       <header className="task-execution-head">
         <button className="task-execution-back" onClick={onBack} title={t("ui.taskexec.back")}><ArrowLeft size={15} /> {t("ui.taskexec.chat")}</button>
         <span className="task-execution-kicker">TASK EXECUTION</span>
         {task && <span className={`task-execution-state ${task.state}`}><span />{t(LABELS[task.state])}</span>}
+        {!atBottom && feed.length > 0 && (
+          <button className="task-jump-latest" onClick={jumpToLatest} title={t("ui.taskexec.jump_latest")}>
+            <ArrowDown size={13} strokeWidth={2} />
+            <span>{t("ui.taskexec.jump_latest")}</span>
+          </button>
+        )}
       </header>
+
       {!task ? (
-        <div className="task-execution-loading"><Loader2 size={18} className="spin" /> {t("ui.taskexec.loading")}</div>
+        <div className="task-execution-loading">
+          {store.taskRequestPending ? (
+            <>
+              <Loader2 size={18} className="spin" />
+              <span>{t("ui.taskexec.loading")}</span>
+            </>
+          ) : (
+            <div className="task-execution-invite">
+              <ListChecks size={26} strokeWidth={1.4} />
+              <strong>{t("ui.taskexec.no_task")}</strong>
+              <p>{t("ui.taskexec.no_task_sub")}</p>
+            </div>
+          )}
+        </div>
       ) : (
-        <div className="task-execution-scroll">
+        <div className="task-execution-scroll" ref={feedRef} onScroll={onScroll}>
           <div className="task-execution-title-row">
-            <div><h1>{task.goal}</h1><p>{task.detail || t(LABELS[task.state])}</p></div>
+            <div>
+              <h1>{task.goal}</h1>
+              {(task.description ?? "").trim() && <p className="task-execution-description">{task.description}</p>}
+            </div>
             {steps.length > 0 && <strong>{progress}%</strong>}
           </div>
+
           {steps.length > 0 && <div className="task-execution-progress"><span style={{ width: `${progress}%` }} /></div>}
-          {resumable && <TaskResume key={`${task.id}:${task.revision}`} task={task} busy={store.generating || store.taskRequestPending} onResume={store.resumeTask} />}
-          {activeStep && running && <div className="task-execution-now"><Loader2 size={15} className="spin" /><div><b>{t("ui.taskexec.now")}</b><span>{activeStep.goal}</span></div></div>}
-          {task.pending_tool && <div className="task-execution-warning"><TriangleAlert size={15} /><span><b>{task.state === "waiting_for_permission" ? t("ui.taskexec.tool_wait") : running ? t("ui.taskexec.tool_active") : t("ui.taskexec.tool_interrupted")}</b><code>{String(task.pending_tool.name ?? t("ui.taskexec.tool"))}</code><pre>{JSON.stringify(task.pending_tool.arguments ?? {}, null, 2)}</pre></span></div>}
+
+          {isDraft ? (
+            <div className="task-execution-notstarted">
+              <ListChecks size={16} strokeWidth={1.7} />
+              <div>
+                <b>{t("ui.taskexec.not_started")}</b>
+                <span>{t("ui.taskexec.not_started_sub")}</span>
+              </div>
+              <button
+                className="task-btn primary"
+                disabled={store.generating || store.taskRequestPending}
+                onClick={() => void store.resumeTask(task.id, false)}
+              >
+                <Play size={13} fill="currentColor" />
+                <span>{t("ui.taskcard.start")}</span>
+              </button>
+            </div>
+          ) : (
+            <>
+              {resumable && <TaskResume key={`${task.id}:${task.revision}`} task={task} busy={store.generating || store.taskRequestPending} onResume={store.resumeTask} />}
+              {activeStep && running && <div className="task-execution-now"><Loader2 size={15} className="spin" /><div><b>{t("ui.taskexec.now")}</b><span>{activeStep.goal}</span></div></div>}
+              {task.pending_tool && <div className="task-execution-warning"><TriangleAlert size={15} /><span><b>{task.state === "waiting_for_permission" ? t("ui.taskexec.tool_wait") : running ? t("ui.taskexec.tool_active") : t("ui.taskexec.tool_interrupted")}</b><code>{String(task.pending_tool.name ?? t("ui.taskexec.tool"))}</code><pre>{JSON.stringify(task.pending_tool.arguments ?? {}, null, 2)}</pre></span></div>}
+
+              <div className="task-execution-section">
+                <div className="task-execution-section-label">{t("ui.taskexec.feed")}</div>
+                {feed.length === 0 ? (
+                  <p className="task-execution-empty">{t("ui.taskexec.feed_empty")}</p>
+                ) : (
+                  <ol className="task-feed">
+                    {feed.map((item) => {
+                      const meta = feedMeta(item.kind);
+                      return (
+                        <li key={item.seq} className={`task-feed-item ${meta.tone}`}>
+                          <FeedIcon kind={item.kind} tone={meta.tone} />
+                          <span className="task-feed-label">{t(meta.label)}</span>
+                          {item.detail && <span className="task-feed-detail" title={item.detail}>{item.detail}</span>}
+                          <time className="task-feed-time">{formatTime(item.timestamp)}</time>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </div>
+
+              <div className="task-execution-section">
+                <div className="task-execution-section-label">{t("ui.taskexec.summary")}</div>
+                <div className="task-summary-card">
+                  <div className="task-summary-row">
+                    <span className="task-summary-key">{t("ui.taskexec.summary_done")}</span>
+                    <span className="task-summary-value">
+                      {steps.length > 0
+                        ? t("ui.taskcard.steps", { done: String(completed), total: String(steps.length), pct: String(progress) })
+                        : t(LABELS[task.state])}
+                    </span>
+                  </div>
+                  <div className="task-summary-row">
+                    <span className="task-summary-key">{t("ui.taskexec.summary_files")}</span>
+                    <span className="task-summary-value">
+                      {task.changed_files.length > 0
+                        ? t("ui.taskexec.changed_files") + " · " + task.changed_files.length
+                        : t("ui.taskexec.no_files")}
+                    </span>
+                  </div>
+                  <div className="task-summary-row">
+                    <span className="task-summary-key">{t("ui.taskexec.summary_checks")}</span>
+                    <span className="task-summary-value">
+                      {task.tests.length > 0
+                        ? t("ui.taskcard.checks", { n: String(task.tests.length) })
+                        : t("ui.taskexec.no_checks")}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="task-execution-section"><div className="task-execution-section-label">{t("ui.taskexec.plan")}</div>
             {steps.length ? <ol className="task-execution-steps">{steps.map((step) => (
               <li key={step.id} className={step.state}>

@@ -11,17 +11,24 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+pub mod startup;
+
+use startup::{FailureKind, Preflight, Stage};
 
 struct Bridge {
     child: Mutex<Option<BridgeProcess>>,
     stdin: Mutex<Option<std::process::ChildStdin>>,
     generation: Arc<AtomicU64>,
 }
+
+/// True once the preflight fallback log was actually written to %TEMP%.
+static STARTUP_FALLBACK_LOG_WRITTEN: AtomicBool = AtomicBool::new(false);
 
 struct BridgeProcess {
     child: Child,
@@ -94,6 +101,21 @@ pub mod windows_process {
         peak_job_memory_used: usize,
     }
 
+    /// PROCESSENTRY32W layout for the Toolhelp32 process snapshot.
+    #[repr(C)]
+    struct ProcessEntry32 {
+        size: u32,
+        usage_count: u32,
+        process_id: u32,
+        default_heap_id: usize,
+        module_id: u32,
+        thread_count: u32,
+        parent_process_id: u32,
+        priority_class_base: i32,
+        flags: u32,
+        exe_file: [u16; 260],
+    }
+
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> Handle;
@@ -109,11 +131,120 @@ pub mod windows_process {
         fn CreateMutexW(attributes: *const c_void, initial_owner: i32, name: *const u16) -> Handle;
         fn SetLastError(error: u32);
         fn GetLastError() -> u32;
+        fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> Handle;
+        fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry32) -> i32;
+        fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry32) -> i32;
     }
 
     #[link(name = "user32")]
     unsafe extern "system" {
         fn MessageBoxW(window: Handle, text: *const u16, caption: *const u16, kind: u32) -> i32;
+        fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+        fn ShowWindow(hwnd: isize, command: i32) -> i32;
+        fn SetForegroundWindow(hwnd: isize) -> i32;
+        fn IsWindow(hwnd: isize) -> i32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+    }
+
+    const SW_RESTORE: i32 = 9;
+    const TH32CS_SNAPPROCESS: u32 = 0x00000002;
+
+    /// One entry of parent-process identification for diagnostics.
+    ///
+    /// Reads only public snapshot data (PID, image name). Never opens the
+    /// parent's token and never reads its command line, which can contain
+    /// secrets.
+    fn parent_from_entry(entry: &ProcessEntry32) -> String {
+        let name_len = entry
+            .exe_file
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(entry.exe_file.len());
+        let name = String::from_utf16_lossy(&entry.exe_file[..name_len]);
+        format!("PID {} ({})", entry.process_id, name)
+    }
+
+    /// "PID <ppid> (<exe name>)" of this process's parent, or a short
+    /// explanation when the snapshot does not answer.
+    ///
+    /// Diagnostics-only: in a restricted environment this identifies *who*
+    /// launched AXIOM (agent harness, sandbox launcher, explorer), which is
+    /// exactly the fact the error dialog needs. It opens no handles to the
+    /// parent and reads no command line.
+    pub fn parent_process_info() -> String {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot.is_null() {
+            return "(снимок процессов недоступен)".to_string();
+        }
+        let own_pid = std::process::id();
+        let mut entry: ProcessEntry32 = unsafe { std::mem::zeroed() };
+        entry.size = size_of::<ProcessEntry32>() as u32;
+        let mut own_found: Option<u32> = None;
+        if unsafe { Process32FirstW(snapshot, &mut entry) } != 0 {
+            loop {
+                if entry.process_id == own_pid {
+                    own_found = Some(entry.parent_process_id);
+                    break;
+                }
+                if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+                    break;
+                }
+            }
+        }
+        let result = match own_found {
+            None => "(собственный процесс не найден в снимке)".to_string(),
+            Some(ppid) => {
+                if ppid == 0 {
+                    "PID 0 (нет родительского процесса)".to_string()
+                } else {
+                    let mut found = None;
+                    let mut scan: ProcessEntry32 = unsafe { std::mem::zeroed() };
+                    scan.size = size_of::<ProcessEntry32>() as u32;
+                    if unsafe { Process32FirstW(snapshot, &mut scan) } != 0 {
+                        loop {
+                            if scan.process_id == ppid {
+                                found = Some(parent_from_entry(&scan));
+                                break;
+                            }
+                            if unsafe { Process32NextW(snapshot, &mut scan) } == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    found.unwrap_or_else(|| format!("PID {ppid} (имя недоступно)"))
+                }
+            }
+        };
+        unsafe { CloseHandle(snapshot) };
+        result
+    }
+
+    /// Show and focus the already-running AXIOM window.
+    ///
+    /// Returns an error instead of pretending success when no window exists or
+    /// the window cannot be brought to the foreground, so the caller never
+    /// reports "the existing window is open" without evidence.
+    pub fn focus_existing_window() -> io::Result<()> {
+        let title: Vec<u16> = "AXIOM\0".encode_utf16().collect();
+        let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+        if hwnd == 0 || unsafe { IsWindow(hwnd) } == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "окно AXIOM не найдено (возможно, экземпляр ещё запускается или завершается)",
+            ));
+        }
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+        // Verify the window really is usable before claiming success.
+        if unsafe { IsWindowVisible(hwnd) } == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "окно найдено, но осталось скрытым",
+            ));
+        }
+        Ok(())
     }
 
     pub fn show_error(message: &str) {
@@ -453,6 +584,34 @@ fn bridge_restart(app: AppHandle) -> Result<(), String> {
     spawn_bridge(&app)
 }
 
+/// Frontend readiness acknowledgement.
+///
+/// The bundled frontend calls this once it has executed, so `frontend-loaded`
+/// reflects the real UI rather than the mere presence of a window/HWND. When
+/// `core` is true the UI also completed a real round-trip to the Python core,
+/// which promotes startup to `bridge-ready`.
+#[tauri::command]
+fn frontend_ready(app: AppHandle, core: Option<bool>) -> Result<(), String> {
+    let core_ok = core.unwrap_or(false);
+    startup::mark(Stage::FrontendLoaded);
+    if core_ok {
+        startup::mark(Stage::BridgeReady);
+    }
+    startup::info(
+        "frontend-loaded",
+        &format!(
+            "frontend acknowledged readiness (core_round_trip={core_ok}) stage={}",
+            startup::current_stage().as_str()
+        ),
+    );
+    // A frontend that acknowledged but lost the window must not keep an
+    // invisible instance alive; only this app's own window is touched.
+    if core_ok && app.get_webview_window("main").is_none() {
+        return Err("main window disappeared after startup".to_string());
+    }
+    Ok(())
+}
+
 /// Open an http(s) link in the user's real browser.
 ///
 /// The webview must never navigate away from the app, and AXIOM ships no
@@ -599,40 +758,274 @@ fn tray_set_state(app: AppHandle, running: u32, tooltip: String) -> Result<(), S
     Ok(())
 }
 
+/// Stage-1 preflight wrapper: run the checks, then open the startup log.
+///
+/// Returns the resolved plan on success. On failure the caller gets the
+/// classified reason plus everything the log already recorded, so the native
+/// dialog and the log never disagree.
+fn preflight_profile() -> Result<startup::ProfilePlan, PreflightFailure> {
+    let integrity = startup::integrity();
+    let identifier = "app.axiom.desktop";
+    match startup::preflight(identifier) {
+        Preflight::Ready(plan) => {
+            startup::mark(Stage::Preflight);
+            if let Some(path) = startup::init_logging(&plan.dir) {
+                startup::info(
+                    "preflight",
+                    &format!(
+                        "integrity={} logging active at {} (origin={}, disposable={})",
+                        startup::integrity_log_field(integrity),
+                        path.display(),
+                        plan.origin,
+                        plan.disposable
+                    ),
+                );
+            } else {
+                startup::warn(
+                    "preflight",
+                    "startup log unavailable; continuing without a file log",
+                );
+            }
+            Ok(plan)
+        }
+        Preflight::Failed {
+            kind,
+            detail,
+            report,
+        } => {
+            startup::mark(Stage::Preflight);
+            // Collected here so the same string serves both the fallback
+            // record and the dialog. Public snapshot data only (see
+            // `parent_process_info`); no parent token, no command line.
+            let parent = windows_process::parent_process_info();
+            // The log could not be opened at the profile root (that is often
+            // the very failure), so keep the record in a temp-side file too.
+            if startup::log_path().is_none() {
+                let fallback = std::env::temp_dir().join("axiom-preflight-failed.log");
+                let record = format!(
+                    "[{}][integrity={}] kind={} detail={}\nprofile={}\nenv_overrides={}\n\
+                     free_space_ok={}\nparent={}\n",
+                    startup::startup_id(),
+                    startup::integrity_log_field(report.integrity),
+                    kind.as_str(),
+                    detail,
+                    report.profile_dir.display(),
+                    report.env_overrides,
+                    report.free_space_ok,
+                    parent
+                );
+                // Record whether the fallback itself was written, so a missing
+                // backup log is explainable from the code path (the dialog
+                // then points to it only when it actually exists).
+                let fallback_ok = std::fs::write(&fallback, record).is_ok();
+                // A GUI-subsystem process has no console; the only way to
+                // surface the fallback outcome before Tauri exists is the
+                // dialog itself (the main path below does that).
+                if fallback_ok {
+                    STARTUP_FALLBACK_LOG_WRITTEN.store(true, Ordering::Release);
+                }
+            }
+            // The dialog repeats the log path so the user can inspect it.
+            startup::error("preflight", &format!("{detail} ({})", kind.as_str()));
+            Err(PreflightFailure {
+                kind,
+                detail,
+                report,
+                parent,
+            })
+        }
+    }
+}
+
+/// Everything the native error dialog needs, kept next to the preflight.
+struct PreflightFailure {
+    kind: FailureKind,
+    detail: String,
+    /// Retained for diagnostics; the dialog path is built from the log file.
+    report: Box<startup::PreflightReport>,
+    /// "PID <ppid> (<name>)" of the launcher, collected during preflight so
+    /// the fallback record and the dialog never disagree.
+    parent: String,
+}
+
+/// Dialog line for the measured integrity level, or an honest
+/// "not measured" line carrying the query failure reason. Unknown must
+/// never be rendered as a measured level.
+fn integrity_dialog_line(integrity: startup::Integrity) -> String {
+    match integrity {
+        startup::Integrity::Unknown => format!(
+            "Уровень целостности процесса: не измерен (запрос к маркеру доступа \
+             не удался: {})",
+            startup::integrity_query_error().unwrap_or("причина недоступна")
+        ),
+        measured => format!(
+            "Измеренный уровень целостности процесса (по маркеру доступа): {}",
+            measured.as_str()
+        ),
+    }
+}
+
+/// Factual dialog lines built from what the preflight already collected.
+///
+/// Pure formatting over a [`startup::PreflightReport`] plus the parent string
+/// (computed by the caller, so it stays stub-able in tests). When BOTH the
+/// profile log and the %TEMP% fallback failed, these lines are the ONLY
+/// surviving diagnostics, so every collected fact is shown: env overrides
+/// (already redacted by `describe`), free-space evidence, and the launcher
+/// identity. The write-probe path (with the PID) is already inside `detail`.
+fn preflight_dialog_lines(report: &startup::PreflightReport, parent: &str) -> String {
+    let line_profiles = format!(
+        "Путь профиля: {}\nЗапись в профиль: {}\nСвободное место: {}",
+        report.profile_dir.display(),
+        if report.writable { "доступна" } else { "ОТКАЗАНО" },
+        if report.free_space_ok {
+            "достаточно"
+        } else {
+            "не проверено / недостаточно"
+        }
+    );
+    let line_env = format!("Переменные окружения WebView2: {}", report.env_overrides);
+    let line_parent = format!("Родительский процесс (кто запустил AXIOM): {parent}");
+    format!("{line_profiles}\n{line_env}\n{line_parent}")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    startup::init_startup_id();
+    // Stage 1 runs BEFORE Tauri is built: Tauri creates the main window inside
+    // its own setup() and panics opaquely when the WebView2 profile directory
+    // is unusable, so the check has to happen first and report a real cause.
+    match preflight_profile() {
+        // The plan is only needed for logging inside the preflight itself;
+        // Tauri resolves the very same per-user directory on its own.
+        Ok(_plan) => {}
+        Err(plan) => {
+            // No window and no webview exist yet, so the only way to reach the
+            // user is a native dialog; the details also land in the log.
+            startup::error(
+                "preflight",
+                &format!("{} ({})", plan.detail, plan.kind.as_str()),
+            );
+            let report = &plan.report;
+            let line_integrity = integrity_dialog_line(report.integrity);
+            let line_facts = preflight_dialog_lines(report, &plan.parent);
+            let line_cause = format!(
+                "Предполагаемая причина отказа: {}{}",
+                plan.kind.as_str(),
+                if plan.kind == FailureKind::Integrity {
+                    // Integrity is a hypothesis, not a measured denial cause.
+                    " (гипотеза: среда запуска с Low Integrity; фактический отказ — write probe, см. Подробности)"
+                } else {
+                    ""
+                }
+            );
+            let log_line = startup::log_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| {
+                    if STARTUP_FALLBACK_LOG_WRITTEN.load(std::sync::atomic::Ordering::Acquire) {
+                        match std::env::var("TEMP") {
+                            Ok(temp) => {
+                                format!("{temp}\\axiom-preflight-failed.log (резервный лог)")
+                            }
+                            Err(_) => "(резервный лог записан, путь неизвестен)".to_string(),
+                        }
+                    } else {
+                        "(основной и резервный логи недоступны)".to_string()
+                    }
+                });
+            windows_process::show_error(&format!(
+                "AXIOM не может запуститься.\n\n{}\n\n{}\n\n{}\n\n{}\nПодробности: {}\n\nЛог запуска: {}",
+                startup::remediation(&plan.kind),
+                line_integrity,
+                line_facts,
+                line_cause,
+                plan.detail,
+                log_line,
+            ));
+            std::process::exit(20);
+        }
+    };
+    // A GUI-subsystem process has no console, so a panic would surface as an
+    // opaque exit code. Record it in the same startup log instead.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        startup::error("panic", &format!("{info} at {:#?}", info.location()));
+        default_hook(info);
+    }));
+    // WebView2 honours the Windows system proxy. AXIOM's frontend is bundled
+    // and every API request travels over Tauri IPC (`ipc:`) to the Python
+    // core, so the webview never needs to reach a loopback dev server or any
+    // other localhost endpoint through the system proxy.
     #[cfg(windows)]
     let _single_instance = match windows_process::SingleInstance::acquire() {
         Ok(Some(instance)) => instance,
         Ok(None) => {
-            windows_process::show_error("AXIOM уже запущен.");
-            return;
+            // Another instance owns the guard. Focus its window, but only
+            // report success when a usable window was actually shown.
+            startup::info("single-instance", "another instance holds the guard");
+            match windows_process::focus_existing_window() {
+                Ok(()) => {
+                    startup::info("single-instance", "existing window focused");
+                    return;
+                }
+                Err(err) => {
+                    startup::warn("single-instance", &format!("focus failed: {err}"));
+                    windows_process::show_error(&format!(
+                        "AXIOM уже запущен, но его окно не удалось показать: {err}\n\n\
+                         Если окно скрыто в трее, откройте AXIOM через значок в трее."
+                    ));
+                    return;
+                }
+            }
         }
         Err(err) => {
             windows_process::show_error(&format!("Не удалось проверить экземпляр AXIOM: {err}"));
             return;
         }
     };
-    // In development, Tauri's `beforeDevCommand` owns the single Vite
-    // process. Starting another server here deadlocks Tauri's own readiness
-    // wait and can also race for port 1420. The production build embeds the
-    // frontend and does not need a dev server.
+    // The profile directory is already prepared by the preflight; Tauri uses
+    // the same per-user folder for the WebView2 environment.
+    // In development, `beforeDevCommand` builds the frontend with Vite in watch
+    // mode and Tauri's built-in dev server serves the `dist/` output — no dev
+    // server port and no race for one. Rust must not start a second frontend
+    // process; the production build embeds the frontend and needs none at all.
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            startup::mark(Stage::RuntimeInit);
             let handle = app.handle().clone();
+            // Tauri builds the config window before this closure runs, so its
+            // existence is evidence for `native-window` only. Real readiness
+            // still requires the frontend acknowledgement below.
+            match handle.get_webview_window("main") {
+                Some(window) => {
+                    startup::info(
+                        Stage::NativeWindow.as_str(),
+                        &format!(
+                            "main window present label={} visible={:?}",
+                            window.label(),
+                            window.is_visible()
+                        ),
+                    );
+                    startup::mark(Stage::NativeWindow);
+                }
+                None => startup::error(
+                    Stage::NativeWindow.as_str(),
+                    "main window missing after Tauri setup",
+                ),
+            }
             app.manage(Bridge {
                 child: Mutex::new(None),
                 stdin: Mutex::new(None),
                 generation: Arc::new(AtomicU64::new(0)),
             });
             // W3.3: tray with Open/Quit; the tooltip mirrors the live
-            // background-task count pushed by the webview.
+            // background-task count pushed from the webview.
             if let Err(err) = setup_tray(app.handle()) {
-                eprintln!("tray setup error: {err}");
+                startup::warn("tray", &format!("tray setup failed: {err}"));
             }
             if let Err(err) = spawn_bridge(&handle) {
-                eprintln!("bridge startup error: {err}");
+                startup::error("bridge", &format!("bridge startup failed: {err}"));
                 let _ = handle.emit("bridge://stderr", err.clone());
                 // Unblock any pending frontend requests instead of hanging.
                 let _ = handle.emit(
@@ -644,6 +1037,51 @@ pub fn run() {
                         "error": format!("bridge-exited: {err}")
                     }),
                 );
+            } else {
+                startup::info("bridge", "core process started; awaiting first reply");
+            }
+            // Bounded readiness watchdog. A live process or a valid HWND is
+            // not readiness: if the frontend never acknowledges, the user gets
+            // a real error instead of an invisible instance that would block
+            // every future launch through the single-instance guard.
+            {
+                let watch = handle.clone();
+                std::thread::spawn(move || {
+                    let deadline = startup::READY_DEADLINE;
+                    let started = std::time::Instant::now();
+                    while started.elapsed() < deadline {
+                        if startup::is_ready() {
+                            startup::info(
+                                "watchdog",
+                                &format!("startup complete in {}ms", started.elapsed().as_millis()),
+                            );
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    let stage = startup::current_stage();
+                    startup::error(
+                        "watchdog",
+                        &format!(
+                            "readiness deadline exceeded at stage={} after {}ms",
+                            stage.as_str(),
+                            deadline.as_millis()
+                        ),
+                    );
+                    windows_process::show_error(&format!(
+                        "AXIOM запустился, но интерфейс не загрузился.\n\n\
+                         Текущая стадия запуска: {}\n\n\
+                         Закройте AXIOM полностью (включая значок в трее) и запустите снова.\n\n\
+                         Подробности: {}",
+                        stage.as_str(),
+                        startup::log_path()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "(лог недоступен)".to_string()),
+                    ));
+                    // Leaving the process releases the single-instance guard;
+                    // only this application's own resources are torn down.
+                    watch.exit(21);
+                });
             }
             Ok(())
         })
@@ -655,10 +1093,22 @@ pub fn run() {
                     // exit stays available through the tray menu and /exit.
                     if window.label() == "main" {
                         api.prevent_close();
-                        let _ = window.hide();
+                        match window.hide() {
+                            Ok(()) => {
+                                startup::info("window", "main CloseRequested: hidden to tray")
+                            }
+                            Err(err) => startup::warn(
+                                "window",
+                                &format!("main CloseRequested: hide failed ({err})"),
+                            ),
+                        }
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    startup::info(
+                        "window",
+                        &format!("event Destroyed label={}", window.label()),
+                    );
                     let state = window.state::<Bridge>();
                     state.child.lock().unwrap().take();
                     *state.stdin.lock().unwrap() = None;
@@ -669,11 +1119,108 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             bridge_request,
             bridge_restart,
+            frontend_ready,
             open_url,
             pick_folder,
             quit_app,
             tray_set_state
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running AXIOM");
+        .build(tauri::generate_context!())
+        .and_then(|app| {
+            startup::info("runtime-init", "tauri build Ok; entering run loop");
+            app.run(|_, _| {});
+            Ok(())
+        })
+        .unwrap_or_else(|err| {
+            // Preserve the real build/run error chain; never reduce it to a
+            // generic message, and keep the original HRESULT in the log.
+            let chain = format!("{err:?}");
+            let kind = startup::record_failure(Stage::RuntimeInit, &chain);
+            // The window may be unusable here, so report natively as well.
+            windows_process::show_error(&format!(
+                "AXIOM не смог создать окно.\n\nПричина: {}\nПодробности: {}\n\n{}",
+                kind.as_str(),
+                chain,
+                startup::remediation(&kind),
+            ));
+            std::process::exit(22);
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialog_shows_unknown_as_not_measured_with_reason() {
+        let line = integrity_dialog_line(startup::Integrity::Unknown);
+        assert!(line.contains("не измерен"), "got {line}");
+        assert!(line.contains("не удался"), "got {line}");
+        assert!(!line.contains("medium"), "got {line}");
+    }
+
+    #[test]
+    fn dialog_shows_measured_levels_verbatim() {
+        for (level, name) in [
+            (startup::Integrity::Untrusted, "untrusted"),
+            (startup::Integrity::Low, "low"),
+            (startup::Integrity::Medium, "medium"),
+            (startup::Integrity::High, "high"),
+            (startup::Integrity::System, "system"),
+        ] {
+            let line = integrity_dialog_line(level);
+            assert!(line.contains(name), "got {line}");
+            assert!(!line.contains("не измерен"), "got {line}");
+        }
+    }
+
+    fn sample_report() -> startup::PreflightReport {
+        startup::PreflightReport {
+            integrity: startup::Integrity::Low,
+            profile_dir: PathBuf::from(r"C:\Users\a\AppData\Roaming\app.axiom.desktop"),
+            disposable: false,
+            origin: "production",
+            env_overrides: "none".to_string(),
+            writable: false,
+            free_space_ok: false,
+        }
+    }
+
+    #[test]
+    fn dialog_lines_include_env_overrides_free_space_and_parent() {
+        let mut report = sample_report();
+        report.env_overrides =
+            "WEBVIEW2_USER_DATA_FOLDER=C:\\Temp\\wv, WEBVIEW2_BROWSER_EXECUTION_DIR=none"
+                .to_string();
+        let lines = preflight_dialog_lines(&report, "PID 4242 (cmd.exe)");
+        assert!(lines.contains("Переменные окружения WebView2: "), "got {lines}");
+        assert!(lines.contains("WEBVIEW2_USER_DATA_FOLDER"), "got {lines}");
+        assert!(lines.contains("PID 4242 (cmd.exe)"), "got {lines}");
+        assert!(lines.contains("Родительский процесс"), "got {lines}");
+        assert!(lines.contains("Свободное место: "), "got {lines}");
+        assert!(lines.contains("не проверено / недостаточно"), "got {lines}");
+        assert!(lines.contains("Запись в профиль: ОТКАЗАНО"), "got {lines}");
+    }
+
+    #[test]
+    fn dialog_lines_show_free_space_ok_without_overrides() {
+        let mut report = sample_report();
+        report.free_space_ok = true;
+        let lines = preflight_dialog_lines(&report, "PID 7 (explorer.exe)");
+        assert!(lines.contains("Свободное место: достаточно"), "got {lines}");
+        assert!(lines.contains("Переменные окружения WebView2: none"), "got {lines}");
+        assert!(lines.contains("PID 7 (explorer.exe)"), "got {lines}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parent_process_info_is_well_formed() {
+        // The toolhelp snapshot must answer for our own parent; the exact
+        // PID/name is environment-specific, but the shape is contractual.
+        let info = windows_process::parent_process_info();
+        assert!(
+            info.starts_with("PID ") || info.starts_with('('),
+            "got {info}"
+        );
+    }
 }
